@@ -74,6 +74,19 @@ public sealed class TrackVoice : IDisposable
 
     public bool Muted { get; set; }
 
+    /// <summary>Fade in at the start of the clip, in seconds. Zero still gets a short declick.</summary>
+    public double FadeInSeconds { get; set; }
+
+    /// <summary>Fade out at the end of the clip, in seconds. Zero still gets a short declick.</summary>
+    public double FadeOutSeconds { get; set; }
+
+    /// <summary>
+    /// The shortest ramp applied at every clip edge even when no fade is set. A clip that starts
+    /// part-way into a waveform begins on a non-zero sample, and a hard start on a non-zero sample
+    /// is a click. Five milliseconds is inaudible as a fade and completely removes it.
+    /// </summary>
+    public const double DeclickSeconds = 0.005;
+
     /// <summary>1.0 = original tempo, 1.08 = 8% faster.</summary>
     public double Speed
     {
@@ -214,12 +227,20 @@ public sealed class TrackVoice : IDisposable
 
         Eq.Process(work);
 
-        // Gain and pan, ramped per frame so knobs never click.
+        // Gain, pan and the clip envelope, per frame so nothing clicks.
+        long clipLength = TimelineLengthFrames;
+        int fadeIn = EnvelopeFrames(FadeInSeconds, TrimmedAtStart);
+        int fadeOut = EnvelopeFrames(FadeOutSeconds, TrimmedAtEnd(end));
+
         for (int f = 0; f < frames; f++)
         {
             _gain = Approach(_gain, _targetGain, _gainRamp);
-            double l = _gain * (_pan <= 0 ? 1 : 1 - _pan);
-            double r = _gain * (_pan >= 0 ? 1 : 1 + _pan);
+
+            long posInClip = relStart + f;
+            double env = ClipEnvelope(posInClip, clipLength, fadeIn, fadeOut);
+
+            double l = _gain * env * (_pan <= 0 ? 1 : 1 - _pan);
+            double r = _gain * env * (_pan >= 0 ? 1 : 1 + _pan);
             int i = f * _channels;
             output[i] += (float)(work[i] * l);
             if (_channels > 1) output[i + 1] += (float)(work[i + 1] * r);
@@ -338,6 +359,44 @@ public sealed class TrackVoice : IDisposable
     {
         int need = Math.Max(1, frames) * _channels;
         if (_inScratch.Length < need) _inScratch = new float[need];
+    }
+
+    private bool TrimmedAtStart => SourceStartFrame > 0;
+
+    private bool TrimmedAtEnd(long effectiveEnd) => Clip is not null && effectiveEnd < Clip.FrameCount;
+
+    /// <summary>
+    /// Fade length in frames. An explicit fade always applies. Otherwise a declick applies only
+    /// where the clip was actually <b>cut</b> — cutting into a waveform lands on a non-zero sample
+    /// and that is a click. An untrimmed clip starts and ends however the record does, and gets no
+    /// ramp at all, which is what keeps an unedited track bit-identical through the render.
+    /// </summary>
+    private int EnvelopeFrames(double seconds, bool trimmedAtThisEdge)
+    {
+        if (seconds > 0) return (int)(seconds * _sampleRate);
+        return trimmedAtThisEdge ? (int)(DeclickSeconds * _sampleRate) : 0;
+    }
+
+    /// <summary>
+    /// Clip fade envelope at a position, equal-power rather than linear. Two clips crossfading
+    /// with linear ramps dip in the middle, because at the halfway point both are at half
+    /// amplitude and the sum is 0.5 rather than 1; a sine law keeps the power constant instead.
+    /// </summary>
+    private static double ClipEnvelope(long pos, long length, int fadeIn, int fadeOut)
+    {
+        if (pos < 0 || length <= 0) return 0;
+
+        double env = 1;
+        if (fadeIn > 0 && pos < fadeIn)
+            env = Math.Sin(Math.PI / 2 * (pos / (double)fadeIn));
+
+        long fromEnd = length - pos;
+        if (fadeOut > 0 && fromEnd < fadeOut)
+        {
+            double tail = Math.Sin(Math.PI / 2 * (Math.Max(0, fromEnd) / (double)fadeOut));
+            env = Math.Min(env, tail);
+        }
+        return env;
     }
 
     private static double Approach(double cur, double target, double step)

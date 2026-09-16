@@ -248,6 +248,32 @@
                                         ClipToBounds="True"
                                         MouseLeftButtonDown="OnLaneMouseDown" MouseMove="OnLaneMouseMove"
                                         MouseLeftButtonUp="OnLaneMouseUp">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Fade in" >
+                                                <MenuItem Header="none"  Click="OnFadeIn"  Tag="0"/>
+                                                <MenuItem Header="0.25 s" Click="OnFadeIn" Tag="0.25"/>
+                                                <MenuItem Header="0.5 s"  Click="OnFadeIn" Tag="0.5"/>
+                                                <MenuItem Header="1 s"    Click="OnFadeIn" Tag="1"/>
+                                                <MenuItem Header="2 s"    Click="OnFadeIn" Tag="2"/>
+                                                <MenuItem Header="4 s"    Click="OnFadeIn" Tag="4"/>
+                                            </MenuItem>
+                                            <MenuItem Header="Fade out">
+                                                <MenuItem Header="none"  Click="OnFadeOut" Tag="0"/>
+                                                <MenuItem Header="0.25 s" Click="OnFadeOut" Tag="0.25"/>
+                                                <MenuItem Header="0.5 s"  Click="OnFadeOut" Tag="0.5"/>
+                                                <MenuItem Header="1 s"    Click="OnFadeOut" Tag="1"/>
+                                                <MenuItem Header="2 s"    Click="OnFadeOut" Tag="2"/>
+                                                <MenuItem Header="4 s"    Click="OnFadeOut" Tag="4"/>
+                                            </MenuItem>
+                                            <Separator/>
+                                            <MenuItem Header="Trim start to playhead" Click="OnTrimStartToPlayhead"/>
+                                            <MenuItem Header="Trim end to playhead"   Click="OnTrimEndToPlayhead"/>
+                                            <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
+                                            <Separator/>
+                                            <MenuItem Header="Move clip to playhead"  Click="OnMoveToPlayhead"/>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
                                     <Grid>
                                         <c:WaveformView
                                             Peaks="{Binding Peaks}"
@@ -255,6 +281,8 @@
                                             PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
                                             ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
                                             ClipOffsetSeconds="{Binding TimelineOffsetSeconds}"
+                                            SourceStartSeconds="{Binding SourceStartSeconds}"
+                                            SourceEndSeconds="{Binding SourceEndSeconds}"
                                             Speed="{Binding Speed}"
                                             IsSelected="{Binding IsSelected}"
                                             IsMuted="{Binding Muted}"

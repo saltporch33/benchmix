@@ -147,6 +147,9 @@ public sealed class ProjectSession : IDisposable
         v.Semitones = model.Semitones;
         v.PreserveFormants = model.PreserveFormants;
 
+        v.FadeInSeconds = Math.Max(0, model.FadeInSeconds);
+        v.FadeOutSeconds = Math.Max(0, model.FadeOutSeconds);
+
         v.Eq.SetGains(model.EqLow, model.EqMid, model.EqHigh);
         v.Gain = model.Gain;
         v.Pan = model.Pan;

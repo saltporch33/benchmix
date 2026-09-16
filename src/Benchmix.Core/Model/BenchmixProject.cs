@@ -79,6 +79,12 @@ public sealed class TrackModel
     public double EqMid { get; set; } = 1.0;
     public double EqHigh { get; set; } = 1.0;
 
+    /// <summary>Fade in at the clip's start. Zero still declicks a trimmed edge.</summary>
+    public double FadeInSeconds { get; set; }
+
+    /// <summary>Fade out at the clip's end. Zero still declicks a trimmed edge.</summary>
+    public double FadeOutSeconds { get; set; }
+
     public double Gain { get; set; } = 1.0;
     public double Pan { get; set; }
     public bool Muted { get; set; }

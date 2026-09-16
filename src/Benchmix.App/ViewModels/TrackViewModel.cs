@@ -43,13 +43,40 @@ public sealed partial class TrackViewModel : ObservableObject
     [ObservableProperty] private bool _muted;
     [ObservableProperty] private bool _soloed;
     [ObservableProperty] private double _timelineOffsetSeconds;
+    [ObservableProperty] private double _sourceStartSeconds;
+    [ObservableProperty] private double _sourceEndSeconds = -1;
+    [ObservableProperty] private double _fadeInSeconds;
+    [ObservableProperty] private double _fadeOutSeconds;
     [ObservableProperty] private bool _linkPitchToTempo;
     [ObservableProperty] private bool _preserveFormants = true;
     [ObservableProperty] private float _meterLevel;
 
     public PeakData? Peaks => _session.ClipFor(Model)?.EnsurePeaks();
     public double SourceDurationSeconds => _session.ClipFor(Model)?.DurationSeconds ?? 0;
-    public double TimelineDurationSeconds => SourceDurationSeconds / Math.Max(0.01, Speed);
+
+    /// <summary>How much of the source this clip actually uses, after trimming.</summary>
+    public double TrimmedDurationSeconds
+    {
+        get
+        {
+            double end = SourceEndSeconds < 0 ? SourceDurationSeconds : Math.Min(SourceEndSeconds, SourceDurationSeconds);
+            return Math.Max(0, end - Math.Max(0, SourceStartSeconds));
+        }
+    }
+
+    /// <summary>How long it occupies the timeline, i.e. after trimming and after the speed change.</summary>
+    public double TimelineDurationSeconds => TrimmedDurationSeconds / Math.Max(0.01, Speed);
+
+    public bool IsTrimmed => SourceStartSeconds > 0.0001
+        || (SourceEndSeconds >= 0 && SourceEndSeconds < SourceDurationSeconds - 0.0001);
+
+    public string TrimText => IsTrimmed
+        ? $"trimmed {TrimmedDurationSeconds:0.0}s of {SourceDurationSeconds:0.0}s"
+        : $"{SourceDurationSeconds:0.0}s";
+
+    public string FadeText => FadeInSeconds <= 0 && FadeOutSeconds <= 0
+        ? "no fades"
+        : $"fade {FadeInSeconds:0.#}s / {FadeOutSeconds:0.#}s";
     public int SampleRate => _session.SampleRate;
 
     public Brush ColorBrush => Brushed(Model.ColorHex, 255);
@@ -112,6 +139,10 @@ public sealed partial class TrackViewModel : ObservableObject
         _muted = Model.Muted;
         _soloed = Model.Soloed;
         _timelineOffsetSeconds = Model.TimelineOffsetSeconds;
+        _sourceStartSeconds = Model.SourceStartSeconds;
+        _sourceEndSeconds = Model.SourceEndSeconds;
+        _fadeInSeconds = Model.FadeInSeconds;
+        _fadeOutSeconds = Model.FadeOutSeconds;
         _linkPitchToTempo = Model.Mode == StretchMode.Linked;
         _preserveFormants = Model.PreserveFormants;
         OnPropertyChanged(string.Empty);
@@ -161,6 +192,42 @@ public sealed partial class TrackViewModel : ObservableObject
     {
         Model.TimelineOffsetSeconds = Math.Max(0, value);
         Push();
+    }
+
+    partial void OnSourceStartSecondsChanged(double value)
+    {
+        Model.SourceStartSeconds = Math.Max(0, value);
+        Push();
+        NotifyTrimChanged();
+    }
+
+    partial void OnSourceEndSecondsChanged(double value)
+    {
+        Model.SourceEndSeconds = value;
+        Push();
+        NotifyTrimChanged();
+    }
+
+    partial void OnFadeInSecondsChanged(double value)
+    {
+        Model.FadeInSeconds = Math.Max(0, value);
+        Push();
+        OnPropertyChanged(nameof(FadeText));
+    }
+
+    partial void OnFadeOutSecondsChanged(double value)
+    {
+        Model.FadeOutSeconds = Math.Max(0, value);
+        Push();
+        OnPropertyChanged(nameof(FadeText));
+    }
+
+    private void NotifyTrimChanged()
+    {
+        OnPropertyChanged(nameof(TrimmedDurationSeconds));
+        OnPropertyChanged(nameof(TimelineDurationSeconds));
+        OnPropertyChanged(nameof(IsTrimmed));
+        OnPropertyChanged(nameof(TrimText));
     }
 
     partial void OnLinkPitchToTempoChanged(bool value)

@@ -144,6 +144,26 @@ public partial class MainWindow : Window
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
     }
 
+    /// <summary>How close to a clip edge counts as grabbing the edge rather than the body.</summary>
+    private const double EdgeGrabPixels = 7;
+
+    private enum DragKind { Move, TrimStart, TrimEnd }
+
+    private DragKind _dragKind;
+    private double _dragStartSourceStart;
+    private double _dragStartSourceEnd;
+
+    /// <summary>Which part of a clip the pointer is over, in a lane's own coordinates.</summary>
+    private DragKind HitTestClip(TrackViewModel vm, double x)
+    {
+        double left = (vm.TimelineOffsetSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
+        double right = left + vm.TimelineDurationSeconds * _vm.PixelsPerSecond;
+
+        if (Math.Abs(x - left) <= EdgeGrabPixels) return DragKind.TrimStart;
+        if (Math.Abs(x - right) <= EdgeGrabPixels) return DragKind.TrimEnd;
+        return DragKind.Move;
+    }
+
     private void OnLaneMouseDown(object sender, MouseButtonEventArgs e)
     {
         var host = (FrameworkElement)sender;
@@ -160,8 +180,11 @@ public partial class MainWindow : Window
         }
 
         _dragTrack = vm;
+        _dragKind = HitTestClip(vm, e.GetPosition(host).X);
         _dragOrigin = e.GetPosition(this);
         _dragStartOffset = vm.TimelineOffsetSeconds;
+        _dragStartSourceStart = vm.SourceStartSeconds;
+        _dragStartSourceEnd = vm.SourceEndSeconds < 0 ? vm.SourceDurationSeconds : vm.SourceEndSeconds;
         _dragging = false;
         host.CaptureMouse();
         e.Handled = true;
@@ -169,38 +192,149 @@ public partial class MainWindow : Window
 
     private void OnLaneMouseMove(object sender, MouseEventArgs e)
     {
+        var host = (FrameworkElement)sender;
+
+        // Hovering near an edge shows the resize cursor, so trimming is discoverable without a manual.
+        if (_dragTrack is null && host.DataContext is TrackViewModel hover)
+        {
+            host.Cursor = HitTestClip(hover, e.GetPosition(host).X) == DragKind.Move
+                ? Cursors.Arrow
+                : Cursors.SizeWE;
+        }
+
         if (_dragTrack is null || e.LeftButton != MouseButtonState.Pressed) return;
 
-        var now = e.GetPosition(this);
-        double dx = now.X - _dragOrigin.X;
+        double dx = e.GetPosition(this).X - _dragOrigin.X;
 
         // A few pixels of slop so a click does not nudge a clip by accident.
         if (!_dragging && Math.Abs(dx) < 4) return;
         _dragging = true;
 
         double deltaSeconds = dx / _vm.PixelsPerSecond;
-        double target = Math.Max(0, _dragStartOffset + deltaSeconds);
 
-        // Snap to bars unless Ctrl is held. Mashups are assembled on bar lines, so snapping is
-        // the helpful default and holding a key is the exception.
-        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control) && _vm.ProjectBpm > 10)
+        switch (_dragKind)
         {
-            double bar = 4 * 60.0 / _vm.ProjectBpm;
-            target = Math.Round(target / bar) * bar;
+            case DragKind.Move:
+            {
+                double target = Snap(Math.Max(0, _dragStartOffset + deltaSeconds));
+                _dragTrack.TimelineOffsetSeconds = target;
+                _vm.Status = $"{_dragTrack.Name} starts at {target:0.00}s";
+                break;
+            }
+
+            case DragKind.TrimStart:
+            {
+                // Dragging the left edge eats into the source AND moves the clip, so the audio
+                // under the pointer stays put instead of sliding away.
+                double deltaSource = deltaSeconds * _dragTrack.Speed;
+                double newStart = Math.Clamp(_dragStartSourceStart + deltaSource, 0, _dragStartSourceEnd - 0.05);
+                double consumed = newStart - _dragStartSourceStart;
+
+                _dragTrack.SourceStartSeconds = newStart;
+                _dragTrack.TimelineOffsetSeconds = Math.Max(0, _dragStartOffset + consumed / _dragTrack.Speed);
+                _vm.Status = $"{_dragTrack.Name}: trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s";
+                break;
+            }
+
+            case DragKind.TrimEnd:
+            {
+                double deltaSource = deltaSeconds * _dragTrack.Speed;
+                double newEnd = Math.Clamp(_dragStartSourceEnd + deltaSource,
+                                           _dragTrack.SourceStartSeconds + 0.05,
+                                           _dragTrack.SourceDurationSeconds);
+                _dragTrack.SourceEndSeconds = newEnd;
+                _vm.Status = $"{_dragTrack.Name}: trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s";
+                break;
+            }
         }
 
-        _dragTrack.TimelineOffsetSeconds = target;
         _vm.RecomputeLength();
-        _vm.Status = $"{_dragTrack.Name} starts at {target:0.00}s";
+    }
+
+    /// <summary>
+    /// Snaps to bar lines unless Ctrl is held. Mashups are assembled on bars, so snapping is the
+    /// helpful default and holding a key is the exception.
+    /// </summary>
+    private double Snap(double seconds)
+    {
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) || _vm.ProjectBpm <= 10) return seconds;
+        double bar = 4 * 60.0 / _vm.ProjectBpm;
+        return Math.Round(seconds / bar) * bar;
     }
 
     private void OnLaneMouseUp(object sender, MouseButtonEventArgs e)
     {
         ((FrameworkElement)sender).ReleaseMouseCapture();
         if (_dragging && _dragTrack is not null)
-            _vm.Status = $"{_dragTrack.Name} moved to {_dragTrack.TimelineOffsetSeconds:0.00}s.";
+        {
+            _vm.Status = _dragKind == DragKind.Move
+                ? $"{_dragTrack.Name} moved to {_dragTrack.TimelineOffsetSeconds:0.00}s."
+                : $"{_dragTrack.Name} trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s.";
+        }
         _dragTrack = null;
         _dragging = false;
+    }
+
+    // ---------------- clip context menu ----------------
+
+    private static TrackViewModel? TrackOf(object sender)
+        => (sender as FrameworkElement)?.DataContext as TrackViewModel;
+
+    private static double TagSeconds(object sender)
+        => double.TryParse((sender as FrameworkElement)?.Tag?.ToString(), out var v) ? v : 0;
+
+    private void OnFadeIn(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        t.FadeInSeconds = TagSeconds(sender);
+        _vm.Status = $"{t.Name}: {t.FadeText}.";
+    }
+
+    private void OnFadeOut(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        t.FadeOutSeconds = TagSeconds(sender);
+        _vm.Status = $"{t.Name}: {t.FadeText}.";
+    }
+
+    private void OnTrimStartToPlayhead(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed;
+        if (into <= 0) { _vm.Status = "The playhead is before this clip."; return; }
+
+        t.SourceStartSeconds = Math.Min(t.SourceStartSeconds + into, t.SourceDurationSeconds - 0.05);
+        t.TimelineOffsetSeconds = _vm.PositionSeconds;
+        _vm.RecomputeLength();
+        _vm.Status = $"{t.Name}: {t.TrimText}.";
+    }
+
+    private void OnTrimEndToPlayhead(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed + t.SourceStartSeconds;
+        if (into <= t.SourceStartSeconds) { _vm.Status = "The playhead is before this clip."; return; }
+
+        t.SourceEndSeconds = Math.Min(into, t.SourceDurationSeconds);
+        _vm.RecomputeLength();
+        _vm.Status = $"{t.Name}: {t.TrimText}.";
+    }
+
+    private void OnClearTrim(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        t.SourceStartSeconds = 0;
+        t.SourceEndSeconds = -1;
+        _vm.RecomputeLength();
+        _vm.Status = $"{t.Name}: full length restored.";
+    }
+
+    private void OnMoveToPlayhead(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is not { } t) return;
+        t.TimelineOffsetSeconds = _vm.PositionSeconds;
+        _vm.RecomputeLength();
+        _vm.Status = $"{t.Name} moved to {t.TimelineOffsetSeconds:0.00}s.";
     }
 
     // ---------------- wheel: zoom and scroll ----------------
