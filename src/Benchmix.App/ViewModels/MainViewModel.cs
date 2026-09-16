@@ -230,9 +230,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
 
             RecomputeLength();
-            Status = list.Count == 1
-                ? $"Added {Path.GetFileName(list[0])}."
-                : $"Added {list.Count} tracks.";
+
+            double gb = Session.EstimatedMemoryBytes / (1024.0 * 1024 * 1024);
+            string added = list.Count == 1 ? $"Added {Path.GetFileName(list[0])}." : $"Added {list.Count} tracks.";
+            Status = gb >= 2.0
+                ? $"{added} Heads up: {gb:0.1} GB of audio is loaded — Benchmix keeps whole songs in memory so scrubbing stays instant."
+                : added;
+
             MarkDirty();
         }
         catch (Exception ex)

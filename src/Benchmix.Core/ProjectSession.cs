@@ -73,6 +73,21 @@ public sealed class ProjectSession : IDisposable
         return voice;
     }
 
+    /// <summary>
+    /// Bytes of decoded audio currently held. Clips live in RAM so scrubbing is free, which is a
+    /// good trade at two or three songs and a bad one at a two-hour DJ set — so the UI can see the
+    /// number and say something before the machine starts swapping.
+    /// </summary>
+    public long EstimatedMemoryBytes
+    {
+        get
+        {
+            long total = 0;
+            foreach (var c in _clips.Values) total += (long)c.Samples.Length * sizeof(float);
+            return total;
+        }
+    }
+
     public long SecondsToFrames(double seconds) => (long)Math.Round(seconds * SampleRate);
     public double FramesToSeconds(long frames) => frames / (double)SampleRate;
 
