@@ -45,6 +45,16 @@ public partial class MainWindow : Window
             _vm.ZoomFitCommand.Execute(null);
         }
 
+        if (App.LoadCheck)
+        {
+            foreach (var t in _vm.Tracks)
+                App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} peaks={(t.Peaks is null ? "no" : "yes")}");
+            App.Log($"loadcheck: verdict={(_vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded) ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
+            _vm.Dispose();
+            Application.Current.Shutdown();
+            return;
+        }
+
         if (App.StemTestFile is { } stemFile) { await RunStemTestAsync(stemFile); return; }
 
         if (App.PlayTestSeconds > 0) { await RunPlayTestAsync(App.PlayTestSeconds); return; }

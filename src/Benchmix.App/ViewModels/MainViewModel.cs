@@ -253,7 +253,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
                 PushUndo($"add {Path.GetFileName(path)}");
                 var model = await Session.AddTrackAsync(path, atSeconds);
+
                 var vm = NewTrackViewModel(model);
+                // The session raises TrackLoaded/TrackFailed while AddTrackAsync is still running —
+                // before this row exists — so those handlers cannot find it and their state is lost.
+                // Settle the row here instead, from what the session actually ended up holding.
+                if (Session.ClipFor(model) is not null) vm.NotifyAudioLoaded();
+                else vm.LoadError = $"Could not load {Path.GetFileName(path)}.";
+
                 Tracks.Add(vm);
                 SelectedTrack ??= vm;
 

@@ -34,6 +34,13 @@ public partial class App : Application
     /// </summary>
     public static string? StemTestFile { get; private set; }
 
+    /// <summary>
+    /// Logs whether each startup track ended up actually ready, then exits. Exists because a track
+    /// can look fine on screen while the app still considers its audio unloaded, which silently
+    /// blocks stem separation.
+    /// </summary>
+    public static bool LoadCheck { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -68,6 +75,9 @@ public partial class App : Application
                     break;
                 case "--uiprobe":
                     if (i + 1 < e.Args.Length) UiProbePath = e.Args[++i];
+                    break;
+                case "--loadcheck":
+                    LoadCheck = true;
                     break;
                 case "--stemtest":
                     if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];
