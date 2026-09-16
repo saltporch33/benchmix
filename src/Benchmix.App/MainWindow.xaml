@@ -272,6 +272,11 @@
                                             <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
                                             <Separator/>
                                             <MenuItem Header="Move clip to playhead"  Click="OnMoveToPlayhead"/>
+                                            <Separator/>
+                                            <MenuItem Header="Split into vocals + instrumental"
+                                                      Command="{Binding DataContext.SplitStemsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                      CommandParameter="{Binding}"
+                                                      ToolTip="Runs on your GPU, about 20 seconds. Downloads a 64 MB model the first time."/>
                                         </ContextMenu>
                                     </Border.ContextMenu>
                                     <Grid>

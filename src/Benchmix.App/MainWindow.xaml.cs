@@ -45,6 +45,8 @@ public partial class MainWindow : Window
             _vm.ZoomFitCommand.Execute(null);
         }
 
+        if (App.StemTestFile is { } stemFile) { await RunStemTestAsync(stemFile); return; }
+
         if (App.PlayTestSeconds > 0) { await RunPlayTestAsync(App.PlayTestSeconds); return; }
 
         if (App.UiProbePath is { } probe)
@@ -69,6 +71,45 @@ public partial class MainWindow : Window
             timer.Tick += (_, _) => { timer.Stop(); _vm.Dispose(); Application.Current.Shutdown(); };
             timer.Start();
         }
+    }
+
+    /// <summary>Separates a short excerpt and logs what happened, to prove the shipped exe can.</summary>
+    private async Task RunStemTestAsync(string file)
+    {
+        try
+        {
+            App.Log($"stemtest: model installed = {Benchmix.Engine.Stems.StemSeparator.IsModelInstalled}");
+
+            var full = Benchmix.Engine.Audio.AudioClip.Load(file, 44100);
+            int frames = (int)Math.Min(full.FrameCount - 44100 * 40, 44100 * 20);
+            var slice = new float[frames * 2];
+            Array.Copy(full.Samples, 44100 * 40 * 2, slice, 0, slice.Length);
+            var clip = Benchmix.Engine.Audio.AudioClip.FromSamples(file, slice, 44100);
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = await Benchmix.Engine.Stems.StemSeparator.SeparateAsync(clip);
+            sw.Stop();
+
+            static double Db(float[] x)
+            {
+                double s = 0;
+                foreach (var v in x) s += v * (double)v;
+                double r = Math.Sqrt(s / Math.Max(1, x.Length));
+                return r <= 1e-12 ? -200 : 20 * Math.Log10(r);
+            }
+
+            App.Log($"stemtest: provider={result.ExecutionProvider} seconds={sw.Elapsed.TotalSeconds:F1} "
+                  + $"bandlimit={result.BandLimitHz:F0}Hz");
+            App.Log($"stemtest: mix={Db(clip.Samples):F1}dB vocals={Db(result.Primary.Samples):F1}dB "
+                  + $"instrumental={Db(result.Secondary.Samples):F1}dB");
+            App.Log($"stemtest: verdict={(Db(result.Primary.Samples) > -100 ? "PASS - separation ran in the published app" : "FAIL - vocals stem is silent")}");
+        }
+        catch (Exception ex)
+        {
+            App.Log("stemtest: FAILED - " + ex);
+        }
+        _vm.Dispose();
+        Application.Current.Shutdown();
     }
 
     /// <summary>

@@ -1,6 +1,7 @@
 using Benchmix.Core.Model;
 using Benchmix.Engine.Analysis;
 using Benchmix.Engine.Audio;
+using Benchmix.Engine.Stems;
 
 namespace Benchmix.Core;
 
@@ -118,6 +119,93 @@ public sealed class ProjectSession : IDisposable
 
         await LoadAudioAsync(model, cancel).ConfigureAwait(false);
         return model;
+    }
+
+    /// <summary>Where separated stems are written, so they behave like any other source file.</summary>
+    public static string StemDirectory { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "stems");
+
+    /// <summary>
+    /// Splits a track into vocals and instrumental and adds both as new tracks, inheriting the
+    /// original's tempo, key, position and speed so they line up with it immediately.
+    ///
+    /// The stems are written to disk as WAVs rather than held only in memory: that way a saved
+    /// project can reopen them, and they can be dragged into anything else.
+    /// </summary>
+    public async Task<(TrackModel Vocals, TrackModel Instrumental)> SplitStemsAsync(
+        TrackModel source, IProgress<double>? progress = null, CancellationToken cancel = default)
+    {
+        var clip = ClipFor(source) ?? throw new InvalidOperationException("That track's audio is not loaded.");
+
+        var result = await StemSeparator.SeparateAsync(clip, useGpu: true, progress, cancel)
+                                             .ConfigureAwait(false);
+
+        string stem = SanitiseFileName(Path.GetFileNameWithoutExtension(source.SourcePath));
+        var vocalsPath = Path.Combine(StemDirectory, $"{stem} - vocals.wav");
+        var instPath = Path.Combine(StemDirectory, $"{stem} - instrumental.wav");
+
+        await Task.Run(() =>
+        {
+            result.Primary.SaveWav(vocalsPath);
+            result.Secondary.SaveWav(instPath);
+        }, cancel).ConfigureAwait(false);
+
+        var vocals = AddSeparatedTrack(source, vocalsPath, $"{source.Name} — vocals", "#E93D82");
+        var instrumental = AddSeparatedTrack(source, instPath, $"{source.Name} — instrumental", "#12A594");
+
+        // The stems are already decoded; reuse them rather than reading the WAVs back.
+        _clips[vocalsPath] = AudioClip.FromSamples(vocalsPath, result.Primary.Samples, clip.SampleRate);
+        _clips[instPath] = AudioClip.FromSamples(instPath, result.Secondary.Samples, clip.SampleRate);
+        _clips[vocalsPath].EnsurePeaks();
+        _clips[instPath].EnsurePeaks();
+
+        EnsureVoice(vocals).SetClip(_clips[vocalsPath]);
+        EnsureVoice(instrumental).SetClip(_clips[instPath]);
+
+        // The original is muted rather than removed: the stems replace it in the mix, but keeping
+        // it means one click undoes the whole idea if the separation is not good enough.
+        source.Muted = true;
+        ApplyAll();
+
+        TrackLoaded?.Invoke(this, vocals);
+        TrackLoaded?.Invoke(this, instrumental);
+        LastStemResult = result;
+        return (vocals, instrumental);
+    }
+
+    /// <summary>Details of the most recent separation, for the UI to report.</summary>
+    public StemResult? LastStemResult { get; private set; }
+
+    private TrackModel AddSeparatedTrack(TrackModel source, string path, string name, string colour)
+    {
+        var model = new TrackModel
+        {
+            Name = name,
+            SourcePath = path,
+            ColorHex = colour,
+            // Inherit everything that positions it against the original, so the stems drop straight
+            // into place instead of needing to be re-matched.
+            TimelineOffsetSeconds = source.TimelineOffsetSeconds,
+            SourceStartSeconds = source.SourceStartSeconds,
+            SourceEndSeconds = source.SourceEndSeconds,
+            Speed = source.Speed,
+            Semitones = source.Semitones,
+            Mode = source.Mode,
+            PreserveFormants = source.PreserveFormants,
+            Bpm = source.Bpm,
+            BpmSource = source.BpmSource,
+            Key = source.Key,
+            Camelot = source.Camelot,
+            KeySource = source.KeySource,
+        };
+        Project.Tracks.Add(model);
+        return model;
+    }
+
+    private static string SanitiseFileName(string name)
+    {
+        foreach (var c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+        return name.Length > 80 ? name[..80] : name;
     }
 
     /// <summary>Decodes a track's audio (shared between tracks pointing at the same file) and wires its voice.</summary>

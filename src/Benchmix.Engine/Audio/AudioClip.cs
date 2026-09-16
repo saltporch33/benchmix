@@ -147,6 +147,35 @@ public sealed class AudioClip
     public static AudioClip FromSamples(string name, float[] interleavedStereo, int sampleRate)
         => new(name, interleavedStereo, sampleRate, 2);
 
+    /// <summary>
+    /// Writes this clip to a 24-bit WAV. Stems are written out rather than kept only in memory so
+    /// that they are ordinary files: a saved project can reopen them, and you can drag them into
+    /// anything else.
+    /// </summary>
+    public string SaveWav(string path)
+    {
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path))!);
+        var format = new WaveFormat(SampleRate, 24, Channels);
+        var tmp = path + ".tmp";
+
+        using (var writer = new WaveFileWriter(tmp, format))
+        {
+            Span<byte> bytes = stackalloc byte[3];
+            foreach (var f in Samples)
+            {
+                int v = (int)Math.Round(Math.Clamp(f, -1f, 0.9999999f) * 8388607.0);
+                bytes[0] = (byte)(v & 0xFF);
+                bytes[1] = (byte)((v >> 8) & 0xFF);
+                bytes[2] = (byte)((v >> 16) & 0xFF);
+                writer.Write(bytes);
+            }
+        }
+
+        if (File.Exists(path)) File.Replace(tmp, path, null);
+        else File.Move(tmp, path);
+        return path;
+    }
+
     private static ISampleProvider ToStereo(ISampleProvider sp)
     {
         if (sp.WaveFormat.Channels == 2) return sp;

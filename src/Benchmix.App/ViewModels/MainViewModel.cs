@@ -26,6 +26,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // locked out for the duration of a render.
     private bool _rendering;
 
+    // Separation is GPU-bound and memory-hungry; two at once would fight for both.
+    private bool _splitting;
+
     public MainViewModel()
     {
         Tracks = new ObservableCollection<TrackViewModel>();
@@ -315,6 +318,73 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ? "  Both keys aren't confirmed, so trust your ears over this number."
             : "";
         Status = $"{track.Name}: {Keys.Describe(track.Model.Key, reference.Model.Key)} — shifted {semis.Value:+0;-0;0}.{caveat}";
+    }
+
+    /// <summary>
+    /// Splits a track into vocals and instrumental, adding both as new tracks and muting the
+    /// original. Runs on the GPU, takes roughly twenty seconds per song, and downloads a 64 MB
+    /// model the first time only.
+    /// </summary>
+    [RelayCommand]
+    private async Task SplitStemsAsync(TrackViewModel? track)
+    {
+        track ??= SelectedTrack;
+        if (track is null || _session is null) return;
+        if (!track.IsLoaded) { Status = "That track's audio has not finished loading."; return; }
+        if (_splitting) { Status = "Already separating a track — one at a time."; return; }
+
+        bool firstRun = !Benchmix.Engine.Stems.StemSeparator.IsModelInstalled;
+        if (firstRun)
+        {
+            var ok = MessageBox.Show(
+                """
+                Splitting a song into vocals and instrumental needs a 64 MB model, downloaded once.
+
+                It runs on your GPU, on this machine. Nothing is uploaded anywhere.
+
+                Download it now?
+                """,
+                "Benchmix", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (ok != MessageBoxResult.OK) { Status = "Stem separation cancelled."; return; }
+        }
+
+        _splitting = true;
+        IsBusy = true;
+        PushUndo($"split {track.Name}");
+        Status = firstRun ? "Downloading the separation model..." : $"Separating {track.Name}...";
+
+        try
+        {
+            var progress = new Progress<double>(p => BusyProgress = p);
+            var (vocals, instrumental) = await Session.SplitStemsAsync(track.Model, progress);
+
+            foreach (var m in new[] { vocals, instrumental })
+            {
+                var vm = new TrackViewModel(Session, m, MarkDirty);
+                vm.NotifyAudioLoaded();
+                Tracks.Add(vm);
+            }
+            track.RefreshFromModel();          // it was muted by the split
+
+            var r = Session.LastStemResult;
+            Status = r is null
+                ? $"Split {track.Name} into vocals and instrumental."
+                : $"Split {track.Name} in {r.Seconds:0.0}s on {r.ExecutionProvider}. "
+                  + $"The vocal stem is band-limited to {r.BandLimitHz / 1000:0.0} kHz — that is the model, not a bug.";
+
+            RecomputeLength();
+            MarkDirty();
+        }
+        catch (Exception ex)
+        {
+            Status = $"Separation failed: {ex.Message}";
+        }
+        finally
+        {
+            _splitting = false;
+            IsBusy = false;
+            BusyProgress = 0;
+        }
     }
 
     [RelayCommand]

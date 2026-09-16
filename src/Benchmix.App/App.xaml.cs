@@ -27,6 +27,13 @@ public partial class App : Application
     /// </summary>
     public static double PlayTestSeconds { get; private set; }
 
+    /// <summary>
+    /// When set, separates 20 seconds of this file and logs the result, then exits. Proves the
+    /// published single-file exe really carries the ONNX Runtime native libraries — something a
+    /// plain launch never exercises, because nothing touches them until you split a track.
+    /// </summary>
+    public static string? StemTestFile { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -61,6 +68,9 @@ public partial class App : Application
                     break;
                 case "--uiprobe":
                     if (i + 1 < e.Args.Length) UiProbePath = e.Args[++i];
+                    break;
+                case "--stemtest":
+                    if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];
                     break;
                 case "--playtest":
                     if (i + 1 < e.Args.Length && double.TryParse(e.Args[++i], out var t)) PlayTestSeconds = t;
