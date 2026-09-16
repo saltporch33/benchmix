@@ -13,6 +13,7 @@ try
     {
         case "analyze": return Analyze(args.Skip(1).ToArray());
         case "mashup": return Mashup(args.Skip(1).ToArray());
+        case "excerpt": return Excerpt(args.Skip(1).ToArray());
         default: Usage(); return 1;
     }
 }
@@ -47,6 +48,10 @@ static void Usage()
           --no-eq            skip the mashup EQ split
           --no-tempo-match   leave the topper at its own tempo (for A/B comparison)
           --format 16|24|f32 output format (default 24)
+
+      benchmix excerpt <in> <out> [--start S] [--seconds N] [--mp3]
+          Cut a short piece out of any audio file. Handy for sharing a clip
+          without sending a 45 MB WAV.
     """);
 }
 
@@ -179,6 +184,57 @@ static int Mashup(string[] args)
     Console.WriteLine($"  {result.Path}");
     Console.WriteLine($"  {result.Seconds:F1}s, peak before limiting {20 * Math.Log10(Math.Max(1e-6, result.PeakBefore)):F1} dBFS"
                     + (result.Clipped ? ", limiter engaged" : ""));
+    return 0;
+}
+
+static int Excerpt(string[] args)
+{
+    if (args.Length < 2) { Console.Error.WriteLine("excerpt: need <in> <out>"); return 1; }
+
+    string inPath = args[0], outPath = args[1];
+    double start = 0, seconds = 30;
+    bool mp3 = false;
+
+    for (int i = 2; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--start": start = double.Parse(args[++i]); break;
+            case "--seconds": seconds = double.Parse(args[++i]); break;
+            case "--mp3": mp3 = true; break;
+            default: Console.Error.WriteLine($"unknown option {args[i]}"); return 1;
+        }
+    }
+
+    const int Rate = 44100;
+    var clip = AudioClip.Load(inPath, Rate);
+
+    using var graph = new MixGraph(Rate);
+    var t = graph.AddTrack();
+    t.SetClip(clip);
+    t.SourceStartFrame = (long)(start * Rate);
+    t.FadeInSeconds = 0.05;
+    t.FadeOutSeconds = 0.05;
+    graph.LimiterEnabled = true;
+
+    string wav = mp3 ? Path.ChangeExtension(outPath, ".tmp.wav") : outPath;
+    var result = Renderer.Render(graph, wav, new RenderOptions
+    {
+        Region = (0, (long)(seconds * Rate)),
+        Format = RenderFormat.Pcm16,
+        TailSeconds = 0,
+    });
+
+    if (mp3)
+    {
+        NAudio.MediaFoundation.MediaFoundationApi.Startup();
+        using (var reader = new NAudio.Wave.WaveFileReader(wav))
+            NAudio.Wave.MediaFoundationEncoder.EncodeToMp3(reader, outPath, 192_000);
+        try { File.Delete(wav); } catch { }
+    }
+
+    var info = new FileInfo(outPath);
+    Console.WriteLine($"{outPath}  {result.Seconds:F1}s  {info.Length / 1024.0 / 1024.0:F1} MB");
     return 0;
 }
 
