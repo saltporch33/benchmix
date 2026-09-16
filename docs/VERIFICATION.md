@@ -76,6 +76,29 @@ Audible proof for a human is in `Music\Benchmix Demo\`:
   shortcut at `OneDrive\Desktop\Benchmix.lnk`.
 - **Zero build warnings** across the solution.
 
+## The UI, driven for real
+
+`scripts/ui-verify.ps1` clicks the actual buttons in the actual window through UI Automation and
+reads the actual labels back. It runs minimised and never takes focus, so it is safe to run while
+someone is using the machine. **10/10 checks pass:**
+
+```
+Loading
+  PASS  both tracks loaded            PASS  bed tempo from tag
+  PASS  topper tempo from tag         PASS  keys read from tags
+Match BPM on the second track
+  PASS  two Match BPM buttons         PASS  topper stretched to 93
+  PASS  status explains it
+Reset on the second track
+  PASS  topper back to 102            PASS  status confirms reset
+Match key
+  PASS  same key recognised
+```
+
+The substantive one: before the click the second track reads `102.0 BPM`; after it reads
+`93.0 BPM  (was 102.0)` and the status bar says *"They Reminisce Over You (T.R.O.Y.) (Clean):
+-8.8% to hit 93.0 BPM."* That is the whole feature working through the real control.
+
 ## What has *not* been verified
 
 Stated plainly so nobody assumes otherwise:
@@ -83,9 +106,9 @@ Stated plainly so nobody assumes otherwise:
 - **Nobody has listened to live playback through the speakers.** The pipeline is proven to run at
   realtime and the rendered files are proven correct; the final "does sound come out" step needs a
   human to press play. Thirty seconds of Daniel's time.
-- **The UI has not been driven by hand.** Knob drags, clip dragging, trimming, loop setting and the
-  render dialog are built and compile-verified, and their underlying logic is unit-tested, but the
-  gestures themselves have not been exercised by a person.
+- **Pointer gestures have not been exercised.** Buttons are now driven and checked by
+  `ui-verify.ps1`, but knob dragging, clip dragging, edge-trimming and shift-drag loop selection
+  are mouse gestures UI Automation cannot invoke. Their maths is unit-tested; the feel is not.
 - **Long-session behaviour.** No soak test. Memory should be flat once clips are loaded, but that
   is reasoning, not measurement.
 - **Stem separation** is not in the app — see `DECISIONS.md`.
