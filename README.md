@@ -87,6 +87,17 @@ dotnet run --project src/Benchmix.App
 
 Build output goes to `%LOCALAPPDATA%\Benchmix.build\`, deliberately outside OneDrive.
 
+To check the real UI still works after a change — it clicks the actual buttons through UI
+Automation, runs minimised and never steals focus:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/ui-verify.ps1
+```
+
+The app also has three switches used for verification: `--uiprobe <png>` renders the live window
+to a file, `--playtest <seconds>` checks the audio device is pulling in realtime (silently), and
+`--autoclose <seconds>` closes it again. Passing file paths preloads them as tracks.
+
 To publish a standalone exe:
 
 ```
