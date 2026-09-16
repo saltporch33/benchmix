@@ -2,6 +2,8 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Benchmix.App.ViewModels;
 
 namespace Benchmix.App;
@@ -43,6 +45,19 @@ public partial class MainWindow : Window
             _vm.ZoomFitCommand.Execute(null);
         }
 
+        if (App.UiProbePath is { } probe)
+        {
+            // Give layout, the waveform peaks and the first render tick a moment to settle,
+            // otherwise the probe photographs a half-built window.
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            await Task.Delay(1200);
+            CaptureTo(probe);
+            App.Log($"ui probe written to {probe}");
+            _vm.Dispose();
+            Application.Current.Shutdown();
+            return;
+        }
+
         if (App.AutoCloseSeconds > 0)
         {
             var timer = new System.Windows.Threading.DispatcherTimer
@@ -51,6 +66,32 @@ public partial class MainWindow : Window
             };
             timer.Tick += (_, _) => { timer.Stop(); _vm.Dispose(); Application.Current.Shutdown(); };
             timer.Start();
+        }
+    }
+
+    /// <summary>Renders the live window to a PNG at its real DPI.</summary>
+    private void CaptureTo(string path)
+    {
+        try
+        {
+            var dpi = VisualTreeHelper.GetDpi(this);
+            int w = (int)Math.Ceiling(ActualWidth * dpi.DpiScaleX);
+            int h = (int)Math.Ceiling(ActualHeight * dpi.DpiScaleY);
+            if (w < 1 || h < 1) return;
+
+            var rtb = new RenderTargetBitmap(w, h, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
+            rtb.Render(this);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rtb));
+
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            using var fs = File.Create(path);
+            encoder.Save(fs);
+        }
+        catch (Exception ex)
+        {
+            App.Log("ui probe failed: " + ex);
         }
     }
 

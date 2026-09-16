@@ -12,6 +12,14 @@ public partial class App : Application
     /// <summary>Seconds to wait before closing, for scripted runs. Zero means stay open.</summary>
     public static double AutoCloseSeconds { get; private set; }
 
+    /// <summary>
+    /// When set, the window renders itself to this PNG and the app exits. Capturing from inside
+    /// WPF via <c>RenderTargetBitmap</c> is the only reliable way to get the real pixels — screen
+    /// grabs and <c>PrintWindow</c> both lose parts of a DWM-composited window, and a screen grab
+    /// also means stealing focus from whoever is using the machine.
+    /// </summary>
+    public static string? UiProbePath { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -43,6 +51,9 @@ public partial class App : Application
             {
                 case "--autoclose":
                     if (i + 1 < e.Args.Length && double.TryParse(e.Args[++i], out var s)) AutoCloseSeconds = s;
+                    break;
+                case "--uiprobe":
+                    if (i + 1 < e.Args.Length) UiProbePath = e.Args[++i];
                     break;
                 default:
                     if (File.Exists(e.Args[i])) files.Add(e.Args[i]);
