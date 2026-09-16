@@ -258,6 +258,10 @@ public partial class MainWindow : Window
 
     // ---------------- lanes: select, drag clips, seek ----------------
 
+    /// <summary>Feeds the real lane width to the view-model, which Fit and the scrollbar both need.</summary>
+    private void OnLaneSizeChanged(object sender, SizeChangedEventArgs e)
+        => _vm.LaneWidthPx = e.NewSize.Width;
+
     private void OnTrackHeaderClicked(object sender, MouseButtonEventArgs e)
     {
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;

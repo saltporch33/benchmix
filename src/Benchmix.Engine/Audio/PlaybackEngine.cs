@@ -143,6 +143,26 @@ public sealed class PlaybackEngine : IDisposable
         lock (_gate) { if (_source is not null) _source.State = TransportState.Paused; }
     }
 
+    /// <summary>
+    /// Waits for any block the device is mid-way through to finish.
+    ///
+    /// Pausing only stops the <i>next</i> block from starting. The renderer seeks and then pulls
+    /// the same graph, so without this handshake it can collide with a block already in flight —
+    /// which is a race between two threads over every filter and stretcher in the mix.
+    /// </summary>
+    public bool WaitForIdle(int millisecondsTimeout = 500)
+    {
+        if (_source is null || _player is null) return true;
+
+        var until = Environment.TickCount64 + millisecondsTimeout;
+        while (_source.InBlock)
+        {
+            if (Environment.TickCount64 > until) return false;
+            Thread.Sleep(1);
+        }
+        return true;
+    }
+
     public void Stop()
     {
         lock (_gate)
@@ -218,10 +238,20 @@ public sealed class PlaybackEngine : IDisposable
             set => _loop = value is { } v ? new LoopSpan(v.Start, v.End) : null;
         }
 
+        /// <summary>True while this source is inside a block, so a renderer can wait it out.</summary>
+        public volatile bool InBlock;
+
         public int Read(Span<float> buffer)
         {
             if (State != TransportState.Playing) { buffer.Clear(); return buffer.Length; }
 
+            InBlock = true;
+            try { return ReadCore(buffer); }
+            finally { InBlock = false; }
+        }
+
+        private int ReadCore(Span<float> buffer)
+        {
             int channels = _graph.Channels;
             int frames = buffer.Length / channels;
             int done = 0;

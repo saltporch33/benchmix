@@ -112,6 +112,7 @@
             </Border>
 
             <Border x:Name="RulerHost" Grid.Row="0" Grid.Column="1" Background="{StaticResource Bg1Brush}"
+                    SizeChanged="OnLaneSizeChanged"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="OnRulerMouseDown" MouseMove="OnRulerMouseMove"
                     MouseLeftButtonUp="OnRulerMouseUp" Cursor="Hand">
@@ -324,9 +325,10 @@
 
         <!-- ============ horizontal scroll ============ -->
         <ScrollBar Grid.Row="3" Orientation="Horizontal" Height="14" Margin="392,0,0,0"
-                   Minimum="0" Maximum="{Binding TotalSeconds}" SmallChange="1" LargeChange="10"
+                   Minimum="0" Maximum="{Binding MaxScrollSeconds}"
+                   SmallChange="1" LargeChange="{Binding ViewportSeconds}"
                    Value="{Binding ScrollSeconds, Mode=TwoWay}"
-                   ViewportSize="20"/>
+                   ViewportSize="{Binding ViewportSeconds}"/>
 
         <!-- ============ status ============ -->
         <Border Grid.Row="4" Background="{StaticResource Bg1Brush}" Padding="12,5"

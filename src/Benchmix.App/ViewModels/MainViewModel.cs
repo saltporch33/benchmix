@@ -60,7 +60,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double? _loopEnd;
     [ObservableProperty] private string _windowTitle = "Benchmix";
 
+    /// <summary>
+    /// Width of the lane area in pixels, pushed in by the window on layout. Zoom-to-fit and the
+    /// horizontal scrollbar both need the real number: assuming 1000 makes Fit leave the tail of a
+    /// mix off-screen on a small window, and makes the scrollbar claim most of the mix is hidden
+    /// when all of it is visible.
+    /// </summary>
+    [ObservableProperty] private double _laneWidthPx = 1000;
+
     public double TimelineWidth => Math.Max(600, (TotalSeconds + 30) * PixelsPerSecond);
+
+    /// <summary>Seconds currently visible in the lane.</summary>
+    public double ViewportSeconds => LaneWidthPx / Math.Max(0.01, PixelsPerSecond);
+
+    /// <summary>Furthest the view can scroll before it runs past the end of the mix.</summary>
+    public double MaxScrollSeconds => Math.Max(0, TotalSeconds + 5 - ViewportSeconds);
 
     /// <summary>Starts audio. Called once the window is up, so a device failure can be shown, not thrown.</summary>
     public void Initialise()
@@ -201,7 +215,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ZoomFit()
     {
         if (TotalSeconds <= 0) return;
-        PixelsPerSecond = Math.Clamp(1000 / TotalSeconds, 2, 400);
+        // Measure the lane rather than assuming one; "Fit" that leaves the last minute off the
+        // right edge is worse than no Fit at all.
+        double lane = LaneWidthPx > 50 ? LaneWidthPx : 1000;
+        PixelsPerSecond = Math.Clamp(lane / (TotalSeconds * 1.02), 2, 400);
         ScrollSeconds = 0;
     }
 
@@ -555,6 +572,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         bool wasPlaying = IsPlaying;
         Session.Engine.Pause();
+        // Pausing stops the next block; this waits out the one already in flight, so the renderer
+        // never pulls the graph at the same moment the audio device is.
+        Session.Engine.WaitForIdle();
         long resume = Session.Engine.PositionFrames;
 
         _rendering = true;
@@ -683,8 +703,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MarkDirty();
     }
 
-    partial void OnPixelsPerSecondChanged(double value) => OnPropertyChanged(nameof(TimelineWidth));
-    partial void OnTotalSecondsChanged(double value) => OnPropertyChanged(nameof(TimelineWidth));
+    partial void OnPixelsPerSecondChanged(double value) => NotifyViewportChanged();
+    partial void OnTotalSecondsChanged(double value) => NotifyViewportChanged();
+    partial void OnLaneWidthPxChanged(double value) => NotifyViewportChanged();
+
+    partial void OnScrollSecondsChanged(double value)
+    {
+        double max = MaxScrollSeconds;
+        if (value < 0) ScrollSeconds = 0;
+        else if (value > max) ScrollSeconds = max;
+    }
+
+    private void NotifyViewportChanged()
+    {
+        OnPropertyChanged(nameof(TimelineWidth));
+        OnPropertyChanged(nameof(ViewportSeconds));
+        OnPropertyChanged(nameof(MaxScrollSeconds));
+        if (ScrollSeconds > MaxScrollSeconds) ScrollSeconds = MaxScrollSeconds;
+    }
 
     partial void OnSelectedTrackChanged(TrackViewModel? oldValue, TrackViewModel? newValue)
     {

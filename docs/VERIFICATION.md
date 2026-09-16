@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**72 tests, 0 failures, 0 skipped.** `dotnet test` — about 8 seconds.
+**91 tests, 0 failures, 0 skipped.** `dotnet test` — about 8 seconds.
 
 The ones that matter most:
 
@@ -99,6 +99,30 @@ Match key
 The substantive one: before the click the second track reads `102.0 BPM`; after it reads
 `93.0 BPM  (was 102.0)` and the status bar says *"They Reminisce Over You (T.R.O.Y.) (Clean):
 -8.8% to hit 93.0 BPM."* That is the whole feature working through the real control.
+
+## The adversarial review
+
+A five-dimension review (DSP correctness, threading, edge cases, UI logic, and a pass dedicated to
+breaking the four invariants above) raised 34 candidate defects. Each was handed to an independent
+verifier told to assume the finding was wrong and to reproduce it against the real code. **31 were
+confirmed by measurement, 2 rejected**, and all 31 are now fixed.
+
+The one that mattered most: **a clip whose timeline offset was not a multiple of the audio block
+size played the wrong part of its own song.** Measured — a clip at offset 1000 began 1000 source
+frames late for 3,096 frames, then snapped backwards with a 0.175 sample step (an audible click),
+and because preview and export use different block sizes they produced *different* wrong audio.
+Every existing offset test missed it: the only one that set an offset used a block-aligned value
+and asserted on RMS. It is now pinned by `ClipOffsetTests`, which uses a positional marker rather
+than a constant tone — a constant tone cannot see the difference, which is why my first attempt at
+the test passed against the bug.
+
+Others confirmed and fixed included pitch not reaching the first block after the stretcher was
+created (so two renders of one graph differed), a native stretcher freed under the render thread
+when a track was removed during playback, seeks resetting every voice mid-block, mute cutting in a
+single sample, renders reporting their peak *after* the limiter so an overdriven mix always looked
+fine, and undo reverting an older action than the one just performed.
+
+`RegressionTests` holds one test per fix, each named for the behaviour that was wrong.
 
 ## What has *not* been verified
 

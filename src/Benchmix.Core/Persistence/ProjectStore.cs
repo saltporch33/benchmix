@@ -81,7 +81,7 @@ public static class ProjectStore
         try
         {
             if (!File.Exists(path)) return false;
-            var json = File.ReadAllText(path);
+            var json = ReadWithRetry(path);
             if (string.IsNullOrWhiteSpace(json)) return false;
 
             var loaded = JsonSerializer.Deserialize<BenchmixProject>(json, Options);
@@ -95,7 +95,33 @@ public static class ProjectStore
             return true;
         }
         catch (InvalidDataException) { throw; }
+        catch (System.Text.Json.JsonException) { return false; }   // genuinely malformed
+        catch (IOException) { throw; }                             // locked or unreadable: not corruption
+        catch (UnauthorizedAccessException) { throw; }
         catch { return false; }
+    }
+
+    /// <summary>
+    /// Reads the file, retrying briefly through transient locks.
+    ///
+    /// A sync client holding the file open for a moment is not the same thing as a corrupt file,
+    /// and treating it as one silently demotes the newest save to <c>.bak</c> on the next write.
+    /// </summary>
+    private static string ReadWithRetry(string path, int attempts = 5)
+    {
+        for (int i = 0; ; i++)
+        {
+            try
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs);
+                return reader.ReadToEnd();
+            }
+            catch (IOException) when (i < attempts - 1)
+            {
+                Thread.Sleep(40);
+            }
+        }
     }
 
     /// <summary>Brings older schemas forward. Nothing to do yet, but the seam exists from day one.</summary>
