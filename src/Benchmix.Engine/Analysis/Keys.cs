@@ -72,7 +72,9 @@ public static class Keys
         int na = int.Parse(a[..^1]), nb = int.Parse(b[..^1]);
         int semis = ((nb - na) * 7) % 12;
         if (semis < 0) semis += 12;
-        return semis > 6 ? semis - 12 : semis;
+        // A tritone is the same distance either way; resolve it downward so the result is always
+        // in [-6, 5] rather than sometimes 6 and sometimes -6.
+        return semis >= 6 ? semis - 12 : semis;
     }
 
     /// <summary>True when the two keys already mix without any shift at all.</summary>

@@ -36,11 +36,26 @@ public sealed class ProjectSession : IDisposable
     /// <summary>Raised when a track could not be loaded. The UI shows it; nothing throws at it.</summary>
     public event EventHandler<(TrackModel Track, string Message)>? TrackFailed;
 
+    /// <summary>
+    /// Opens the audio device and starts an empty project. If no device can be opened — none
+    /// present, all of them in use, a driver in a bad mood — this falls back to an offline engine
+    /// rather than failing: you can still build and render a mashup, just not hear it live.
+    /// </summary>
     public static ProjectSession CreateEmpty(string? deviceId = null)
     {
-        var engine = PlaybackEngine.Open(deviceId);
+        PlaybackEngine engine;
+        try { engine = PlaybackEngine.Open(deviceId); }
+        catch { engine = PlaybackEngine.OpenOffline(); }
+
         var project = new BenchmixProject { SampleRate = engine.SampleRate };
         return new ProjectSession(engine, project);
+    }
+
+    /// <summary>An engine-only session with no audio device, for tests and headless rendering.</summary>
+    public static ProjectSession CreateOffline(int sampleRate = 48000)
+    {
+        var engine = PlaybackEngine.OpenOffline(sampleRate);
+        return new ProjectSession(engine, new BenchmixProject { SampleRate = sampleRate });
     }
 
     public AudioClip? ClipFor(TrackModel track)
@@ -48,6 +63,15 @@ public sealed class ProjectSession : IDisposable
 
     public TrackVoice? VoiceFor(TrackModel track)
         => _voices.TryGetValue(track.Id, out var v) ? v : null;
+
+    /// <summary>Returns this track's voice, creating an empty one if it does not have one yet.</summary>
+    public TrackVoice EnsureVoice(TrackModel track)
+    {
+        if (_voices.TryGetValue(track.Id, out var existing)) return existing;
+        var voice = Graph.AddTrack();
+        _voices[track.Id] = voice;
+        return voice;
+    }
 
     public long SecondsToFrames(double seconds) => (long)Math.Round(seconds * SampleRate);
     public double FramesToSeconds(long frames) => frames / (double)SampleRate;
@@ -93,8 +117,7 @@ public sealed class ProjectSession : IDisposable
                 _clips[model.SourcePath] = clip;
             }
 
-            var voice = VoiceFor(model) ?? Graph.AddTrack();
-            _voices[model.Id] = voice;
+            var voice = EnsureVoice(model);
             voice.SetClip(clip);
             Apply(model);
             TrackLoaded?.Invoke(this, model);

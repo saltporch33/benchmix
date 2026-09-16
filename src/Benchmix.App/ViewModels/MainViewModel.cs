@@ -88,6 +88,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>Instant attack, ~8 dB/second decay at the 30 Hz tick.</summary>
+    private static float Ballistic(float current, float peak)
+        => peak >= current ? peak : Math.Max(peak, current * 0.90f);
+
     private static void OnUi(Action a)
     {
         var d = Application.Current?.Dispatcher;
@@ -102,13 +106,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PositionSeconds = Session.Engine.PositionSeconds;
         IsPlaying = Session.Engine.State == TransportState.Playing;
 
+        // Meter ballistics: jump to a new peak instantly, fall away slowly. Showing the raw
+        // per-block peak would flicker far too fast to read anything from.
         var m = Session.Graph.Meters;
-        MasterLevelLeft = m.MasterPeakLeft;
-        MasterLevelRight = m.MasterPeakRight;
+        MasterLevelLeft = Ballistic(MasterLevelLeft, m.MasterPeakLeft);
+        MasterLevelRight = Ballistic(MasterLevelRight, m.MasterPeakRight);
         MasterClipped = m.MasterClipped;
 
         for (int i = 0; i < Tracks.Count && i < m.TrackPeak.Length; i++)
-            Tracks[i].MeterLevel = m.TrackPeak[i];
+            Tracks[i].MeterLevel = Ballistic(Tracks[i].MeterLevel, m.TrackPeak[i]);
     }
 
     // ---------------- transport ----------------

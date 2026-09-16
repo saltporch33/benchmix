@@ -17,12 +17,15 @@ public sealed class LevelMeter : FrameworkElement
     // linear-amplitude bar is useless for audio: -20 dBFS — a perfectly healthy working level —
     // is 0.1 in amplitude and would sit at a tenth of the bar, while the entire usable top of the
     // scale bunches into the last sliver. On this scale -20 dBFS lands at two-thirds height.
-    private const double MinDb = -60.0;
-    private const double WarnDb = -6.0;
-    private const double ClipDb = -1.0;
+    private const double MinDb = -48.0;
+    private const double WarnDb = -12.0;
+    private const double ClipDb = -3.0;
 
     // Zone boundaries as bar fractions. A linear-in-dB scale makes the top zones narrow on purpose
-    // (0.90 and 0.983): the amber and red bands are meant to read as a thin danger margin.
+    // The scale is -48..0 dBFS rather than the more usual -60, and the bands start at -12 and
+    // -3 rather than -6 and -1. On a textbook -60..0 meter the red band works out to under half a
+    // pixel at the 30px sizes this app uses, which is a warning nobody can see. These numbers keep
+    // the amber band around a quarter of the bar and the red band about two pixels.
     private const double WarnStart = 1.0 - WarnDb / MinDb;
     private const double ClipStart = 1.0 - ClipDb / MinDb;
 

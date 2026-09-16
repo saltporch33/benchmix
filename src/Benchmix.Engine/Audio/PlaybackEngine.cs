@@ -55,6 +55,22 @@ public sealed class PlaybackEngine : IDisposable
     /// Matching the device rate is what lets WASAPI run in its low-latency path instead of
     /// silently inserting a resampler.
     /// </summary>
+    /// <summary>
+    /// A engine with no audio device: the graph and the transport exist, nothing is played.
+    /// Used by tests, and as the fallback when a machine has no working output — rendering a file
+    /// does not need speakers, so losing the device should not cost you the editor.
+    /// </summary>
+    public static PlaybackEngine OpenOffline(int sampleRate = 48000)
+    {
+        var graph = new MixGraph(sampleRate);
+        var engine = new PlaybackEngine(graph, sampleRate, null, null);
+        engine._source = new TransportSource(graph);
+        return engine;
+    }
+
+    /// <summary>True when there is no output device — playback is a no-op but rendering works.</summary>
+    public bool IsOffline => _player is null;
+
     public static PlaybackEngine Open(string? deviceId = null)
     {
         MMDevice? device = null;
