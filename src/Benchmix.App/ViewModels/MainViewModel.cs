@@ -97,7 +97,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Session.Engine.PlaybackStoppedUnexpectedly += (_, _) => OnUi(() =>
             {
                 IsPlaying = false;
-                Status = "The audio device stopped. Check it is still connected, then press play.";
+                // Deliberately does NOT say "press play": once the stream is gone the engine
+                // refuses to start again, so telling someone to press play sends them in circles.
+                Status = "The audio device stopped — reconnect it and restart Benchmix to hear playback again. "
+                       + "Your project is fine, and you can still edit and render.";
             });
 
             ProjectBpm = Session.Project.ProjectBpm;
