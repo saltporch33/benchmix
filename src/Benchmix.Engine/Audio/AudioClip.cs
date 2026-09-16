@@ -57,9 +57,22 @@ public sealed class AudioClip
     /// <summary>Peak envelope for waveform drawing, built lazily on first request.</summary>
     public PeakData? Peaks { get; private set; }
 
+    private readonly object _peakGate = new();
+
+    /// <summary>
+    /// Builds the waveform envelope once. Callable from any thread: the loader builds it on a
+    /// worker while the UI may already be trying to draw, and both must get the same object
+    /// rather than racing to build two.
+    /// </summary>
     public PeakData EnsurePeaks(int samplesPerBucket = 512)
     {
-        return Peaks ??= PeakData.Build(this, samplesPerBucket);
+        var existing = Peaks;
+        if (existing is not null) return existing;
+
+        lock (_peakGate)
+        {
+            return Peaks ??= PeakData.Build(this, samplesPerBucket);
+        }
     }
 
     public static long EstimateMemoryBytes(double durationSeconds, int sampleRate = 48000, int channels = 2)

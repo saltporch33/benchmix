@@ -112,8 +112,15 @@ public sealed class ProjectSession : IDisposable
         {
             if (!_clips.TryGetValue(model.SourcePath, out var clip))
             {
-                clip = await Task.Run(() => AudioClip.Load(model.SourcePath, SampleRate, null, cancel), cancel)
-                                 .ConfigureAwait(false);
+                clip = await Task.Run(() =>
+                {
+                    var c = AudioClip.Load(model.SourcePath, SampleRate, null, cancel);
+                    // Build the waveform envelope here, on the worker. Left to the UI thread it
+                    // would run on first paint — a ~100 ms scan of the whole track, right when the
+                    // window is trying to draw.
+                    c.EnsurePeaks();
+                    return c;
+                }, cancel).ConfigureAwait(false);
                 _clips[model.SourcePath] = clip;
             }
 
