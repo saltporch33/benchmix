@@ -21,6 +21,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string? _projectPath;
     private bool _dirty;
 
+    // The renderer pulls blocks from the same MixGraph the audio device pulls from. Two threads
+    // doing that at once would interleave their reads and corrupt both. Playback is therefore
+    // locked out for the duration of a render.
+    private bool _rendering;
+
     public MainViewModel()
     {
         Tracks = new ObservableCollection<TrackViewModel>();
@@ -123,6 +128,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void PlayPause()
     {
         if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — playback resumes when it finishes."; return; }
         Session.Engine.TogglePlay();
         IsPlaying = Session.Engine.State == TransportState.Playing;
     }
@@ -139,7 +145,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public void SeekTo(double seconds)
     {
-        if (_session is null) return;
+        if (_session is null || _rendering) return;
         Session.Engine.SeekSeconds(Math.Max(0, seconds));
         PositionSeconds = Math.Max(0, seconds);
     }
@@ -450,6 +456,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Session.Engine.Pause();
         long resume = Session.Engine.PositionFrames;
 
+        _rendering = true;
         IsBusy = true;
         Status = "Rendering...";
         try
@@ -467,6 +474,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            _rendering = false;
             IsBusy = false;
             BusyProgress = 0;
             Session.Engine.Seek(resume);
