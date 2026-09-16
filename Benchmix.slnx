@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Benchmix.App/Benchmix.App.csproj" />
+    <Project Path="src/Benchmix.Core/Benchmix.Core.csproj" />
+    <Project Path="src/Benchmix.Engine/Benchmix.Engine.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Benchmix.Tests/Benchmix.Tests.csproj" />
+  </Folder>
+</Solution>
