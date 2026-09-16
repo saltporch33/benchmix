@@ -1,9 +1,26 @@
-﻿<Application x:Class="Benchmix.App.App"
+<Application x:Class="Benchmix.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:Benchmix.App"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
-         
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/Dark.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <local:TimeConverter x:Key="Time"/>
+            <local:TimeSlashConverter x:Key="TimeSlash"/>
+            <local:PlayGlyphConverter x:Key="PlayGlyph"/>
+            <local:BoolToVisibilityConverter x:Key="BoolVis"/>
+            <local:ZeroToVisibilityConverter x:Key="ZeroVis"/>
+
+            <Style TargetType="ToolTip">
+                <Setter Property="Background" Value="{StaticResource Bg3Brush}"/>
+                <Setter Property="Foreground" Value="{StaticResource Text0Brush}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+                <Setter Property="MaxWidth" Value="320"/>
+            </Style>
+        </ResourceDictionary>
     </Application.Resources>
 </Application>

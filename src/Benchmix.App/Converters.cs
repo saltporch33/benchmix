@@ -1,0 +1,62 @@
+using System.Globalization;
+using System.Windows;
+using System.Windows.Data;
+
+namespace Benchmix.App;
+
+/// <summary>Seconds to <c>m:ss.t</c>, the resolution a mashup is actually edited at.</summary>
+public sealed class TimeConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        double s = value is double d ? d : 0;
+        if (double.IsNaN(s) || double.IsInfinity(s) || s < 0) s = 0;
+        var ts = TimeSpan.FromSeconds(s);
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}:{ts.Minutes:00}:{ts.Seconds:00}.{ts.Milliseconds / 100}"
+            : $"{ts.Minutes}:{ts.Seconds:00}.{ts.Milliseconds / 100}";
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+/// <summary>Same, prefixed with a slash — for the "of total" half of a transport readout.</summary>
+public sealed class TimeSlashConverter : IValueConverter
+{
+    private static readonly TimeConverter Inner = new();
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => "/ " + Inner.Convert(value, targetType, parameter, culture);
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+public sealed class PlayGlyphConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? "⏸" : "▶";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+public sealed class BoolToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
+/// <summary>Visible only when the bound count is zero — the empty-state prompt.</summary>
+public sealed class ZeroToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is int i && i == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}

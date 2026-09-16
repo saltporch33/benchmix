@@ -19,7 +19,11 @@ public sealed class MixMeters
 /// </summary>
 public sealed class MixGraph : IDisposable
 {
-    private readonly List<TrackVoice> _tracks = new();
+    // Published by reference swap so the render thread never takes a lock and never sees a
+    // half-built list. Structural edits build a new array; per-track parameter writes are plain
+    // aligned 64-bit stores, which are atomic on x64, so a knob turn cannot tear.
+    private volatile TrackVoice[] _tracks = Array.Empty<TrackVoice>();
+    private readonly object _structure = new();
     private readonly int _sampleRate;
     private readonly int _channels;
     private float[] _scratch = Array.Empty<float>();
@@ -74,22 +78,46 @@ public sealed class MixGraph : IDisposable
 
     public TrackVoice AddTrack()
     {
-        var v = new TrackVoice(_sampleRate, _channels);
-        _tracks.Add(v);
-        Meters.TrackPeak = new float[_tracks.Count];
-        return v;
+        lock (_structure)
+        {
+            var v = new TrackVoice(_sampleRate, _channels);
+            var next = new TrackVoice[_tracks.Length + 1];
+            Array.Copy(_tracks, next, _tracks.Length);
+            next[^1] = v;
+            Meters.TrackPeak = new float[next.Length];
+            _tracks = next;
+            return v;
+        }
     }
 
     public void RemoveTrack(TrackVoice voice)
     {
-        if (_tracks.Remove(voice)) { voice.Dispose(); Meters.TrackPeak = new float[_tracks.Count]; }
+        lock (_structure)
+        {
+            int idx = Array.IndexOf(_tracks, voice);
+            if (idx < 0) return;
+
+            var next = new TrackVoice[_tracks.Length - 1];
+            Array.Copy(_tracks, 0, next, 0, idx);
+            Array.Copy(_tracks, idx + 1, next, idx, _tracks.Length - idx - 1);
+            Meters.TrackPeak = new float[next.Length];
+            _tracks = next;
+        }
+        // Disposed outside the swap: the render thread may still hold the old array for one block.
+        voice.Muted = true;
+        voice.Dispose();
     }
 
     public void Clear()
     {
-        foreach (var t in _tracks) t.Dispose();
-        _tracks.Clear();
-        Meters.TrackPeak = Array.Empty<float>();
+        TrackVoice[] old;
+        lock (_structure)
+        {
+            old = _tracks;
+            _tracks = Array.Empty<TrackVoice>();
+            Meters.TrackPeak = Array.Empty<float>();
+        }
+        foreach (var t in old) t.Dispose();
     }
 
     public void Seek(long frame)
@@ -116,13 +144,14 @@ public sealed class MixGraph : IDisposable
         int need = frames * _channels;
         if (_scratch.Length < need) _scratch = new float[need];
 
-        if (Meters.TrackPeak.Length != _tracks.Count) Meters.TrackPeak = new float[_tracks.Count];
+        var tracks = _tracks;   // one read of the published array for the whole block
+        if (Meters.TrackPeak.Length != tracks.Length) Meters.TrackPeak = new float[tracks.Length];
 
-        for (int i = 0; i < _tracks.Count; i++)
+        for (int i = 0; i < tracks.Length; i++)
         {
             var span = _scratch.AsSpan(0, need);
             span.Clear();
-            _tracks[i].Render(span, PositionFrames, frames);
+            tracks[i].Render(span, PositionFrames, frames);
 
             float peak = 0;
             for (int s = 0; s < need; s++)
