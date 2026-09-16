@@ -173,14 +173,78 @@ public partial class MainWindow : Window
             encoder.Frames.Add(BitmapFrame.Create(rtb));
 
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-            using var fs = File.Create(path);
-            encoder.Save(fs);
+            using (var fs = File.Create(path)) encoder.Save(fs);
+
+            WriteControlMap(Path.ChangeExtension(path, ".map.tsv"), dpi);
         }
         catch (Exception ex)
         {
             App.Log("ui probe failed: " + ex);
         }
     }
+
+    /// <summary>
+    /// Writes where every labelled control actually sits in the captured image.
+    ///
+    /// This exists so documentation screenshots can be annotated against real coordinates instead
+    /// of someone eyeballing pixel positions — and so the annotations stay correct when the layout
+    /// changes, because the next capture reports the new positions.
+    /// </summary>
+    private void WriteControlMap(string path, DpiScale dpi)
+    {
+        var rows = new List<string> { "label\tx\ty\twidth\theight" };
+        var seen = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        void Walk(DependencyObject node)
+        {
+            int count = VisualTreeHelper.GetChildrenCount(node);
+            for (int i = 0; i < count; i++)
+            {
+                var child = VisualTreeHelper.GetChild(node, i);
+                if (child is FrameworkElement fe && fe.IsVisible && fe.ActualWidth > 0 && fe.ActualHeight > 0)
+                {
+                    var label = LabelFor(fe);
+                    if (label is not null)
+                    {
+                        // Duplicates are expected — six knobs per track, a Match BPM per track —
+                        // so each repeat gets an index, in visual-tree order (top to bottom).
+                        seen.TryGetValue(label, out int n);
+                        seen[label] = n + 1;
+                        string key = n == 0 ? label : $"{label}#{n + 1}";
+
+                        var p = fe.TransformToAncestor(this).Transform(new Point(0, 0));
+                        rows.Add(string.Join('\t',
+                            key,
+                            (int)Math.Round(p.X * dpi.DpiScaleX),
+                            (int)Math.Round(p.Y * dpi.DpiScaleY),
+                            (int)Math.Round(fe.ActualWidth * dpi.DpiScaleX),
+                            (int)Math.Round(fe.ActualHeight * dpi.DpiScaleY)));
+                    }
+                }
+                Walk(child);
+            }
+        }
+
+        Walk(this);
+        File.WriteAllLines(path, rows);
+        App.Log($"ui probe: control map written to {path} ({rows.Count - 1} controls)");
+    }
+
+    /// <summary>A stable, human-meaningful name for a control, or null to leave it out of the map.</summary>
+    private static string? LabelFor(FrameworkElement fe) => fe switch
+    {
+        Controls.Knob k when !string.IsNullOrEmpty(k.Label) => "knob:" + k.Label,
+        Controls.LevelMeter => "meter",
+        Controls.WaveformView => "waveform",
+        Controls.TimelineRuler => "ruler",
+        Controls.PlayheadOverlay => "playhead",
+        System.Windows.Controls.Primitives.ToggleButton t when t.Content is string ts => "toggle:" + ts,
+        Button b when b.Content is string bs => "button:" + bs,
+        TextBox => "textbox:projectBpm",
+        Slider => "slider:master",
+        TextBlock tb when tb.Text is { Length: > 0 } s && s.Length < 60 => "text:" + s,
+        _ => null,
+    };
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {

@@ -1,0 +1,85 @@
+{
+  "source": "raw.png",
+  "out": "fig-overview.png",
+  "scale": 0.72,
+  "title": "The main window",
+  "callouts": [
+    {
+      "target": [
+        "button:New",
+        "button:Render to file"
+      ],
+      "badge": "top-left",
+      "radius": 10,
+      "text": "The top bar — start a new mashup, open or save one, add songs, and write the finished file out.",
+      "nudge": [
+        0,
+        -32
+      ]
+    },
+    {
+      "target": [
+        "button:▶",
+        "button:Clear loop"
+      ],
+      "badge": "left",
+      "radius": 10,
+      "text": "Transport — play and stop, the position clock, the project BPM everything gets matched to, and a button to drop the loop you set on the ruler.",
+      "nudge": [
+        -44,
+        -8
+      ]
+    },
+    {
+      "target": [
+        "text:MASTER",
+        "slider:master"
+      ],
+      "badge": "top-right",
+      "radius": 10,
+      "text": "Master — the two thin bars are the output level. Keep them out of the top; the slider beside them turns the whole mix down.",
+      "nudge": [
+        60,
+        -32
+      ]
+    },
+    {
+      "target": "ruler",
+      "badge": "top-left",
+      "radius": 6,
+      "text": "The ruler — click to jump the playhead anywhere. Drag along it to mark a loop and Benchmix plays that section over and over."
+    },
+    {
+      "target": [
+        "text:93.0 BPM",
+        "text:Still D.R.E. (Instrumental)",
+        "toggle:S"
+      ],
+      "badge": "top-left",
+      "radius": 10,
+      "grow": 8,
+      "text": "One track's controls — a channel strip. Every song you add gets its own, stacked down the left.",
+      "nudge": [
+        -34,
+        0
+      ]
+    },
+    {
+      "target": [
+        "waveform",
+        "waveform#2"
+      ],
+      "badge": "bottom-right",
+      "radius": 6,
+      "text": "The timeline — each song is a block you can drag left or right to line it up with the other."
+    }
+  ],
+  "crop": [
+    0,
+    0,
+    2582,
+    700
+  ],
+  "pad": 0,
+  "gutter": 50
+}

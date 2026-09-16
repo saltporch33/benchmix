@@ -1,0 +1,88 @@
+label	x	y	width	height
+text:BENCHMIX	18	16	105	28
+button:New	147	10	68	40
+text:New	163	18	35	25
+button:Open	223	10	77	40
+text:Open	239	18	44	25
+button:Save	308	10	70	40
+text:Save	324	18	37	25
+button:+ Add tracks	401	10	138	40
+text:+ Add tracks	417	18	105	25
+button:Render to file	547	10	138	40
+text:Render to file	563	18	105	25
+button:Fit	2379	10	52	40
+text:Fit	2395	18	19	25
+button:−	2439	10	45	40
+text:−	2455	18	12	25
+button:+	2492	10	45	40
+text:+	2508	18	12	25
+button:▶	15	75	60	45
+text:▶	36	83	18	30
+button:■	83	75	60	45
+text:■	104	83	18	30
+text:0:00.0	175	81	96	33
+text:/ 4:30.9	277	87	80	22
+text:PROJECT BPM	387	87	99	21
+textbox:projectBpm	495	80	93	35
+button:Clear loop	612	75	114	45
+text:Clear loop	628	85	81	25
+text:MASTER	2264	87	59	21
+meter	2335	75	15	45
+meter#2	2353	75	15	45
+slider:master	2380	84	165	27
+text:TRACKS	18	142	550	21
+ruler	588	134	1972	37
+button:✕	541	183	30	25
+text:✕	550	186	12	20
+meter#3	526	185	9	22
+text:Still D.R.E. (Instrumental)	31	183	489	25
+text:93.0 BPM	15	213	71	23
+text:  ·  	86	213	19	23
+text:G#m  (1A)	105	213	77	23
+knob:TEMPO	15	241	87	111
+knob:PITCH	108	241	87	111
+knob:LOW	210	241	78	111
+knob:MID	288	241	78	111
+knob:HIGH	366	241	78	111
+knob:VOL	459	241	78	111
+button:Match BPM	15	359	103	30
+text:Match BPM	27	363	79	21
+button:Match key	126	359	95	30
+text:Match key	138	363	71	21
+button:Reset	229	359	62	30
+text:Reset	241	363	38	21
+toggle:LINK	305	359	57	30
+text:LINK	315	363	36	21
+toggle:M	368	359	36	30
+text:M	378	363	15	21
+toggle:S	409	359	30	30
+text:S	419	363	9	21
+waveform	588	173	1972	226
+button:✕#2	541	411	30	25
+text:✕#2	550	414	12	20
+meter#4	526	413	9	22
+text:They Reminisce Over You (T.R.O.Y.) (Clean)	31	411	489	25
+text:102.0 BPM	15	441	80	23
+text:  ·  #2	95	441	19	23
+text:G#m  (1A)#2	114	441	77	23
+knob:TEMPO#2	15	469	87	111
+knob:PITCH#2	108	469	87	111
+knob:LOW#2	210	469	78	111
+knob:MID#2	288	469	78	111
+knob:HIGH#2	366	469	78	111
+knob:VOL#2	459	469	78	111
+button:Match BPM#2	15	587	103	30
+text:Match BPM#2	27	591	79	21
+button:Match key#2	126	587	95	30
+text:Match key#2	138	591	71	21
+button:Reset#2	229	587	62	30
+text:Reset#2	241	591	38	21
+toggle:LINK#2	305	587	57	30
+text:LINK#2	315	591	36	21
+toggle:M#2	368	587	36	30
+text:M#2	378	591	15	21
+toggle:S#2	409	587	30	30
+text:S#2	419	591	9	21
+waveform#2	588	401	1972	226
+playhead	588	134	1972	1294
+text:Added 2 tracks.	18	1464	2524	23

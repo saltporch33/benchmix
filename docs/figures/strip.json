@@ -1,0 +1,85 @@
+{
+  "source": "raw.png",
+  "out": "fig-strip.png",
+  "crop": [
+    "text:Still D.R.E. (Instrumental)",
+    "toggle:S"
+  ],
+  "pad": 12,
+  "scale": 1.5,
+  "title": "One song's controls, close up",
+  "callouts": [
+    {
+      "target": [
+        "text:Still D.R.E. (Instrumental)",
+        "text:93.0 BPM",
+        "text:G#m  (1A)"
+      ],
+      "badge": "top-left",
+      "text": "The song — its name, its speed in beats per minute, and its key. Benchmix reads these from the file's tags when they are there and works them out from the audio when they are not.",
+      "radius": 8,
+      "nudge": [
+        0,
+        -4
+      ]
+    },
+    {
+      "target": "knob:TEMPO",
+      "badge": "top-left",
+      "text": "TEMPO — speeds the song up or slows it down. The pitch does not move, so it still sounds like the same song, just faster or slower.",
+      "nudge": [
+        0,
+        26
+      ]
+    },
+    {
+      "target": "knob:PITCH",
+      "badge": "top-left",
+      "text": "PITCH — moves the song up or down in semitones. The speed does not move. Use it to put two songs in the same key.",
+      "nudge": [
+        0,
+        26
+      ]
+    },
+    {
+      "target": [
+        "knob:LOW",
+        "knob:HIGH"
+      ],
+      "badge": "top-left",
+      "radius": 10,
+      "text": "LOW, MID, HIGH — the tone controls. Turn one all the way down and that part of the sound disappears: killing the LOW on one song is the usual way to stop two basslines fighting.",
+      "nudge": [
+        0,
+        26
+      ]
+    },
+    {
+      "target": "knob:VOL",
+      "badge": "top-left",
+      "text": "VOL — how loud this song sits against the others.",
+      "nudge": [
+        0,
+        26
+      ]
+    },
+    {
+      "target": [
+        "button:Match BPM",
+        "button:Reset"
+      ],
+      "badge": "bottom-left",
+      "radius": 8,
+      "text": "Match BPM and Match key — one click each. Benchmix works out the tempo and pitch numbers for you and sets the knobs. Reset puts everything back."
+    },
+    {
+      "target": [
+        "toggle:LINK",
+        "toggle:S"
+      ],
+      "badge": "bottom-right",
+      "radius": 8,
+      "text": "LINK, M, S — LINK ties tempo and pitch together so the song changes speed the old turntable way. M mutes this song; S plays only this one."
+    }
+  ]
+}
