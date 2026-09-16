@@ -50,8 +50,7 @@ public partial class MainWindow : Window
             foreach (var t in _vm.Tracks)
                 App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} peaks={(t.Peaks is null ? "no" : "yes")}");
             App.Log($"loadcheck: verdict={(_vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded) ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
-            _vm.Dispose();
-            Application.Current.Shutdown();
+            EndVerificationRun();
             return;
         }
 
@@ -59,8 +58,7 @@ public partial class MainWindow : Window
         {
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
             RunGestureTest();
-            _vm.Dispose();
-            Application.Current.Shutdown();
+            EndVerificationRun();
             return;
         }
 
@@ -76,8 +74,7 @@ public partial class MainWindow : Window
             await Task.Delay(1200);
             CaptureTo(probe);
             App.Log($"ui probe written to {probe}");
-            _vm.Dispose();
-            Application.Current.Shutdown();
+            EndVerificationRun();
             return;
         }
 
@@ -127,8 +124,7 @@ public partial class MainWindow : Window
         {
             App.Log("stemtest: FAILED - " + ex);
         }
-        _vm.Dispose();
-        Application.Current.Shutdown();
+        EndVerificationRun();
     }
 
     /// <summary>
@@ -161,8 +157,7 @@ public partial class MainWindow : Window
         App.Log($"playtest: state={s.Engine.State} verdict={(ratio is > 0.95 and < 1.05 ? "PASS - device is pulling in realtime" : "FAIL - stream is not running at realtime")}");
 
         _vm.StopCommand.Execute(null);
-        _vm.Dispose();
-        Application.Current.Shutdown();
+        EndVerificationRun();
     }
 
     /// <summary>
@@ -184,6 +179,15 @@ public partial class MainWindow : Window
         var up = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
         { RoutedEvent = PreviewMouseRightButtonUpEvent };
 
+        // Scrolling is clamped to MaxScrollSeconds, which is derived from the project length. Run
+        // with no files and there is nowhere to scroll, so every pan check would pass or fail on
+        // whether a track happened to be loaded rather than on the code under test. Give the view
+        // its own room instead, and prove we got it.
+        _vm.LaneWidthPx = 1000;
+        _vm.PixelsPerSecond = 40;
+        _vm.TotalSeconds = 600;
+        Check($"the test has scroll room (max {_vm.MaxScrollSeconds:F0}s)", _vm.MaxScrollSeconds > 60);
+
         // --- a plain right-click must leave the view alone and let the menu open ---
         _vm.ScrollSeconds = 12;
         double before = _vm.ScrollSeconds;
@@ -200,9 +204,9 @@ public partial class MainWindow : Window
         Check("a right-click leaves the clip menu alone", !ConsumeContextMenuSuppression());
 
         // --- a right-drag must pan, and must eat the menu that would otherwise follow ---
-        _vm.PixelsPerSecond = 40;
         _vm.ScrollSeconds = 30;
         before = _vm.ScrollSeconds;
+        Check($"the drag starts with room to scroll back (at {before:F1}s)", before > 3.5);
 
         _scriptedPointerX = 500;
         OnTimelineRightButtonDown(TimelineGrid, down);
@@ -225,6 +229,7 @@ public partial class MainWindow : Window
 
         // --- panning must stop at the ends rather than running off into negative time ---
         _vm.ScrollSeconds = 1;
+        Check("the clamp check starts away from zero", _vm.ScrollSeconds > 0.5);
         _scriptedPointerX = 500;
         OnTimelineRightButtonDown(TimelineGrid, down);
         _scriptedPointerX = 500 + 100_000;             // yank far past the start
@@ -253,6 +258,34 @@ public partial class MainWindow : Window
         foreach (var p in pass) App.Log("gesturetest: PASS - " + p);
         foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
+    }
+
+    /// <summary>
+    /// Ends a <c>--gesturetest</c> / <c>--loadcheck</c> / <c>--stemtest</c> / <c>--playtest</c> /
+    /// <c>--uiprobe</c> run.
+    ///
+    /// Shutdown() alone is not enough from inside Loaded: measured, the process was still alive an
+    /// hour later, still holding the audio device and the exe — which is how a later build failed
+    /// with a file lock. Closing the window normally does exit (<c>--autoclose 3</c> terminates on
+    /// its own), so this is about the switches, not about the app. A switch whose entire job is to
+    /// log an answer and go away is allowed to insist.
+    /// </summary>
+    private void EndVerificationRun()
+    {
+        _vm.Dispose();
+        Application.Current.Shutdown();
+
+        var watchdog = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        watchdog.Tick += (_, _) =>
+        {
+            watchdog.Stop();
+            App.Log("verification run: shutdown did not take, exiting hard");
+            Environment.Exit(0);
+        };
+        watchdog.Start();
     }
 
     /// <summary>Renders the live window to a PNG at its real DPI.</summary>
