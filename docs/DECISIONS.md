@@ -59,3 +59,43 @@ Toolchain present: .NET SDK 10.0.401, Node 24.15.0, Python 3.13 (Store build), G
 **Absent: any C++ compiler, Visual Studio, VS Code, ffmpeg, Audacity, rubberband/soundstretch
 binaries, any VST.** This is a hard constraint on library choice: anything native must arrive
 as a prebuilt binary (NuGet), because nothing here can compile C++.
+
+## 2026-09-16 — decisions I took while building (he was AFK for most of it)
+
+Recorded so they are visible and reversible, not buried in code.
+
+| Decision | Why |
+| --- | --- |
+| **Signalsmith Stretch** for time/pitch | MIT, and it ships a prebuilt `win-x64` binary. Rubber Band is the quality leader but is GPL and source-only, and this machine has no C++ compiler. Measured at ~150x realtime with 4x headroom on 16 tracks. |
+| **One signal path for preview and render** | The measured headroom removed the usual reason to have two. What he hears is what he gets. |
+| **Subtractive (isolator) EQ as the default** | Reconstructs the input exactly at unity, so an untouched track is untouched. Shelving EQ kept as a second mode. |
+| **Tags before analysis** | 97% of his BPMs and 91% of his keys were already correct in the files. Reading them is instant; analysing is not. |
+| **Key values always labelled as estimates** | Mine is 47% accurate. Presenting that as fact would be a lie the tool tells hourly. |
+| **Chroma cross-correlation NOT implemented** | The research round recommended it; measuring it over 888 pairs put it at or below random chance. |
+| **Clips held fully in RAM** | ~92 MB per 4-minute stereo track against 32 GB. Makes every seek, loop and scrub free. |
+| **Per-track stretch, not per-clip** | Matches the mental model of a deck with one tempo fader. One clip per track for now. |
+| **5 ms declick on trimmed edges only** | Cutting into a waveform lands on a non-zero sample, which clicks. Untrimmed clips get no ramp, which is what preserves bit-exact passthrough. |
+| **Snap clips to bars by default**, Ctrl to override | Mashups are assembled on bar lines. |
+| **Self-contained single-file exe** (68.5 MB) | He asked for "one .exe, keep it clean". Self-contained means it keeps working even if the .NET SDK is ever removed. |
+| **Silent play-test rather than a loopback recording** | Proving the audio pipeline runs should not mean blasting music at someone who is working. Master at zero, measure the frame-pull rate. |
+
+## 2026-09-16 — stem separation: status
+
+He asked for stems as an **option alongside** the EQ knobs, not as a replacement:
+*"But not Asa a replacement for the eq knobs. I want the option to instead just adjust highs mids
+and lows on the complete song file"*, and chose the one-exe install, which rules out a bundled
+Python.
+
+Verified feasible ([SPIKE-02](SPIKE-02-directml.md)): `Microsoft.ML.OnnxRuntime.DirectML` 1.24.4
+initialises on the Arc 140V, so in-process GPU inference works with no CUDA.
+
+**Not yet in the app.** The remaining work is the model itself: MDX-Net `.onnx` weights are
+mirrored across community repos rather than one authoritative host, and the STFT pre/post
+processing has to match the specific model exactly. That is being proven in a standalone spike
+before anything touches the app, because a half-working separator is worse than none.
+
+## 2026-09-16 — offered, not done
+
+- **Writing analysis results back into file tags** (`TBPM` / `TKEY`), so Serato, djay and anything
+  else would see Benchmix's numbers. This modifies his music files, so it waits for an explicit
+  yes. He was told it is a flag away.

@@ -20,6 +20,13 @@ public partial class App : Application
     /// </summary>
     public static string? UiProbePath { get; private set; }
 
+    /// <summary>
+    /// Seconds to run a silent playback check: master at zero, transport running, measuring how
+    /// fast the audio device actually pulls frames from the mix. Silent on purpose — proving the
+    /// pipeline runs should not mean blasting music at whoever is at the keyboard.
+    /// </summary>
+    public static double PlayTestSeconds { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -54,6 +61,9 @@ public partial class App : Application
                     break;
                 case "--uiprobe":
                     if (i + 1 < e.Args.Length) UiProbePath = e.Args[++i];
+                    break;
+                case "--playtest":
+                    if (i + 1 < e.Args.Length && double.TryParse(e.Args[++i], out var t)) PlayTestSeconds = t;
                     break;
                 default:
                     if (File.Exists(e.Args[i])) files.Add(e.Args[i]);

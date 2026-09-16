@@ -45,6 +45,8 @@ public partial class MainWindow : Window
             _vm.ZoomFitCommand.Execute(null);
         }
 
+        if (App.PlayTestSeconds > 0) { await RunPlayTestAsync(App.PlayTestSeconds); return; }
+
         if (App.UiProbePath is { } probe)
         {
             // Give layout, the waveform peaks and the first render tick a moment to settle,
@@ -67,6 +69,40 @@ public partial class MainWindow : Window
             timer.Tick += (_, _) => { timer.Stop(); _vm.Dispose(); Application.Current.Shutdown(); };
             timer.Start();
         }
+    }
+
+    /// <summary>
+    /// Runs the transport silently and measures how fast the audio device pulls frames. If the
+    /// playhead advances at ~1x wall clock, WASAPI really is pulling from our mix graph in
+    /// realtime; if it sits still, the stream is dead however healthy the init looked.
+    /// </summary>
+    private async Task RunPlayTestAsync(double seconds)
+    {
+        var s = _vm.Session;
+        App.Log($"playtest: device='{s.Engine.DeviceName}' rate={s.SampleRate} offline={s.Engine.IsOffline} tracks={_vm.Tracks.Count}");
+
+        _vm.MasterGain = 0;                       // silent: this is a pipeline check, not a performance
+        s.Graph.MasterGain = 0;
+        s.Graph.SnapParameters();
+        _vm.SeekTo(20);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long startFrame = s.Engine.PositionFrames;
+        _vm.PlayPauseCommand.Execute(null);
+
+        await Task.Delay(TimeSpan.FromSeconds(seconds));
+
+        sw.Stop();
+        long endFrame = s.Engine.PositionFrames;
+        double advancedSeconds = (endFrame - startFrame) / (double)s.SampleRate;
+        double ratio = advancedSeconds / sw.Elapsed.TotalSeconds;
+
+        App.Log($"playtest: wall={sw.Elapsed.TotalSeconds:F2}s audio-advanced={advancedSeconds:F2}s ratio={ratio:F3}");
+        App.Log($"playtest: state={s.Engine.State} verdict={(ratio is > 0.95 and < 1.05 ? "PASS - device is pulling in realtime" : "FAIL - stream is not running at realtime")}");
+
+        _vm.StopCommand.Execute(null);
+        _vm.Dispose();
+        Application.Current.Shutdown();
     }
 
     /// <summary>Renders the live window to a PNG at its real DPI.</summary>
