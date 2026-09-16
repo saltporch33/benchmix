@@ -49,6 +49,7 @@ public sealed class TrackVoice : IDisposable
     private bool _dirty = true;
 
     private double _gain = 1.0, _targetGain = 1.0;
+    private double _muteGain = 1.0;
     private double _pan;                // -1 left, +1 right
     private readonly double _gainRamp;
 
@@ -73,6 +74,9 @@ public sealed class TrackVoice : IDisposable
     public long SourceEndFrame { get; set; } = -1;
 
     public bool Muted { get; set; }
+
+    /// <summary>Peak of this voice's last rendered block, so a meter follows the track, not its row.</summary>
+    public float Peak;
 
     /// <summary>Fade in at the start of the clip, in seconds. Zero still gets a short declick.</summary>
     public double FadeInSeconds { get; set; }
@@ -160,6 +164,7 @@ public sealed class TrackVoice : IDisposable
     public void SnapParameters()
     {
         _gain = _targetGain;
+        _muteGain = Muted ? 0 : 1;
         Eq.SnapGains();
     }
 
@@ -167,7 +172,7 @@ public sealed class TrackVoice : IDisposable
     public void Seek(long timelineFrame)
     {
         long rel = timelineFrame - TimelineOffsetFrames;
-        _sourcePos = SourceRead(Math.Max(0, rel));
+        _sourcePos = SourceRead(rel);
         _inCarry = 0;
         _needsPrime = true;
         Eq.Reset();
@@ -177,6 +182,14 @@ public sealed class TrackVoice : IDisposable
     /// <summary>
     /// Source frame to read for a given timeline offset, looking <see cref="ThreeBandEq.LatencySamples"/>
     /// ahead so the EQ's constant delay does not shift the track against the rest of the mix.
+    /// <para>
+    /// <paramref name="relTimelineFrame"/> is deliberately NOT clamped to zero. When a render block
+    /// straddles the start of an offset clip it is negative, and that is meaningful: the read
+    /// position belongs before the clip, so <c>CopySource</c> yields silence until the clip really
+    /// begins. Clamping it looks harmless — the clip envelope hides any early audio — but it makes
+    /// the clip start reading part-way into itself, skipping as many frames as its offset. A clip
+    /// dropped twenty seconds along would begin twenty seconds into the song.
+    /// </para>
     /// </summary>
     private double SourceRead(long relTimelineFrame)
         => SourceStartFrame + (relTimelineFrame + Eq.LatencySamples) * _speed;
@@ -204,7 +217,9 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     public int Render(Span<float> output, long timelineFrame, int frames)
     {
-        if (Clip is null || Muted) { StepGainOnly(frames); return 0; }
+        // Mute ramps like everything else rather than cutting in one sample. Only stop rendering
+        // once the ramp has actually reached silence, or muting a playing track is a click.
+        if (Clip is null || (Muted && _muteGain <= 0)) { StepGainOnly(frames); return 0; }
 
         long end = SourceEndFrame < 0 ? Clip.FrameCount : Math.Min(SourceEndFrame, Clip.FrameCount);
         long relStart = timelineFrame - TimelineOffsetFrames;
@@ -215,8 +230,19 @@ public sealed class TrackVoice : IDisposable
 
         // Keep the read position honest against the caller's clock; this also handles the first
         // block after a seek and any drift from fractional input consumption.
-        double wanted = SourceRead(Math.Max(0, relStart));
-        if (Math.Abs(wanted - _sourcePos) > 2) { _sourcePos = wanted; _needsPrime = true; _inCarry = 0; }
+        double wanted = SourceRead(relStart);
+        if (Math.Abs(wanted - _sourcePos) > 2)
+        {
+            // The clock jumped — a seek, or the playhead just reached this clip. Re-prime the EQ as
+            // well as the read position: its delay line still holds whatever came before, and
+            // without this the first LatencySamples of the clip come out as that instead of as the
+            // clip. On a clip whose opening IS the transient, those samples are the whole point.
+            _sourcePos = wanted;
+            _needsPrime = true;
+            _inCarry = 0;
+            Eq.Reset();
+            PrimeEq();
+        }
 
         var work = _outScratch.AsSpan(0, frames * _channels);
         work.Clear();
@@ -235,9 +261,10 @@ public sealed class TrackVoice : IDisposable
         for (int f = 0; f < frames; f++)
         {
             _gain = Approach(_gain, _targetGain, _gainRamp);
+            _muteGain = Approach(_muteGain, Muted ? 0 : 1, _gainRamp);
 
             long posInClip = relStart + f;
-            double env = ClipEnvelope(posInClip, clipLength, fadeIn, fadeOut);
+            double env = ClipEnvelope(posInClip, clipLength, fadeIn, fadeOut) * _muteGain;
 
             double l = _gain * env * (_pan <= 0 ? 1 : 1 - _pan);
             double r = _gain * env * (_pan >= 0 ? 1 : 1 + _pan);
@@ -274,6 +301,11 @@ public sealed class TrackVoice : IDisposable
     private void RenderIndependent(Span<float> work, int frames, long sourceEnd)
     {
         var st = _stretch ??= CreateStretch();
+        // CreateStretch sets _dirty, but ApplyParametersIfDirty already ran for this block — before
+        // the stretcher existed — and cleared the flag against a null. Without this the first block
+        // of a pitched track comes out at the ORIGINAL pitch, and whether that happens depends on
+        // whether anything previously created the stretcher, so two renders of one project differ.
+        ApplyParametersIfDirty();
 
         // How many input frames this block of output consumes, carrying the fraction forward so
         // the read position does not drift over a four-minute song.
@@ -335,8 +367,9 @@ public sealed class TrackVoice : IDisposable
     private void ApplyParametersIfDirty()
     {
         if (!_dirty) return;
-        _dirty = false;
+        // Stay dirty until there is actually something to apply to, or the settings are lost.
         if (_mode != StretchMode.Independent || _stretch is null) return;
+        _dirty = false;
 
         _stretch.SetTransposeSemitones((float)_semitones, 0.5f);
         // Compensating formants keeps a pitched-up vocal sounding like a person rather than a
@@ -346,7 +379,11 @@ public sealed class TrackVoice : IDisposable
 
     private void StepGainOnly(int frames)
     {
-        for (int f = 0; f < frames; f++) _gain = Approach(_gain, _targetGain, _gainRamp);
+        for (int f = 0; f < frames; f++)
+        {
+            _gain = Approach(_gain, _targetGain, _gainRamp);
+            _muteGain = Approach(_muteGain, Muted ? 0 : 1, _gainRamp);
+        }
     }
 
     private void EnsureBuffers(int frames)

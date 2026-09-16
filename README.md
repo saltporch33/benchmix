@@ -64,10 +64,15 @@ Knobs: drag up and down, <kbd>Shift</kbd> for fine, double-click to reset, wheel
 
 ## Two things worth knowing
 
-**An untouched track is untouched.** If a track's tempo, pitch and EQ are all at their defaults,
-its audio is copied to the render bit for bit — the stretcher is bypassed entirely and the EQ
-reconstructs its input exactly. This is tested, not hoped for. It means running a song through
-Benchmix and changing nothing gives you the song back.
+**An untouched track is untouched — by the signal path.** If a track's tempo, pitch and EQ are all
+at their defaults, its audio reaches the master bus bit for bit: the stretcher is bypassed entirely
+and the EQ reconstructs its input exactly. Both are tested, sample by sample.
+
+The one thing that *will* change it is the **master limiter**, which is on by default at −0.3 dBFS
+and exists to stop a two-song mix clipping. A single loud track passed through on its own therefore
+comes out slightly attenuated. That is the limiter doing its job, not the editor altering your
+audio, and it is a per-project setting — but it is worth knowing before you use Benchmix as a
+pass-through converter.
 
 **Key detection is a guess, and says so.** Values read from a file's tags are trusted. Values
 Benchmix worked out itself are marked with a `?`. Tempo detection measured 94% exact with nothing

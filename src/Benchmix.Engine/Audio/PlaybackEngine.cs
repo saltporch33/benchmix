@@ -47,6 +47,9 @@ public sealed class PlaybackEngine : IDisposable
         set { if (_source is not null) _source.Loop = value; }
     }
 
+    /// <summary>True once the output device has failed; playback cannot resume without reopening.</summary>
+    public bool DeviceLost { get; private set; }
+
     /// <summary>Raised on the UI's clock, not the audio thread; safe to bind to.</summary>
     public event EventHandler? PlaybackStoppedUnexpectedly;
 
@@ -99,7 +102,12 @@ public sealed class PlaybackEngine : IDisposable
         player.Init(new SampleToWaveProvider(source));
         player.PlaybackStopped += (_, e) =>
         {
-            if (e.Exception is not null) engine.PlaybackStoppedUnexpectedly?.Invoke(engine, EventArgs.Empty);
+            if (e.Exception is null) return;
+            // The stream is gone. Say so in the engine's own state, or the UI's 30 Hz poll will
+            // read State == Playing on the next tick and cheerfully claim it is still playing.
+            engine.DeviceLost = true;
+            if (engine._source is not null) engine._source.State = TransportState.Stopped;
+            engine.PlaybackStoppedUnexpectedly?.Invoke(engine, EventArgs.Empty);
         };
         player.Play();                     // the stream runs continuously; silence when stopped
         return engine;
@@ -124,7 +132,7 @@ public sealed class PlaybackEngine : IDisposable
     {
         lock (_gate)
         {
-            if (_source is null) return;
+            if (_source is null || DeviceLost) return;
             Graph.SnapParameters();
             _source.State = TransportState.Playing;
         }
@@ -150,12 +158,19 @@ public sealed class PlaybackEngine : IDisposable
         if (State == TransportState.Playing) Pause(); else Play();
     }
 
+    /// <summary>
+    /// Moves the playhead. While the device is actually pulling the graph this is handed to the
+    /// render thread to apply between blocks; otherwise it lands immediately.
+    /// </summary>
     public void Seek(long frame)
     {
         lock (_gate)
         {
-            Graph.Seek(Math.Max(0, frame));
-            if (_source is not null) _source.StopReturnFrame = Math.Max(0, frame);
+            frame = Math.Max(0, frame);
+            if (_source is not null) _source.StopReturnFrame = frame;
+
+            if (_player is not null && State == TransportState.Playing) Graph.RequestSeek(frame);
+            else Graph.Seek(frame);
         }
     }
 
@@ -187,8 +202,21 @@ public sealed class PlaybackEngine : IDisposable
 
         public WaveFormat WaveFormat { get; }
         public volatile TransportState State = TransportState.Stopped;
-        public (long Start, long End)? Loop;
         public long StopReturnFrame;
+
+        /// <summary>
+        /// Published as a single reference so the audio thread always sees a whole region. A
+        /// nullable tuple of two longs is 24 bytes: written field by field from the UI while the
+        /// ruler is dragged, the audio thread can read a half-updated one and wrap to the wrong place.
+        /// </summary>
+        private sealed record LoopSpan(long Start, long End);
+        private volatile LoopSpan? _loop;
+
+        public (long Start, long End)? Loop
+        {
+            get { var l = _loop; return l is null ? null : (l.Start, l.End); }
+            set => _loop = value is { } v ? new LoopSpan(v.Start, v.End) : null;
+        }
 
         public int Read(Span<float> buffer)
         {

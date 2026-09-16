@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace Benchmix.Engine.Audio;
 
 /// <summary>Per-track and master levels, published for the meters.</summary>
@@ -8,6 +10,12 @@ public sealed class MixMeters
     public float MasterPeakRight;
     /// <summary>True if the master hit or passed full scale since the last reset.</summary>
     public bool MasterClipped;
+    /// <summary>
+    /// Highest level seen <b>before</b> the limiter since the last reset. Measuring after it is
+    /// useless — the limiter's whole job is to pin the output at the ceiling, so a post-limiter
+    /// peak always reads "fine" no matter how badly the mix was overdriven.
+    /// </summary>
+    public float MasterPrePeak;
 }
 
 /// <summary>
@@ -24,6 +32,17 @@ public sealed class MixGraph : IDisposable
     // aligned 64-bit stores, which are atomic on x64, so a knob turn cannot tear.
     private volatile TrackVoice[] _tracks = Array.Empty<TrackVoice>();
     private readonly object _structure = new();
+
+    // A removed voice cannot be disposed straight away: the render thread may still hold the array
+    // it was in for the rest of the current block, and disposing frees a native stretcher out from
+    // under it. Retired voices wait until the render thread has provably moved on.
+    private readonly ConcurrentQueue<(uint Epoch, TrackVoice Voice)> _retired = new();
+    private volatile uint _renderEpoch;
+
+    // Seeks asked for by the UI are applied by the render thread at a block boundary rather than
+    // resetting every voice's filters and stretcher underneath it mid-block.
+    private long _pendingSeek = -1;
+
     private readonly int _sampleRate;
     private readonly int _channels;
     private float[] _scratch = Array.Empty<float>();
@@ -84,7 +103,6 @@ public sealed class MixGraph : IDisposable
             var next = new TrackVoice[_tracks.Length + 1];
             Array.Copy(_tracks, next, _tracks.Length);
             next[^1] = v;
-            Meters.TrackPeak = new float[next.Length];
             _tracks = next;
             return v;
         }
@@ -100,12 +118,10 @@ public sealed class MixGraph : IDisposable
             var next = new TrackVoice[_tracks.Length - 1];
             Array.Copy(_tracks, 0, next, 0, idx);
             Array.Copy(_tracks, idx + 1, next, idx, _tracks.Length - idx - 1);
-            Meters.TrackPeak = new float[next.Length];
             _tracks = next;
         }
-        // Disposed outside the swap: the render thread may still hold the old array for one block.
-        voice.Muted = true;
-        voice.Dispose();
+
+        Retire(voice);
     }
 
     public void Clear()
@@ -115,16 +131,62 @@ public sealed class MixGraph : IDisposable
         {
             old = _tracks;
             _tracks = Array.Empty<TrackVoice>();
-            Meters.TrackPeak = Array.Empty<float>();
         }
-        foreach (var t in old) t.Dispose();
+        foreach (var t in old) Retire(t);
     }
 
+    private void Retire(TrackVoice voice)
+    {
+        voice.Muted = true;
+        _retired.Enqueue((_renderEpoch + 2, voice));
+        CollectRetired();
+    }
+
+    /// <summary>
+    /// Disposes voices the render thread has provably finished with. Call from any thread except
+    /// the render thread; the UI calls it on its timer so nothing lingers after a removal.
+    /// </summary>
+    public void CollectRetired()
+    {
+        int pending = _retired.Count;
+        for (int i = 0; i < pending; i++)
+        {
+            if (!_retired.TryDequeue(out var item)) break;
+
+            // Unsigned subtraction so the comparison stays correct across a wrap.
+            if (_renderEpoch - item.Epoch < uint.MaxValue / 2) item.Voice.Dispose();
+            else _retired.Enqueue(item);
+        }
+    }
+
+    /// <summary>
+    /// Moves the playhead immediately. Only safe when nothing else is pulling the graph — the
+    /// offline renderer, tests, and the render thread's own loop wrap. Anything on the UI thread
+    /// during playback must use <see cref="RequestSeek"/>.
+    /// </summary>
     public void Seek(long frame)
     {
+        Volatile.Write(ref _pendingSeek, -1);
         PositionFrames = Math.Max(0, frame);
         foreach (var t in _tracks) t.Seek(PositionFrames);
         _limiterGain = 1.0;
+    }
+
+    /// <summary>
+    /// Asks the render thread to move the playhead at the next block boundary. Dragging the ruler
+    /// fires dozens of these a second, and applying one inline would reset every voice's filters
+    /// and stretcher mid-block — which sounds like a burst of noise.
+    /// </summary>
+    public void RequestSeek(long frame) => Volatile.Write(ref _pendingSeek, Math.Max(0, frame));
+
+    /// <summary>Where the playhead will be once any requested seek has landed.</summary>
+    public long TargetPositionFrames
+    {
+        get
+        {
+            long pending = Volatile.Read(ref _pendingSeek);
+            return pending >= 0 ? pending : PositionFrames;
+        }
     }
 
     public void SnapParameters()
@@ -139,13 +201,25 @@ public sealed class MixGraph : IDisposable
     /// </summary>
     public void Render(Span<float> output, int frames)
     {
+        // A seek asked for by the UI lands here, between blocks, never inside one.
+        long pending = Volatile.Read(ref _pendingSeek);
+        if (pending >= 0 && Interlocked.CompareExchange(ref _pendingSeek, -1, pending) == pending)
+        {
+            PositionFrames = pending;
+            foreach (var t in _tracks) t.Seek(PositionFrames);
+            _limiterGain = 1.0;
+        }
+
         output[..(frames * _channels)].Clear();
 
         int need = frames * _channels;
         if (_scratch.Length < need) _scratch = new float[need];
 
         var tracks = _tracks;   // one read of the published array for the whole block
-        if (Meters.TrackPeak.Length != tracks.Length) Meters.TrackPeak = new float[tracks.Length];
+
+        // Built locally and published at the end, so a structural edit landing mid-block cannot
+        // shrink the array between the length check and an indexed write.
+        var peaks = new float[tracks.Length];
 
         for (int i = 0; i < tracks.Length; i++)
         {
@@ -161,10 +235,12 @@ public sealed class MixGraph : IDisposable
                 float a = Math.Abs(v);
                 if (a > peak) peak = a;
             }
-            Meters.TrackPeak[i] = peak;
+            peaks[i] = peak;
+            tracks[i].Peak = peak;      // also on the voice, so a meter can follow the track not the row
         }
+        Meters.TrackPeak = peaks;
 
-        float pl = 0, pr = 0;
+        float pl = 0, pr = 0, prePeak = 0;
         for (int f = 0; f < frames; f++)
         {
             _masterGain = Approach(_masterGain, _targetMasterGain, _gainRamp);
@@ -173,9 +249,12 @@ public sealed class MixGraph : IDisposable
             double l = output[i] * _masterGain;
             double r = _channels > 1 ? output[i + 1] * _masterGain : l;
 
+            float pre = (float)Math.Max(Math.Abs(l), Math.Abs(r));
+            if (pre > prePeak) prePeak = pre;
+
             if (LimiterEnabled)
             {
-                double mag = Math.Max(Math.Abs(l), Math.Abs(r));
+                double mag = pre;
                 double want = mag > CeilingLinear ? CeilingLinear / mag : 1.0;
                 // Attack instantly, release slowly — a peak limiter, not a compressor.
                 if (want < _limiterGain) _limiterGain = want;
@@ -195,7 +274,11 @@ public sealed class MixGraph : IDisposable
 
         Meters.MasterPeakLeft = pl;
         Meters.MasterPeakRight = pr;
+        if (prePeak > Meters.MasterPrePeak) Meters.MasterPrePeak = prePeak;
         PositionFrames += frames;
+
+        // Published last: anything retired before this value was observed is now safe to dispose.
+        _renderEpoch++;
     }
 
     private static double Approach(double cur, double target, double step)
@@ -205,5 +288,10 @@ public sealed class MixGraph : IDisposable
         return Math.Abs(d) <= step ? target : cur + Math.Sign(d) * step;
     }
 
-    public void Dispose() => Clear();
+    public void Dispose()
+    {
+        Clear();
+        // Nothing is pulling the graph any more, so retired voices can go now.
+        while (_retired.TryDequeue(out var item)) item.Voice.Dispose();
+    }
 }

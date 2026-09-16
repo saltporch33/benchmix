@@ -251,6 +251,7 @@ public partial class MainWindow : Window
     private void OnRulerMouseUp(object sender, MouseButtonEventArgs e)
     {
         ((FrameworkElement)sender).ReleaseMouseCapture();
+        _vm.EndGesture();
         _scrubbing = false;
         _settingLoop = false;
     }
@@ -299,6 +300,10 @@ public partial class MainWindow : Window
 
         _dragTrack = vm;
         _dragKind = HitTestClip(vm, e.GetPosition(host).X);
+
+        // A track that failed to load has no usable source span, so there is nothing to trim and
+        // the clamps below would be handed min > max. Treat the whole lane as a move instead.
+        if (vm.SourceDurationSeconds <= 0.001) _dragKind = DragKind.Move;
         _dragOrigin = e.GetPosition(this);
         _dragStartOffset = vm.TimelineOffsetSeconds;
         _dragStartSourceStart = vm.SourceStartSeconds;
@@ -343,9 +348,15 @@ public partial class MainWindow : Window
             case DragKind.TrimStart:
             {
                 // Dragging the left edge eats into the source AND moves the clip, so the audio
-                // under the pointer stays put instead of sliding away.
+                // under the pointer stays put instead of sliding away. The two must be clamped
+                // together: the clip cannot start before timeline zero, so cap how much source the
+                // edge may give back, rather than clamping the offset separately and letting the
+                // audio slide later.
                 double deltaSource = deltaSeconds * _dragTrack.Speed;
-                double newStart = Math.Clamp(_dragStartSourceStart + deltaSource, 0, _dragStartSourceEnd - 0.05);
+                double lowestStart = Math.Max(0, _dragStartSourceStart - _dragStartOffset * _dragTrack.Speed);
+                double newStart = Math.Clamp(_dragStartSourceStart + deltaSource,
+                                             lowestStart,
+                                             Math.Max(lowestStart, _dragStartSourceEnd - 0.05));
                 double consumed = newStart - _dragStartSourceStart;
 
                 _dragTrack.SourceStartSeconds = newStart;
@@ -357,9 +368,10 @@ public partial class MainWindow : Window
             case DragKind.TrimEnd:
             {
                 double deltaSource = deltaSeconds * _dragTrack.Speed;
+                double floor = Math.Min(_dragTrack.SourceStartSeconds + 0.05, _dragTrack.SourceDurationSeconds);
                 double newEnd = Math.Clamp(_dragStartSourceEnd + deltaSource,
-                                           _dragTrack.SourceStartSeconds + 0.05,
-                                           _dragTrack.SourceDurationSeconds);
+                                           floor,
+                                           Math.Max(floor, _dragTrack.SourceDurationSeconds));
                 _dragTrack.SourceEndSeconds = newEnd;
                 _vm.Status = $"{_dragTrack.Name}: trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s";
                 break;
@@ -383,6 +395,7 @@ public partial class MainWindow : Window
     private void OnLaneMouseUp(object sender, MouseButtonEventArgs e)
     {
         ((FrameworkElement)sender).ReleaseMouseCapture();
+        _vm.EndGesture();
         if (_dragging && _dragTrack is not null)
         {
             _vm.Status = _dragKind == DragKind.Move
@@ -398,8 +411,15 @@ public partial class MainWindow : Window
     private static TrackViewModel? TrackOf(object sender)
         => (sender as FrameworkElement)?.DataContext as TrackViewModel;
 
+    /// <summary>
+    /// Parses a menu Tag invariantly. These are literals in XAML, so they are always written with a
+    /// dot — parsed with a comma-decimal culture, "0.25" reads as 25 and a quarter-second fade
+    /// becomes a twenty-five second one.
+    /// </summary>
     private static double TagSeconds(object sender)
-        => double.TryParse((sender as FrameworkElement)?.Tag?.ToString(), out var v) ? v : 0;
+        => double.TryParse((sender as FrameworkElement)?.Tag?.ToString(),
+                           System.Globalization.NumberStyles.Float,
+                           System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : 0;
 
     private void OnFadeIn(object sender, RoutedEventArgs e)
     {
@@ -421,7 +441,16 @@ public partial class MainWindow : Window
         double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed;
         if (into <= 0) { _vm.Status = "The playhead is before this clip."; return; }
 
-        t.SourceStartSeconds = Math.Min(t.SourceStartSeconds + into, t.SourceDurationSeconds - 0.05);
+        // Clamp against this clip's own end, not the whole file's. Past it, the trim would invert
+        // and the clip would vanish entirely.
+        double end = t.SourceEndSeconds < 0 ? t.SourceDurationSeconds : t.SourceEndSeconds;
+        if (t.SourceStartSeconds + into >= end - 0.05)
+        {
+            _vm.Status = "The playhead is past the end of this clip.";
+            return;
+        }
+
+        t.SourceStartSeconds = t.SourceStartSeconds + into;
         t.TimelineOffsetSeconds = _vm.PositionSeconds;
         _vm.RecomputeLength();
         _vm.Status = $"{t.Name}: {t.TrimText}.";
@@ -431,7 +460,7 @@ public partial class MainWindow : Window
     {
         if (TrackOf(sender) is not { } t) return;
         double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed + t.SourceStartSeconds;
-        if (into <= t.SourceStartSeconds) { _vm.Status = "The playhead is before this clip."; return; }
+        if (into <= t.SourceStartSeconds + 0.05) { _vm.Status = "The playhead is at or before the clip's start."; return; }
 
         t.SourceEndSeconds = Math.Min(into, t.SourceDurationSeconds);
         _vm.RecomputeLength();

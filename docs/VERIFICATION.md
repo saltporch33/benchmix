@@ -11,7 +11,8 @@ The ones that matter most:
 | Test | What it pins down |
 | --- | --- |
 | `Isolator_AtUnity_IsBitExactPassthrough` | Every sample of 20,000 frames of noise through the EQ at unity comes out identical. Not "close" — `==`. |
-| `UntouchedTrack_RendersBitIdenticalToItsSource` | The same, through the whole chain: clip, stretcher, EQ, gain, master bus. Zero differing samples. |
+| `UntouchedTrack_RendersBitIdenticalToItsSource` | The same, through the whole chain: clip, stretcher, EQ, gain, master bus. Zero differing samples — **with the limiter off**. |
+| `TheLimiterDoesAlterALoudUntouchedTrack` | The honest counterpart: with the limiter on (the default) a track peaking at 0.99 *is* attenuated. Recorded so the guarantee above is not read as unconditional. |
 | `Render_IsDeterministic` | Rendering the same project twice gives byte-identical files, dither included. |
 | `ASavedProjectReopensSoundingTheSame` | Save, close, reopen, re-render → byte-identical audio. Nothing is lost in the project file. |
 | `ChangingSpeed_LeavesPitchAlone` | 1.25× faster, measured pitch still 440 Hz. |

@@ -53,7 +53,7 @@ public sealed class ThreeBandEq
 
     private readonly int _channels;
     private readonly double _sampleRate;
-    private readonly EqMode _mode;
+    private EqMode _mode;
 
     // Isolator path
     private readonly BiquadCascade _lp1;
@@ -103,7 +103,21 @@ public sealed class ThreeBandEq
 
     public double LowMidHz { get; }
     public double MidHighHz { get; }
-    public EqMode Mode => _mode;
+    /// <summary>
+    /// Switching topology mid-stream swaps an entire filter structure, so the old state is dropped
+    /// and the caller is expected to be between clips (loading a project) rather than mid-playback.
+    /// </summary>
+    public EqMode Mode
+    {
+        get => _mode;
+        set
+        {
+            if (value == _mode) return;
+            _mode = value;
+            Reset();
+            RebuildShelves();
+        }
+    }
 
     /// <summary>Constant delay the isolator path introduces; the caller compensates for it.</summary>
     public int LatencySamples { get; }

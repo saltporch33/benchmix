@@ -87,7 +87,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             });
 
             ProjectBpm = Session.Project.ProjectBpm;
-            Status = $"Audio ready on {Session.Engine.DeviceName} at {Session.SampleRate / 1000.0:0.#} kHz.";
+            Status = Session.Engine.IsOffline
+                ? "No audio output available. You can still load, edit and render files — you just will not hear them."
+                : $"Audio ready on {Session.Engine.DeviceName} at {Session.SampleRate / 1000.0:0.#} kHz.";
             _tick.Start();
         }
         catch (Exception ex)
@@ -112,7 +114,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (_session is null) return;
 
         PositionSeconds = Session.Engine.PositionSeconds;
-        IsPlaying = Session.Engine.State == TransportState.Playing;
+        IsPlaying = Session.Engine.State == TransportState.Playing && !Session.Engine.DeviceLost;
+
+        // Dispose any voice the render thread has finished with since a track was removed.
+        Session.Graph.CollectRetired();
 
         // Meter ballistics: jump to a new peak instantly, fall away slowly. Showing the raw
         // per-block peak would flicker far too fast to read anything from.
@@ -121,8 +126,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MasterLevelRight = Ballistic(MasterLevelRight, m.MasterPeakRight);
         MasterClipped = m.MasterClipped;
 
-        for (int i = 0; i < Tracks.Count && i < m.TrackPeak.Length; i++)
-            Tracks[i].MeterLevel = Ballistic(Tracks[i].MeterLevel, m.TrackPeak[i]);
+        // Read the peak off each track's own voice. Indexing TrackPeak by row number is wrong the
+        // moment any track failed to load, because a failed track has no voice and every meter
+        // after it shows a different track's audio.
+        foreach (var t in Tracks)
+        {
+            float peak = Session.VoiceFor(t.Model)?.Peak ?? 0f;
+            t.MeterLevel = Ballistic(t.MeterLevel, peak);
+        }
     }
 
     // ---------------- transport ----------------
@@ -140,6 +151,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void Stop()
     {
         if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
         Session.Engine.Stop();
         Session.Engine.Seek(0);
         PositionSeconds = 0;
@@ -224,7 +236,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
                 PushUndo($"add {Path.GetFileName(path)}");
                 var model = await Session.AddTrackAsync(path, atSeconds);
-                var vm = new TrackViewModel(Session, model, MarkDirty);
+                var vm = NewTrackViewModel(model);
                 Tracks.Add(vm);
                 SelectedTrack ??= vm;
 
@@ -360,7 +372,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
             foreach (var m in new[] { vocals, instrumental })
             {
-                var vm = new TrackViewModel(Session, m, MarkDirty);
+                var vm = NewTrackViewModel(m);
                 vm.NotifyAudioLoaded();
                 Tracks.Add(vm);
             }
@@ -405,14 +417,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // ---------------- project ----------------
 
     [RelayCommand]
-    private void New()
+    private async Task NewAsync()
     {
         if (!ConfirmDiscard()) return;
         if (_session is null) return;
 
-        Session.Graph.Clear();
+        // Go through OpenAsync so the graph, the voices, the decoded clips and the loop region are
+        // all released. Clearing the collections in place leaves the audio in memory and the old
+        // loop still wrapping playback in a project that no longer has one.
+        await Session.OpenAsync(new BenchmixProject { SampleRate = Session.SampleRate });
         Tracks.Clear();
-        Session.Project.Tracks.Clear();
+        LoopStart = null;
+        LoopEnd = null;
+        MasterGain = 1.0;
         _projectPath = null;
         _undo.Clear();
         _dirty = false;
@@ -437,10 +454,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             await Session.OpenAsync(result.Project);
 
             Tracks.Clear();
+            int missing = 0;
             foreach (var m in result.Project.Tracks)
             {
-                var vm = new TrackViewModel(Session, m, MarkDirty);
-                vm.NotifyAudioLoaded();
+                var vm = NewTrackViewModel(m);
+                if (Session.ClipFor(m) is not null) vm.NotifyAudioLoaded();
+                else
+                {
+                    // The file moved or was deleted. Say so on the track rather than presenting an
+                    // empty lane as if the project opened cleanly.
+                    vm.LoadError = $"Missing: {m.SourcePath}";
+                    missing++;
+                }
                 Tracks.Add(vm);
             }
 
@@ -455,7 +480,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _dirty = false;
             RecomputeLength();
             UpdateTitle();
-            Status = result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(dlg.FileName)}.";
+            Status = missing > 0
+                ? $"Opened {Path.GetFileName(dlg.FileName)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence."
+                : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(dlg.FileName)}.";
         }
         catch (Exception ex)
         {
@@ -536,11 +563,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var progress = new Progress<double>(p => BusyProgress = p);
-            var options = new RenderOptions { Format = format, TailSeconds = 2.0, ApplyLimiter = true };
+            var options = new RenderOptions
+            {
+                Format = format,
+                TailSeconds = 2.0,
+                ApplyLimiter = Session.Project.LimiterEnabled,
+            };
             var result = await Session.RenderAsync(dlg.FileName, options, progress);
 
-            Status = $"Rendered {result.Seconds:0.0}s to {Path.GetFileName(result.Path)} in {result.ElapsedSeconds:0.0}s"
-                   + (result.Clipped ? " — the limiter had to pull peaks down; consider lowering master." : ".");
+            double peakDb = result.PeakBefore > 1e-6 ? 20 * Math.Log10(result.PeakBefore) : -120;
+            Status = $"Rendered {result.Seconds:0.0}s to {Path.GetFileName(result.Path)} in {result.ElapsedSeconds:0.0}s, "
+                   + $"peaking at {peakDb:+0.0;-0.0} dBFS"
+                   + (result.Clipped
+                        ? " — the limiter pulled that down. Lower the master if you would rather it did not."
+                        : ".");
         }
         catch (Exception ex)
         {
@@ -583,8 +619,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Tracks.Clear();
             foreach (var m in project.Tracks)
             {
-                var vm = new TrackViewModel(Session, m, MarkDirty);
-                vm.NotifyAudioLoaded();
+                var vm = NewTrackViewModel(m);
+                if (Session.ClipFor(m) is not null) vm.NotifyAudioLoaded();
+                else vm.LoadError = $"Missing: {m.SourcePath}";
                 Tracks.Add(vm);
             }
             SelectedTrack = Tracks.FirstOrDefault();
@@ -596,11 +633,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         finally { IsBusy = false; }
     }
 
-    private void PushUndo(string label)
+    /// <summary>
+    /// Records the project state before a gesture. Continuous gestures — a knob drag, a clip drag —
+    /// coalesce into one step: pass the same <paramref name="coalesceKey"/> for every event of the
+    /// gesture and only the first takes a snapshot.
+    /// </summary>
+    public void PushUndo(string label, string? coalesceKey = null)
     {
         if (_session is null) return;
+        if (coalesceKey is not null && coalesceKey == _lastCoalesceKey) return;
+
+        _lastCoalesceKey = coalesceKey;
         _undo.Push(Session.Project, label);
     }
+
+    /// <summary>Ends a gesture, so the next one of the same kind starts a fresh undo step.</summary>
+    public void EndGesture() => _lastCoalesceKey = null;
+
+    private string? _lastCoalesceKey;
+
+    /// <summary>Builds a track view-model wired to undo, so knob moves are undoable like everything else.</summary>
+    private TrackViewModel NewTrackViewModel(TrackModel model)
+        => new(Session, model, MarkDirty, (label, key) => PushUndo(label, key));
 
     // ---------------- plumbing ----------------
 
@@ -614,6 +668,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnProjectBpmChanged(double value)
     {
+        // NaN or infinity here would propagate into bar snapping and into the ruler's tick loop,
+        // where the loop bound never terminates and the window hangs for good.
+        if (!double.IsFinite(value) || value < 0)
+        {
+            Status = "That tempo is not a number.";
+            ProjectBpm = 0;
+            return;
+        }
+        if (value > 400) { ProjectBpm = 400; return; }
+
         if (_session is null) return;
         Session.Project.ProjectBpm = value;
         MarkDirty();

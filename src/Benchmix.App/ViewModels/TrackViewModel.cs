@@ -17,14 +17,24 @@ public sealed partial class TrackViewModel : ObservableObject
 {
     private readonly ProjectSession _session;
     private readonly Action _onChanged;
+    private readonly Action<string, string?>? _pushUndo;
 
-    public TrackViewModel(ProjectSession session, TrackModel model, Action onChanged)
+    public TrackViewModel(ProjectSession session, TrackModel model, Action onChanged,
+                          Action<string, string?>? pushUndo = null)
     {
         _session = session;
         Model = model;
         _onChanged = onChanged;
+        _pushUndo = pushUndo;
         RefreshFromModel();
     }
+
+    /// <summary>
+    /// Records an undo point before a parameter changes. A continuous knob drag fires this on every
+    /// pixel, so the key coalesces the whole drag into one step — otherwise a single twist of the
+    /// LOW knob would need two hundred presses of Ctrl+Z to undo.
+    /// </summary>
+    private void Snapshot(string what) => _pushUndo?.Invoke($"{Name}: {what}", $"{Id}:{what}");
 
     public TrackModel Model { get; }
     public Guid Id => Model.Id;
@@ -164,6 +174,7 @@ public sealed partial class TrackViewModel : ObservableObject
 
     partial void OnSpeedChanged(double value)
     {
+        Snapshot("tempo");
         Model.Speed = value;
         Push();
         OnPropertyChanged(nameof(SpeedText));
@@ -175,27 +186,30 @@ public sealed partial class TrackViewModel : ObservableObject
 
     partial void OnSemitonesChanged(double value)
     {
+        Snapshot("pitch");
         Model.Semitones = value;
         Push();
         OnPropertyChanged(nameof(SemitonesText));
     }
 
-    partial void OnEqLowChanged(double value) { Model.EqLow = value; Push(); OnPropertyChanged(nameof(EqLowText)); }
-    partial void OnEqMidChanged(double value) { Model.EqMid = value; Push(); OnPropertyChanged(nameof(EqMidText)); }
-    partial void OnEqHighChanged(double value) { Model.EqHigh = value; Push(); OnPropertyChanged(nameof(EqHighText)); }
-    partial void OnGainChanged(double value) { Model.Gain = value; Push(); OnPropertyChanged(nameof(GainText)); }
+    partial void OnEqLowChanged(double value) { Snapshot("low"); Model.EqLow = value; Push(); OnPropertyChanged(nameof(EqLowText)); }
+    partial void OnEqMidChanged(double value) { Snapshot("mid"); Model.EqMid = value; Push(); OnPropertyChanged(nameof(EqMidText)); }
+    partial void OnEqHighChanged(double value) { Snapshot("high"); Model.EqHigh = value; Push(); OnPropertyChanged(nameof(EqHighText)); }
+    partial void OnGainChanged(double value) { Snapshot("volume"); Model.Gain = value; Push(); OnPropertyChanged(nameof(GainText)); }
 
-    partial void OnMutedChanged(bool value) { Model.Muted = value; PushAll(); }
-    partial void OnSoloedChanged(bool value) { Model.Soloed = value; PushAll(); }
+    partial void OnMutedChanged(bool value) { _pushUndo?.Invoke($"{Name}: mute", null); Model.Muted = value; PushAll(); }
+    partial void OnSoloedChanged(bool value) { _pushUndo?.Invoke($"{Name}: solo", null); Model.Soloed = value; PushAll(); }
 
     partial void OnTimelineOffsetSecondsChanged(double value)
     {
+        Snapshot("position");
         Model.TimelineOffsetSeconds = Math.Max(0, value);
         Push();
     }
 
     partial void OnSourceStartSecondsChanged(double value)
     {
+        Snapshot("trim");
         Model.SourceStartSeconds = Math.Max(0, value);
         Push();
         NotifyTrimChanged();
@@ -203,6 +217,7 @@ public sealed partial class TrackViewModel : ObservableObject
 
     partial void OnSourceEndSecondsChanged(double value)
     {
+        Snapshot("trim");
         Model.SourceEndSeconds = value;
         Push();
         NotifyTrimChanged();

@@ -5,10 +5,19 @@ using Xunit;
 namespace Benchmix.Tests;
 
 /// <summary>
+/// Everything that runs the separation model shares this collection, which stops xUnit running
+/// two of them at once. They each hold a GPU session and a gigabyte of buffers; in parallel they
+/// contend for both and fail intermittently, which looks like a bug in the separator and is not.
+/// </summary>
+[CollectionDefinition("GPU separation", DisableParallelization = true)]
+public sealed class GpuSeparationCollection { }
+
+/// <summary>
 /// Stem separation, checked the only way that actually means anything: against a track that has
 /// no vocals. If the "vocals" stem of an instrumental is not far quieter than the "vocals" stem of
 /// a vocal track, the separator is not separating, whatever else it appears to do.
 /// </summary>
+[Collection("GPU separation")]
 public class StemTests
 {
     static readonly string Library = Path.Combine(
@@ -136,6 +145,7 @@ public class StemTests
 }
 
 /// <summary>The whole split path as the UI drives it: separate, write, and land two usable tracks.</summary>
+[Collection("GPU separation")]
 public class StemSplitTests
 {
     static readonly string Library = Path.Combine(

@@ -22,6 +22,8 @@ public sealed record RenderOptions
     public bool ApplyLimiter { get; init; } = true;
 }
 
+/// <param name="PeakBefore">Highest level reached before the limiter, so an overdriven mix is visible.</param>
+/// <param name="Clipped">True when the limiter had to pull peaks down, or the output hit full scale.</param>
 public sealed record RenderResult(string Path, long Frames, double Seconds, float PeakBefore, bool Clipped, double ElapsedSeconds);
 
 /// <summary>
@@ -51,8 +53,8 @@ public static class Renderer
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         string tmp = path + ".tmp";
 
-        float peakBefore = 0;
         graph.Meters.MasterClipped = false;
+        graph.Meters.MasterPrePeak = 0;
         long written = 0;
 
         try
@@ -76,8 +78,6 @@ public static class Renderer
                     int frames = (int)Math.Min(BlockFrames, total - written);
                     var span = buf.AsSpan(0, frames * graph.Channels);
                     graph.Render(span, frames);
-
-                    foreach (var v in span) { float a = Math.Abs(v); if (a > peakBefore) peakBefore = a; }
 
                     switch (options.Format)
                     {
@@ -112,8 +112,13 @@ public static class Renderer
         }
 
         started.Stop();
+        // The peak the caller wants is the one BEFORE the limiter — that is the number that tells
+        // you the mix was 6 dB too hot. After it, every overdriven render reports a tidy -0.3 dBFS.
+        float prePeak = graph.Meters.MasterPrePeak;
+        bool limited = options.ApplyLimiter && prePeak > graph.CeilingLinear;
+
         return new RenderResult(path, written, written / (double)graph.SampleRate,
-                                peakBefore, graph.Meters.MasterClipped, started.Elapsed.TotalSeconds);
+                                prePeak, limited || graph.Meters.MasterClipped, started.Elapsed.TotalSeconds);
     }
 
     private static void WritePcm24(WaveFileWriter writer, ReadOnlySpan<float> samples)

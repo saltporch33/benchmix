@@ -99,7 +99,7 @@ public sealed class ProjectSession : IDisposable
     public async Task<TrackModel> AddTrackAsync(string path, double atSeconds = 0,
                                                 CancellationToken cancel = default)
     {
-        var analysis = await Task.Run(() => Analyzer.Analyze(path, cancel), cancel).ConfigureAwait(false);
+        var analysis = await Task.Run(() => Analyzer.Analyze(path, cancel), cancel);
 
         var model = new TrackModel
         {
@@ -117,7 +117,7 @@ public sealed class ProjectSession : IDisposable
         Project.Tracks.Add(model);
         if (Project.ProjectBpm <= 0 && analysis.Bpm > 0) Project.ProjectBpm = analysis.Bpm;
 
-        await LoadAudioAsync(model, cancel).ConfigureAwait(false);
+        await LoadAudioAsync(model, cancel);
         return model;
     }
 
@@ -138,7 +138,7 @@ public sealed class ProjectSession : IDisposable
         var clip = ClipFor(source) ?? throw new InvalidOperationException("That track's audio is not loaded.");
 
         var result = await StemSeparator.SeparateAsync(clip, useGpu: true, progress, cancel)
-                                             .ConfigureAwait(false);
+                                             ;
 
         string stem = SanitiseFileName(Path.GetFileNameWithoutExtension(source.SourcePath));
         var vocalsPath = Path.Combine(StemDirectory, $"{stem} - vocals.wav");
@@ -148,7 +148,7 @@ public sealed class ProjectSession : IDisposable
         {
             result.Primary.SaveWav(vocalsPath);
             result.Secondary.SaveWav(instPath);
-        }, cancel).ConfigureAwait(false);
+        }, cancel);
 
         var vocals = AddSeparatedTrack(source, vocalsPath, $"{source.Name} — vocals", "#E93D82");
         var instrumental = AddSeparatedTrack(source, instPath, $"{source.Name} — instrumental", "#12A594");
@@ -223,7 +223,7 @@ public sealed class ProjectSession : IDisposable
                     // window is trying to draw.
                     c.EnsurePeaks();
                     return c;
-                }, cancel).ConfigureAwait(false);
+                }, cancel);
                 _clips[model.SourcePath] = clip;
             }
 
@@ -260,6 +260,7 @@ public sealed class ProjectSession : IDisposable
         v.FadeInSeconds = Math.Max(0, model.FadeInSeconds);
         v.FadeOutSeconds = Math.Max(0, model.FadeOutSeconds);
 
+        v.Eq.Mode = Project.EqMode;
         v.Eq.SetGains(model.EqLow, model.EqMid, model.EqHigh);
         v.Gain = model.Gain;
         v.Pan = model.Pan;
@@ -297,7 +298,7 @@ public sealed class ProjectSession : IDisposable
 
         Project = project;
         foreach (var t in project.Tracks)
-            await LoadAudioAsync(t, cancel).ConfigureAwait(false);
+            await LoadAudioAsync(t, cancel);
 
         ApplyAll();
         Engine.Seek(0);
