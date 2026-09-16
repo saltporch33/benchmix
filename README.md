@@ -101,7 +101,7 @@ to a file, `--playtest <seconds>` checks the audio device is pulling in realtime
 To publish a standalone exe:
 
 ```
-dotnet publish src/Benchmix.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
+dotnet publish src/Benchmix.App -c Release -r win-x64 --self-contained true \n  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
 ```
 
 ### The command line
@@ -122,9 +122,9 @@ benchmix mashup <bed> <topper> <out.wav> [opts]  tempo-match and render
 | `Benchmix.Engine` | audio and analysis. No UI types. Clips, stretch, EQ, mixer, render, tempo/key detection. |
 | `Benchmix.Core` | the project model, its file format, undo, and the bridge that keeps the live graph matching the model. |
 | `Benchmix.App` | WPF shell — timeline, waveforms, knobs, transport. |
-| `Benchmix.Tests` | 61 tests, engine-level and model-level. |
+| `Benchmix.Tests` | 72 tests, engine-level and model-level, plus end-to-end on real files. |
 
-The signal chain per track is `clip → stretch → EQ → gain/pan → mix`, and **live preview and the
+The signal chain per track is `clip → stretch → EQ → clip envelope → gain/pan → mix`, and **live preview and the
 final render are the same chain** — the renderer just pulls blocks as fast as the CPU allows
 instead of in realtime. There is no second code path that could disagree with what you heard.
 
