@@ -255,6 +255,19 @@ public partial class MainWindow : Window
         Check("double-click while playing keeps playing", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
         _vm.StopCommand.Execute(null);
 
+        // --- a knob dragged past its end stop must not leave a negative gain in the model ---
+        if (_vm.Tracks.FirstOrDefault() is { } track)
+        {
+            track.EqLow = -0.01;                   // what a two-way binding writes past the bottom stop
+            Check($"a knob past the bottom stops at zero in the model (got {track.Model.EqLow})",
+                  track.Model.EqLow == 0);
+            track.EqLow = 1;
+        }
+        else
+        {
+            pass.Add("(no track loaded, so the knob clamp is untested - pass a file to cover it)");
+        }
+
         foreach (var p in pass) App.Log("gesturetest: PASS - " + p);
         foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");

@@ -192,10 +192,22 @@ public sealed partial class TrackViewModel : ObservableObject
         OnPropertyChanged(nameof(SemitonesText));
     }
 
-    partial void OnEqLowChanged(double value) { Snapshot("low"); Model.EqLow = value; Push(); OnPropertyChanged(nameof(EqLowText)); }
-    partial void OnEqMidChanged(double value) { Snapshot("mid"); Model.EqMid = value; Push(); OnPropertyChanged(nameof(EqMidText)); }
-    partial void OnEqHighChanged(double value) { Snapshot("high"); Model.EqHigh = value; Push(); OnPropertyChanged(nameof(EqHighText)); }
-    partial void OnGainChanged(double value) { Snapshot("volume"); Model.Gain = value; Push(); OnPropertyChanged(nameof(GainText)); }
+    partial void OnEqLowChanged(double value) { Snapshot("low"); Model.EqLow = Gainish(value); Push(); OnPropertyChanged(nameof(EqLowText)); }
+    partial void OnEqMidChanged(double value) { Snapshot("mid"); Model.EqMid = Gainish(value); Push(); OnPropertyChanged(nameof(EqMidText)); }
+    partial void OnEqHighChanged(double value) { Snapshot("high"); Model.EqHigh = Gainish(value); Push(); OnPropertyChanged(nameof(EqHighText)); }
+    partial void OnGainChanged(double value) { Snapshot("volume"); Model.Gain = Gainish(value); Push(); OnPropertyChanged(nameof(GainText)); }
+
+    /// <summary>
+    /// Clamps a gain into the range the engine actually accepts, before it reaches the model.
+    ///
+    /// The knob coerces its own Value into its Minimum..Maximum, but a WPF two-way binding writes
+    /// the <b>un-coerced</b> number to its source — so dragging a knob past the bottom left the
+    /// knob correctly at zero while the model, and then the saved project, kept a small negative
+    /// gain. It sounded right because the engine clamps too, but a .benchmix file should not
+    /// contain a negative gain for a knob that reads KILL.
+    /// </summary>
+    private static double Gainish(double value)
+        => double.IsNaN(value) ? 1.0 : Math.Clamp(value, 0, 4);
 
     partial void OnMutedChanged(bool value) { _pushUndo?.Invoke($"{Name}: mute", null); Model.Muted = value; PushAll(); }
     partial void OnSoloedChanged(bool value) { _pushUndo?.Invoke($"{Name}: solo", null); Model.Soloed = value; PushAll(); }
