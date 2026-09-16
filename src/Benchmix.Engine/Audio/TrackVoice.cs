@@ -171,6 +171,7 @@ public sealed class TrackVoice : IDisposable
     /// <summary>Repositions to a timeline frame. Cheap enough to call while scrubbing.</summary>
     public void Seek(long timelineFrame)
     {
+        EnsureStretchIfNeeded();
         long rel = timelineFrame - TimelineOffsetFrames;
         _sourcePos = SourceRead(rel);
         _inCarry = 0;
@@ -192,7 +193,45 @@ public sealed class TrackVoice : IDisposable
     /// </para>
     /// </summary>
     private double SourceRead(long relTimelineFrame)
-        => SourceStartFrame + (relTimelineFrame + Eq.LatencySamples) * _speed;
+        => SourceStartFrame + (relTimelineFrame + Eq.LatencySamples + StretchLatencyFrames) * _speed;
+
+    /// <summary>
+    /// Output frames the phase vocoder delays by, or zero when it is bypassed.
+    ///
+    /// <para>
+    /// <c>InputLatency</c> is counted in <b>input</b> frames and <c>OutputLatency</c> in output
+    /// frames, so the delay in output frames is the first divided by the playback rate plus the
+    /// second. Measured at three rates in <c>StretchLatencyTests</c> and confirmed to within
+    /// twenty frames; a test pins the formula so a library update cannot quietly invalidate it.
+    /// </para>
+    /// <para>
+    /// Uncompensated this was 7200 frames — 150 ms, a quarter of a beat at 98 BPM — between a
+    /// beatmatched track and one that was left alone. It is compensated exactly like the EQ's
+    /// delay, by reading that much further ahead, because both sit in the same output-side clock.
+    /// </para>
+    /// </summary>
+    private double StretchLatencyFrames
+    {
+        get
+        {
+            if (IsUnprocessed || _mode != StretchMode.Independent) return 0;
+            var st = _stretch;
+            return st is null ? 0 : st.InputLatency() / _speed + st.OutputLatency();
+        }
+    }
+
+    /// <summary>
+    /// Builds the stretcher if this track is going to need it.
+    ///
+    /// It has to exist before any read position is worked out, because the compensation for its
+    /// latency is read out of it. Left to be created inside the first Render — which is where it
+    /// used to happen — the first block would read from a position computed with no compensation
+    /// at all and then immediately resync, a stumble at the head of every pitched clip.
+    /// </summary>
+    private void EnsureStretchIfNeeded()
+    {
+        if (_mode == StretchMode.Independent && !IsUnprocessed) _stretch ??= CreateStretch();
+    }
 
     /// <summary>
     /// Runs the EQ's own latency worth of audio through it and discards the result, so the first
@@ -226,6 +265,7 @@ public sealed class TrackVoice : IDisposable
         if (relStart + frames <= 0 || relStart >= TimelineLengthFrames) { StepGainOnly(frames); return 0; }
 
         EnsureBuffers(frames);
+        EnsureStretchIfNeeded();
         ApplyParametersIfDirty();
 
         // Keep the read position honest against the caller's clock; this also handles the first
@@ -300,7 +340,7 @@ public sealed class TrackVoice : IDisposable
 
     private void RenderIndependent(Span<float> work, int frames, long sourceEnd)
     {
-        var st = _stretch ??= CreateStretch();
+        var st = _stretch ??= CreateStretch();      // EnsureStretchIfNeeded normally got here first
         // CreateStretch sets _dirty, but ApplyParametersIfDirty already ran for this block — before
         // the stretcher existed — and cleared the flag against a null. Without this the first block
         // of a pitched track comes out at the ORIGINAL pitch, and whether that happens depends on
@@ -328,18 +368,46 @@ public sealed class TrackVoice : IDisposable
     /// <summary>
     /// Feeds the stretcher the audio immediately before the read position, so the first block
     /// after a seek is continuous instead of fading up out of an empty analysis window.
+    ///
+    /// <para>
+    /// Both halves have to be primed. <c>Seek</c> fills the <b>analysis</b> history only; the
+    /// synthesis side still starts empty, and the stretcher then emits silence for its first
+    /// <c>SeekLength</c> frames — 7200 frames, 150 ms, at the default preset. That is not a fade,
+    /// it is a delay: every frame that follows comes out 150 ms late as well. Measured against an
+    /// unprocessed track it is exactly a quarter of a beat at 98 BPM, which in a mashup is the two
+    /// songs audibly flamming against each other. <c>OutputSeek</c> is the library's own primer for
+    /// that half, and is fed the same thing by a different clock: the audio that <i>should already
+    /// have come out</i>, ending at the read position.
+    /// </para>
     /// </summary>
-    private void Prime(Stretch st)
+    private unsafe void Prime(Stretch st)
     {
         st.Reset();
-        int need = Math.Max(0, st.SeekLength());
-        if (need == 0 || Clip is null) return;
+        if (Clip is null) return;
 
-        long from = (long)Math.Round(_sourcePos) - need;
-        EnsureInScratch(need);
-        var buf = _inScratch.AsSpan(0, need * _channels);
-        CopySource(from, need, buf, Clip.FrameCount);
-        st.Seek(buf, need, (float)_speed);
+        long at = (long)Math.Round(_sourcePos);
+
+        int need = Math.Max(0, st.SeekLength());
+        if (need > 0)
+        {
+            EnsureInScratch(need);
+            var buf = _inScratch.AsSpan(0, need * _channels);
+            CopySource(at - need, need, buf, Clip.FrameCount);
+            st.Seek(buf, need, (float)_speed);
+        }
+
+        // OutputSeekLength scales with the playback rate (7200 at 1.0, 6854 at 0.92), so it is
+        // asked fresh every time rather than cached alongside SeekLength.
+        int outNeed = Math.Max(0, st.OutputSeekLength((float)_speed));
+        if (outNeed == 0) return;
+
+        EnsureInScratch(outNeed);
+        var outBuf = _inScratch.AsSpan(0, outNeed * _channels);
+        CopySource(at - outNeed, outNeed, outBuf, Clip.FrameCount);
+
+        // The pointer overload, deliberately: the span overload infers the frame count from the
+        // span's length, which on interleaved stereo would send it reading twice past the end.
+        fixed (float* p = outBuf) st.OutputSeek(p, outNeed);
     }
 
     private void CopySource(long startFrame, int frames, Span<float> dest, long sourceEnd)

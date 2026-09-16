@@ -3,6 +3,11 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Stretch.OutputSeek's span overload reads the span LENGTH as a frame count, so an
+         interleaved stereo span makes it read twice past the end of the buffer. The pointer
+         overload takes the frame count explicitly, which is the only unambiguous way to
+         call it. See TrackVoice.Prime. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="NAudio.Core" Version="3.1.0" />
