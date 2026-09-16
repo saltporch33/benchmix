@@ -182,6 +182,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PositionSeconds = Math.Max(0, seconds);
     }
 
+    /// <summary>
+    /// Moves the playhead and plays from there. Already playing means carry on from the new spot
+    /// rather than stop — double-clicking around the timeline is how you audition, and pausing on
+    /// every other double-click would make that useless.
+    /// </summary>
+    public void PlayFrom(double seconds)
+    {
+        if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — playback resumes when it finishes."; return; }
+
+        SeekTo(seconds);
+        if (Session.Engine.State != TransportState.Playing) Session.Engine.TogglePlay();
+        IsPlaying = Session.Engine.State == TransportState.Playing;
+        Status = IsPlaying ? $"Playing from {seconds:0.00}s." : "Nothing to play yet.";
+    }
+
     [RelayCommand]
     private void ClearLoop()
     {

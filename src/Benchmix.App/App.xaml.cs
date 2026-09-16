@@ -41,6 +41,16 @@ public partial class App : Application
     /// </summary>
     public static bool LoadCheck { get; private set; }
 
+    /// <summary>
+    /// Drives the pointer gestures through WPF's real event routing and logs what happened, then
+    /// exits. Right-drag panning has to suppress a context menu that belongs to a different
+    /// element, and whether that works is a question about WPF's own class handlers rather than
+    /// about our arithmetic — so it gets answered by running it, not by reasoning about it. No
+    /// physical input is synthesised, so this never moves the pointer out from under whoever is
+    /// using the machine.
+    /// </summary>
+    public static bool GestureTest { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -78,6 +88,9 @@ public partial class App : Application
                     break;
                 case "--loadcheck":
                     LoadCheck = true;
+                    break;
+                case "--gesturetest":
+                    GestureTest = true;
                     break;
                 case "--stemtest":
                     if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];

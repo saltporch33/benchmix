@@ -96,7 +96,11 @@
         </Border>
 
         <!-- ============ ruler + tracks ============ -->
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="2" x:Name="TimelineGrid"
+              PreviewMouseRightButtonDown="OnTimelineRightButtonDown"
+              PreviewMouseMove="OnTimelinePreviewMouseMove"
+              PreviewMouseRightButtonUp="OnTimelineRightButtonUp"
+              ContextMenuOpening="OnTimelineContextMenuOpening">
             <Grid.RowDefinitions>
                 <RowDefinition Height="26"/>
                 <RowDefinition Height="*"/>

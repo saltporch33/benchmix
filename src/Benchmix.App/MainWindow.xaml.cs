@@ -55,6 +55,15 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (App.GestureTest)
+        {
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            RunGestureTest();
+            _vm.Dispose();
+            Application.Current.Shutdown();
+            return;
+        }
+
         if (App.StemTestFile is { } stemFile) { await RunStemTestAsync(stemFile); return; }
 
         if (App.PlayTestSeconds > 0) { await RunPlayTestAsync(App.PlayTestSeconds); return; }
@@ -154,6 +163,96 @@ public partial class MainWindow : Window
         _vm.StopCommand.Execute(null);
         _vm.Dispose();
         Application.Current.Shutdown();
+    }
+
+    /// <summary>
+    /// Drives the right-drag and double-click gestures through the real handlers with a scripted
+    /// pointer, and logs what each one did. No physical input is synthesised, so this can run while
+    /// someone else is using the machine.
+    /// </summary>
+    private void RunGestureTest()
+    {
+        var pass = new List<string>();
+        var fail = new List<string>();
+        void Check(string what, bool ok) => (ok ? pass : fail).Add(what);
+
+        // Handled cannot even be read on args with no RoutedEvent, so each one is stamped with the
+        // event its handler is actually wired to in XAML.
+        var down = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+        { RoutedEvent = PreviewMouseRightButtonDownEvent };
+        var move = new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = PreviewMouseMoveEvent };
+        var up = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+        { RoutedEvent = PreviewMouseRightButtonUpEvent };
+
+        // --- a plain right-click must leave the view alone and let the menu open ---
+        _vm.ScrollSeconds = 12;
+        double before = _vm.ScrollSeconds;
+
+        _scriptedPointerX = 500;
+        OnTimelineRightButtonDown(TimelineGrid, down);
+        _scriptedPointerX = 502;                       // inside the 4 px slop: still a click
+        OnTimelinePreviewMouseMove(TimelineGrid, move);
+        up.Handled = false;
+        OnTimelineRightButtonUp(TimelineGrid, up);
+
+        Check("a right-click does not scroll", Math.Abs(_vm.ScrollSeconds - before) < 1e-9);
+        Check("a right-click does not swallow its own mouse-up", !up.Handled);
+        Check("a right-click leaves the clip menu alone", !ConsumeContextMenuSuppression());
+
+        // --- a right-drag must pan, and must eat the menu that would otherwise follow ---
+        _vm.PixelsPerSecond = 40;
+        _vm.ScrollSeconds = 30;
+        before = _vm.ScrollSeconds;
+
+        _scriptedPointerX = 500;
+        OnTimelineRightButtonDown(TimelineGrid, down);
+        _scriptedPointerX = 620;                       // dragged right by 120 px = 3 s at 40 px/s
+        OnTimelinePreviewMouseMove(TimelineGrid, move);
+        double afterDrag = _vm.ScrollSeconds;
+        up.Handled = false;
+        OnTimelineRightButtonUp(TimelineGrid, up);
+
+        Check($"dragging right scrolls back 3.00 s (got {before - afterDrag:F2})",
+              Math.Abs((before - afterDrag) - 3.0) < 0.001);
+        Check("a pan suppresses the clip menu", ConsumeContextMenuSuppression());
+
+        // Suppression is one-shot: the click after a pan must get its menu back.
+        _scriptedPointerX = 500;
+        OnTimelineRightButtonDown(TimelineGrid, down);
+        up.Handled = false;
+        OnTimelineRightButtonUp(TimelineGrid, up);
+        Check("the click after a pan gets its menu back", !ConsumeContextMenuSuppression());
+
+        // --- panning must stop at the ends rather than running off into negative time ---
+        _vm.ScrollSeconds = 1;
+        _scriptedPointerX = 500;
+        OnTimelineRightButtonDown(TimelineGrid, down);
+        _scriptedPointerX = 500 + 100_000;             // yank far past the start
+        OnTimelinePreviewMouseMove(TimelineGrid, move);
+        OnTimelineRightButtonUp(TimelineGrid, up);
+        Check($"panning clamps at zero (got {_vm.ScrollSeconds:F2})", _vm.ScrollSeconds >= -1e-9);
+
+        _scriptedPointerX = null;
+
+        // --- double-click on the ruler plays from that point ---
+        // Silent, like --playtest: this really does start the audio device, and someone is using
+        // this machine. Whether the transport runs is the question, not what it sounds like.
+        _vm.MasterGain = 0;
+        _vm.Session.Graph.MasterGain = 0;
+        _vm.Session.Graph.SnapParameters();
+        _vm.StopCommand.Execute(null);
+        _vm.PlayFrom(18.5);
+        Check($"double-click seeks (got {_vm.PositionSeconds:F2})", Math.Abs(_vm.PositionSeconds - 18.5) < 0.05);
+        Check("double-click starts the transport", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
+        if (_vm.Session.Engine.IsOffline) pass.Add("(no audio device here, so 'is playing' is untested)");
+
+        _vm.PlayFrom(25.0);
+        Check("double-click while playing keeps playing", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
+        _vm.StopCommand.Execute(null);
+
+        foreach (var p in pass) App.Log("gesturetest: PASS - " + p);
+        foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
+        App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
     }
 
     /// <summary>Renders the live window to a PNG at its real DPI.</summary>
@@ -301,6 +400,15 @@ public partial class MainWindow : Window
             _settingLoop = true;
             _loopAnchorSeconds = seconds;
             _vm.SetLoop(seconds, seconds);
+        }
+        else if (e.ClickCount == 2)
+        {
+            // Double-click plays from here. Scrubbing is deliberately switched off for the rest of
+            // the gesture: the button is still down, and without this any jitter before you lift it
+            // would drag the playhead straight back off the spot you just started playing from.
+            // OnRulerMouseUp releases the capture unconditionally, so nothing leaks.
+            _scrubbing = false;
+            _vm.PlayFrom(seconds);
         }
         else
         {
@@ -560,6 +668,103 @@ public partial class MainWindow : Window
         t.TimelineOffsetSeconds = _vm.PositionSeconds;
         _vm.RecomputeLength();
         _vm.Status = $"{t.Name} moved to {t.TimelineOffsetSeconds:0.00}s.";
+    }
+
+    // ---------------- right-drag: pan the timeline ----------------
+
+    private bool _panArmed;
+    private bool _panning;
+    private bool _suppressContextMenu;
+    private double _panOriginX;
+    private double _panStartScroll;
+    private Cursor? _cursorBeforePan;
+
+    /// <summary>Scripted pointer position for <c>--gesturetest</c>; null in normal use.</summary>
+    private double? _scriptedPointerX;
+
+    private double PointerX(MouseEventArgs e) => _scriptedPointerX ?? e.GetPosition(TimelineGrid).X;
+
+    /// <summary>
+    /// Arms a pan without taking capture. Capture is what would break the clip menu: a
+    /// ContextMenu belongs to the lane Border, and WPF opens it from the bubbling mouse-up on that
+    /// Border. Capturing here would redirect that mouse-up to this Grid and the menu would never
+    /// open again. So nothing is captured, and nothing is handled, until the pointer has actually
+    /// moved far enough to mean "pan" rather than "right-click".
+    /// </summary>
+    private void OnTimelineRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _panArmed = true;
+        _panning = false;
+        // Cleared here rather than only when the menu opens: if marking the preview up handled
+        // succeeds in stopping the event, ContextMenuOpening never fires and never clears it, and
+        // a stale flag would eat the NEXT right-click's menu.
+        _suppressContextMenu = false;
+        _panOriginX = PointerX(e);
+        _panStartScroll = _vm.ScrollSeconds;
+    }
+
+    private void OnTimelinePreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_panArmed) return;
+
+        // The button can be released outside the window, where no up event reaches us.
+        if (_scriptedPointerX is null && e.RightButton != MouseButtonState.Pressed) { EndPan(); return; }
+
+        double dx = PointerX(e) - _panOriginX;
+        if (!_panning)
+        {
+            if (Math.Abs(dx) < 4) return;       // same slop as a clip drag, so a click never pans
+            _panning = true;
+            if (_scriptedPointerX is null) TimelineGrid.CaptureMouse();
+            _cursorBeforePan = Cursor;
+            Cursor = Cursors.ScrollWE;
+        }
+
+        // Grab-and-drag: pulling right reveals earlier audio, so the view scrolls back.
+        _vm.ScrollSeconds = _panStartScroll - dx / Math.Max(0.01, _vm.PixelsPerSecond);
+    }
+
+    /// <summary>
+    /// Ends the gesture and, after a real pan, stops the context menu from following it.
+    ///
+    /// Two mechanisms, deliberately. Marking the <b>preview</b> up handled should stop the event
+    /// before the bubbling mouse-up that WPF's PopupControlService opens the menu from — but that
+    /// depends on how WPF re-raises the button-specific events, which is not ours to rely on. So
+    /// the flag is the real guarantee: <see cref="OnTimelineContextMenuOpening"/> cancels the menu
+    /// outright, and that path is the one the gesture test exercises.
+    /// </summary>
+    private void OnTimelineRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        bool panned = _panning;
+        EndPan();
+        if (!panned) return;
+        _suppressContextMenu = true;
+        e.Handled = true;
+    }
+
+    /// <summary>True once, if the gesture that just ended was a pan rather than a click.</summary>
+    private bool ConsumeContextMenuSuppression()
+    {
+        if (!_suppressContextMenu) return false;
+        _suppressContextMenu = false;
+        return true;
+    }
+
+    private void OnTimelineContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (ConsumeContextMenuSuppression()) e.Handled = true;
+    }
+
+    private void EndPan()
+    {
+        if (_panning)
+        {
+            if (_scriptedPointerX is null) TimelineGrid.ReleaseMouseCapture();
+            Cursor = _cursorBeforePan;
+            _cursorBeforePan = null;
+        }
+        _panArmed = false;
+        _panning = false;
     }
 
     // ---------------- wheel: zoom and scroll ----------------
