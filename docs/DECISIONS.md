@@ -99,3 +99,39 @@ before anything touches the app, because a half-working separator is worse than 
 - **Writing analysis results back into file tags** (`TBPM` / `TKEY`), so Serato, djay and anything
   else would see Benchmix's numbers. This modifies his music files, so it waits for an explicit
   yes. He was told it is a flag away.
+
+
+## 2026-09-16 — stem separation: shipped
+
+Built and verified. MDX-Net (`UVR-MDX-NET-Voc_FT`) through ONNX Runtime DirectML, running
+in-process on the Arc 140V. Right-click a clip → *Split into vocals + instrumental*.
+
+- The 64 MB model downloads on first use, with its **SHA-256 pinned**. MDX-Net weights are
+  mirrored across community repos rather than one authoritative host, so a successful download is
+  not the same as the right file; a mismatch is discarded, never used.
+- Stems are written out as WAVs and added as ordinary tracks, inheriting the original's tempo,
+  key, placement, trim and speed. The original is **muted, not deleted**, so one click undoes it.
+- Evidence: a **39 dB gap** between the vocals stem of a vocal track and that of an instrumental;
+  stems reconstruct the mix; two independently-trained models sum back to −22.6 dB. About 20
+  seconds per song.
+- The published single-file exe really carries the native libraries — proven by `--stemtest`, not
+  assumed from the file size.
+
+**License caveat, unresolved:** UVR's README grants MIT-with-attribution for its models, but there
+is no LICENSE file attached to the weights and the distribution repo has none at all. The training
+data is undisclosed. Fine for personal use; worth a decision before Benchmix is ever shared.
+
+**Known limits:** the vocal stem is band-limited to 17.6 kHz (inherent to the model — the derived
+instrumental keeps all the HF), and separation holds the whole song in memory.
+
+## 2026-09-16 — the adversarial review
+
+31 confirmed defects, all fixed. Detail in `VERIFICATION.md`. Two things worth carrying forward:
+
+1. **A constant test signal cannot detect a positional bug.** My first attempt at the clip-offset
+   regression test used a steady tone and passed against the very bug it was written for — the
+   clip was playing the wrong *part* of the song, and every part sounded identical. Positional
+   markers (a ramp, or a single loud sample) are what catch alignment errors.
+2. **"Bit-identical passthrough" was overstated.** It holds for the signal path with the limiter
+   off. The limiter is on by default and does attenuate a loud untouched track. Both statements
+   now have a test, and the README says so.
