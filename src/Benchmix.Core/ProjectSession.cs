@@ -62,6 +62,46 @@ public sealed class ProjectSession : IDisposable
     public AudioClip? ClipFor(TrackModel track)
         => _clips.TryGetValue(track.SourcePath, out var c) ? c : null;
 
+    /// <summary>
+    /// The decoded audio behind one section. A section pasted from another song points at that
+    /// song, so this is the lookup that matters for drawing and for rendering; the track's own
+    /// <see cref="TrackModel.SourcePath"/> only says which song the track is nominally about.
+    /// </summary>
+    public AudioClip? AudioFor(ClipModel clip)
+        => _clips.TryGetValue(clip.SourcePath, out var c) ? c : null;
+
+    /// <summary>Every distinct file a track's sections read from.</summary>
+    public static IEnumerable<string> SourcePathsOf(TrackModel track)
+        => track.Clips.Select(c => c.SourcePath)
+                      .Append(track.SourcePath)
+                      .Where(p => !string.IsNullOrEmpty(p))
+                      .Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Turns a track's sections into what the engine plays. Positions convert straight across:
+    /// <see cref="ClipModel.TrackStartSeconds"/> is already in the track's own unstretched
+    /// timebase, which is the same clock the engine uses.
+    /// </summary>
+    private ClipTimeline BuildTimeline(TrackModel model)
+    {
+        var clips = new List<VoiceClip>(model.Clips.Count);
+        foreach (var c in model.Clips)
+        {
+            var audio = AudioFor(c);
+            if (audio is null) continue;
+            clips.Add(new VoiceClip
+            {
+                Audio = audio,
+                TrackStartFrame = SecondsToFrames(Math.Max(0, c.TrackStartSeconds)),
+                SourceStartFrame = SecondsToFrames(Math.Max(0, c.SourceStartSeconds)),
+                SourceEndFrame = c.SourceEndSeconds < 0 ? -1 : SecondsToFrames(c.SourceEndSeconds),
+                FadeInSeconds = Math.Max(0, c.FadeInSeconds),
+                FadeOutSeconds = Math.Max(0, c.FadeOutSeconds),
+            });
+        }
+        return new ClipTimeline(clips);
+    }
+
     public TrackVoice? VoiceFor(TrackModel track)
         => _voices.TryGetValue(track.Id, out var v) ? v : null;
 
@@ -113,6 +153,7 @@ public sealed class ProjectSession : IDisposable
             KeySource = analysis.KeySource.ToString(),
             ColorHex = NextColour(),
         };
+        model.Clips.Add(new ClipModel { SourcePath = path });
 
         Project.Tracks.Add(model);
         if (Project.ProjectBpm <= 0 && analysis.Bpm > 0) Project.ProjectBpm = analysis.Bpm;
@@ -159,8 +200,8 @@ public sealed class ProjectSession : IDisposable
         _clips[vocalsPath].EnsurePeaks();
         _clips[instPath].EnsurePeaks();
 
-        EnsureVoice(vocals).SetClip(_clips[vocalsPath]);
-        EnsureVoice(instrumental).SetClip(_clips[instPath]);
+        EnsureVoice(vocals);
+        EnsureVoice(instrumental);
 
         // The original is muted rather than removed: the stems replace it in the mix, but keeping
         // it means one click undoes the whole idea if the separation is not good enough.
@@ -186,8 +227,6 @@ public sealed class ProjectSession : IDisposable
             // Inherit everything that positions it against the original, so the stems drop straight
             // into place instead of needing to be re-matched.
             TimelineOffsetSeconds = source.TimelineOffsetSeconds,
-            SourceStartSeconds = source.SourceStartSeconds,
-            SourceEndSeconds = source.SourceEndSeconds,
             Speed = source.Speed,
             Semitones = source.Semitones,
             Mode = source.Mode,
@@ -198,6 +237,18 @@ public sealed class ProjectSession : IDisposable
             Camelot = source.Camelot,
             KeySource = source.KeySource,
         };
+
+        // The stem covers exactly what the original covered, section for section, so the two land
+        // on top of each other without being re-matched.
+        foreach (var c in source.Clips)
+        {
+            var copy = c.Clone();
+            copy.Id = Guid.NewGuid();
+            copy.SourcePath = path;
+            model.Clips.Add(copy);
+        }
+        if (model.Clips.Count == 0) model.Clips.Add(new ClipModel { SourcePath = path });
+
         Project.Tracks.Add(model);
         return model;
     }
@@ -213,22 +264,24 @@ public sealed class ProjectSession : IDisposable
     {
         try
         {
-            if (!_clips.TryGetValue(model.SourcePath, out var clip))
+            // Every file this track's sections read from, which after a cross-song paste is more
+            // than one. Missing audio would otherwise show as a section that silently never plays.
+            foreach (var path in SourcePathsOf(model))
             {
-                clip = await Task.Run(() =>
+                if (_clips.ContainsKey(path)) continue;
+                var loaded = await Task.Run(() =>
                 {
-                    var c = AudioClip.Load(model.SourcePath, SampleRate, null, cancel);
+                    var c = AudioClip.Load(path, SampleRate, null, cancel);
                     // Build the waveform envelope here, on the worker. Left to the UI thread it
                     // would run on first paint — a ~100 ms scan of the whole track, right when the
                     // window is trying to draw.
                     c.EnsurePeaks();
                     return c;
                 }, cancel);
-                _clips[model.SourcePath] = clip;
+                _clips[path] = loaded;
             }
 
-            var voice = EnsureVoice(model);
-            voice.SetClip(clip);
+            EnsureVoice(model);
             Apply(model);
             TrackLoaded?.Invoke(this, model);
         }
@@ -249,16 +302,18 @@ public sealed class ProjectSession : IDisposable
         if (!_voices.TryGetValue(model.Id, out var v)) return;
 
         v.TimelineOffsetFrames = SecondsToFrames(model.TimelineOffsetSeconds);
-        v.SourceStartFrame = SecondsToFrames(model.SourceStartSeconds);
-        v.SourceEndFrame = model.SourceEndSeconds < 0 ? -1 : SecondsToFrames(model.SourceEndSeconds);
+
+        // The sections are rebuilt only when they have actually changed. Apply runs on every pixel
+        // of a knob drag, and swapping in a new timeline drops the voice's binding to the section
+        // it is playing — which would re-prime the vocoder sixty times a second while someone
+        // nudges the TEMPO knob.
+        var next = BuildTimeline(model);
+        if (!v.Timeline.Matches(next)) v.SetTimeline(next);
 
         v.Mode = model.Mode;
         v.Speed = model.Speed;
         v.Semitones = model.Semitones;
         v.PreserveFormants = model.PreserveFormants;
-
-        v.FadeInSeconds = Math.Max(0, model.FadeInSeconds);
-        v.FadeOutSeconds = Math.Max(0, model.FadeOutSeconds);
 
         v.Eq.Mode = Project.EqMode;
         v.Eq.SetGains(model.EqLow, model.EqMid, model.EqHigh);
@@ -335,7 +390,7 @@ public sealed class ProjectSession : IDisposable
 
     private void ReleaseUnusedClips()
     {
-        var used = Project.Tracks.Select(t => t.SourcePath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var used = Project.Tracks.SelectMany(SourcePathsOf).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var key in _clips.Keys.Where(k => !used.Contains(k)).ToList())
             _clips.Remove(key);
     }

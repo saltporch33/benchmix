@@ -21,13 +21,21 @@ public enum StretchMode
 }
 
 /// <summary>
-/// One track of the timeline: a clip, its speed and pitch, a three-band EQ, gain and pan.
+/// One track of the timeline: its sections, its speed and pitch, a three-band EQ, gain and pan.
 ///
-/// The signal chain is <c>clip -> stretch -> EQ -> gain/pan -> mix</c>, and it is the <b>same
+/// The signal chain is <c>clips -> stretch -> EQ -> gain/pan -> mix</c>, and it is the <b>same
 /// chain for live preview and for the final render</b>. Spike 01 measured ~150x realtime
 /// headroom on this machine's CPU even on the high-quality preset, which removed the usual
 /// reason editors keep two different signal paths. What Daniel hears while turning a knob is
 /// what lands in the exported file.
+///
+/// <para>
+/// A track holds a <see cref="ClipTimeline"/> — several sections, in order, never overlapping. A
+/// render block is walked as a sequence of <i>runs</i>, each wholly inside one section or wholly
+/// in a gap, because a block is thousands of frames long and a hand-built loop crosses a join on
+/// every repeat. Rendering the block from whichever section happened to own its first frame would
+/// drop audio at every one of them.
+/// </para>
 /// </summary>
 public sealed class TrackVoice : IDisposable
 {
@@ -37,7 +45,14 @@ public sealed class TrackVoice : IDisposable
     private Stretch? _stretch;
     private float[] _inScratch = Array.Empty<float>();
     private float[] _outScratch = Array.Empty<float>();
+    private float[] _handleScratch = Array.Empty<float>();
+    private float[] _envScratch = Array.Empty<float>();
 
+    // Published by reference swap, like MixGraph's voice array: the render thread sees either the
+    // whole old arrangement or the whole new one, never a half-applied edit.
+    private volatile ClipTimeline _timeline = ClipTimeline.Empty;
+
+    private VoiceClip? _bound;          // the section currently feeding the read position
     private double _sourcePos;          // fractional source frame the next output frame reads from
     private double _inCarry;            // fractional input frames owed to the stretcher
     private bool _needsPrime = true;
@@ -61,35 +76,108 @@ public sealed class TrackVoice : IDisposable
         _gainRamp = 1.0 / Math.Max(1, sampleRate * 0.010);
     }
 
-    public AudioClip? Clip { get; private set; }
     public ThreeBandEq Eq { get; }
 
-    /// <summary>Where this clip begins on the timeline, in engine frames.</summary>
+    /// <summary>This track's sections. Replaced wholesale; never edited in place.</summary>
+    public ClipTimeline Timeline => _timeline;
+
+    /// <summary>
+    /// Swaps in a new arrangement. Cheap, but not free — it is gated by the caller so that turning
+    /// a knob, which changes nothing structural, does not rebind the section being played.
+    /// </summary>
+    public void SetTimeline(ClipTimeline timeline)
+    {
+        _timeline = timeline;
+        // The bound section is about to be a stale object from the old list. Dropping it forces
+        // the next block to rebind against the new one by position.
+        _bound = null;
+    }
+
+    /// <summary>Where this track's origin sits on the timeline, in engine frames.</summary>
     public long TimelineOffsetFrames { get; set; }
-
-    /// <summary>First source frame used (trim in).</summary>
-    public long SourceStartFrame { get; set; }
-
-    /// <summary>One past the last source frame used, or -1 for the end of the clip.</summary>
-    public long SourceEndFrame { get; set; } = -1;
 
     public bool Muted { get; set; }
 
     /// <summary>Peak of this voice's last rendered block, so a meter follows the track, not its row.</summary>
     public float Peak;
 
-    /// <summary>Fade in at the start of the clip, in seconds. Zero still gets a short declick.</summary>
-    public double FadeInSeconds { get; set; }
-
-    /// <summary>Fade out at the end of the clip, in seconds. Zero still gets a short declick.</summary>
-    public double FadeOutSeconds { get; set; }
-
     /// <summary>
-    /// The shortest ramp applied at every clip edge even when no fade is set. A clip that starts
+    /// The shortest ramp applied at every cut edge even when no fade is set. A clip that starts
     /// part-way into a waveform begins on a non-zero sample, and a hard start on a non-zero sample
     /// is a click. Five milliseconds is inaudible as a fade and completely removes it.
     /// </summary>
     public const double DeclickSeconds = 0.005;
+
+    // ---------------------------------------------------------------- the one-clip shim
+    //
+    // A track used to be exactly one clip, and four test files plus the CLI still say so. These
+    // members keep that spelling working against the timeline underneath, which is what lets the
+    // existing suite run unmodified and stay the evidence that this refactor changed no behaviour.
+    // Nothing in the app calls them; they are not a second way to edit a track.
+
+    private AudioClip? _shimClip;
+    private long _shimStart;
+    private long _shimEnd = -1;
+    private double _shimFadeIn, _shimFadeOut;
+
+    /// <summary>The audio of a single-clip track. Null once a track holds a real timeline.</summary>
+    public AudioClip? Clip => _shimClip;
+
+    public void SetClip(AudioClip? clip)
+    {
+        _shimClip = clip;
+        _shimStart = 0;
+        _shimEnd = -1;
+        RebuildShim();
+    }
+
+    /// <summary>First source frame used, for a single-clip track.</summary>
+    public long SourceStartFrame
+    {
+        get => _shimStart;
+        set { _shimStart = value; RebuildShim(); }
+    }
+
+    /// <summary>One past the last source frame used, or -1 for the end, for a single-clip track.</summary>
+    public long SourceEndFrame
+    {
+        get => _shimEnd;
+        set { _shimEnd = value; RebuildShim(); }
+    }
+
+    /// <summary>Fade in at the start of a single-clip track.</summary>
+    public double FadeInSeconds
+    {
+        get => _shimFadeIn;
+        set { _shimFadeIn = value; RebuildShim(); }
+    }
+
+    /// <summary>Fade out at the end of a single-clip track.</summary>
+    public double FadeOutSeconds
+    {
+        get => _shimFadeOut;
+        set { _shimFadeOut = value; RebuildShim(); }
+    }
+
+    private void RebuildShim()
+    {
+        if (_shimClip is null) { SetTimeline(ClipTimeline.Empty); return; }
+        SetTimeline(new ClipTimeline(new[]
+        {
+            new VoiceClip
+            {
+                Audio = _shimClip,
+                TrackStartFrame = 0,
+                SourceStartFrame = _shimStart,
+                SourceEndFrame = _shimEnd,
+                FadeInSeconds = _shimFadeIn,
+                FadeOutSeconds = _shimFadeOut,
+            },
+        }));
+        _needsPrime = true;
+    }
+
+    // ---------------------------------------------------------------- parameters
 
     /// <summary>1.0 = original tempo, 1.08 = 8% faster.</summary>
     public double Speed
@@ -141,25 +229,12 @@ public sealed class TrackVoice : IDisposable
         set => _pan = Math.Clamp(value, -1, 1);
     }
 
-    /// <summary>Length on the timeline in engine frames, after the speed change.</summary>
-    public long TimelineLengthFrames
-    {
-        get
-        {
-            if (Clip is null) return 0;
-            long end = SourceEndFrame < 0 ? Clip.FrameCount : Math.Min(SourceEndFrame, Clip.FrameCount);
-            long src = Math.Max(0, end - SourceStartFrame);
-            return (long)(src / _speed);
-        }
-    }
-
-    public void SetClip(AudioClip? clip)
-    {
-        Clip = clip;
-        SourceStartFrame = 0;
-        SourceEndFrame = -1;
-        _needsPrime = true;
-    }
+    /// <summary>
+    /// How far this track reaches on the timeline, in engine frames, after the speed change.
+    /// Measured from the track's origin, so a gap in the middle costs nothing and audio after it
+    /// still counts.
+    /// </summary>
+    public long TimelineLengthFrames => (long)(_timeline.TrackEndFrame / _speed);
 
     public void SnapParameters()
     {
@@ -168,32 +243,44 @@ public sealed class TrackVoice : IDisposable
         Eq.SnapGains();
     }
 
+    // ---------------------------------------------------------------- positions
+
     /// <summary>Repositions to a timeline frame. Cheap enough to call while scrubbing.</summary>
     public void Seek(long timelineFrame)
     {
         EnsureStretchIfNeeded();
         long rel = timelineFrame - TimelineOffsetFrames;
-        _sourcePos = SourceRead(rel);
+
+        int idx = _timeline.IndexAt(TrackFrameAt(rel));
+        _bound = idx >= 0 ? _timeline[idx] : null;
+        _sourcePos = _bound is null ? 0 : SourceReadFor(_bound, rel);
+
         _inCarry = 0;
         _needsPrime = true;
         Eq.Reset();
         PrimeEq();
     }
 
+    /// <summary>The track's own unstretched frame at a timeline frame relative to its origin.</summary>
+    private long TrackFrameAt(long relTimelineFrame)
+        => (long)Math.Floor(relTimelineFrame * _speed);
+
     /// <summary>
-    /// Source frame to read for a given timeline offset, looking <see cref="ThreeBandEq.LatencySamples"/>
-    /// ahead so the EQ's constant delay does not shift the track against the rest of the mix.
+    /// Source frame to read for a section at a given timeline offset, looking the EQ's and the
+    /// stretcher's latency ahead so their constant delays do not shift the track against the mix.
     /// <para>
-    /// <paramref name="relTimelineFrame"/> is deliberately NOT clamped to zero. When a render block
-    /// straddles the start of an offset clip it is negative, and that is meaningful: the read
-    /// position belongs before the clip, so <c>CopySource</c> yields silence until the clip really
-    /// begins. Clamping it looks harmless — the clip envelope hides any early audio — but it makes
-    /// the clip start reading part-way into itself, skipping as many frames as its offset. A clip
-    /// dropped twenty seconds along would begin twenty seconds into the song.
+    /// <paramref name="relTimelineFrame"/> is deliberately NOT clamped into the section. When a
+    /// render block straddles the start of a section it is before it, and that is meaningful: the
+    /// read position belongs before the audio, so <c>CopySource</c> yields silence until the
+    /// section really begins. Clamping it looks harmless — the envelope hides any early audio —
+    /// but it makes the section start reading part-way into itself, skipping as many frames as its
+    /// offset. A clip dropped twenty seconds along would begin twenty seconds into the song.
     /// </para>
     /// </summary>
-    private double SourceRead(long relTimelineFrame)
-        => SourceStartFrame + (relTimelineFrame + Eq.LatencySamples + StretchLatencyFrames) * _speed;
+    private double SourceReadFor(VoiceClip c, long relTimelineFrame)
+        => c.SourceStartFrame
+         + (relTimelineFrame * _speed - c.TrackStartFrame)
+         + (Eq.LatencySamples + StretchLatencyFrames) * _speed;
 
     /// <summary>
     /// Output frames the phase vocoder delays by, or zero when it is bypassed.
@@ -235,32 +322,35 @@ public sealed class TrackVoice : IDisposable
 
     /// <summary>
     /// Runs the EQ's own latency worth of audio through it and discards the result, so the first
-    /// block after a seek is steady state rather than the filters fading up from zero.
+    /// block after a jump is steady state rather than the filters fading up from zero.
     /// </summary>
     private void PrimeEq()
     {
         int lat = Eq.LatencySamples;
-        if (lat <= 0 || Clip is null) return;
+        if (lat <= 0 || _bound?.Audio is null) return;
 
         EnsureInScratch(lat);
         var buf = _inScratch.AsSpan(0, lat * _channels);
         long from = (long)Math.Round(_sourcePos) - lat;
-        CopySource(from, lat, buf, Clip.FrameCount);
+        CopySource(_bound, from, lat, buf, _bound.Audio.FrameCount);
         Eq.Process(buf);
     }
+
+    // ---------------------------------------------------------------- render
 
     /// <summary>
     /// Renders <paramref name="frames"/> frames starting at <paramref name="timelineFrame"/> and
     /// <b>adds</b> them into <paramref name="output"/>. Returns the number of frames that actually
-    /// carried audio, so the mixer can tell silence from a finished clip.
+    /// carried audio, so the mixer can tell silence from a finished track.
     /// </summary>
     public int Render(Span<float> output, long timelineFrame, int frames)
     {
+        var timeline = _timeline;    // one read for the whole block
+
         // Mute ramps like everything else rather than cutting in one sample. Only stop rendering
         // once the ramp has actually reached silence, or muting a playing track is a click.
-        if (Clip is null || (Muted && _muteGain <= 0)) { StepGainOnly(frames); return 0; }
+        if (timeline.Count == 0 || (Muted && _muteGain <= 0)) { StepGainOnly(frames); return 0; }
 
-        long end = SourceEndFrame < 0 ? Clip.FrameCount : Math.Min(SourceEndFrame, Clip.FrameCount);
         long relStart = timelineFrame - TimelineOffsetFrames;
         if (relStart + frames <= 0 || relStart >= TimelineLengthFrames) { StepGainOnly(frames); return 0; }
 
@@ -268,66 +358,218 @@ public sealed class TrackVoice : IDisposable
         EnsureStretchIfNeeded();
         ApplyParametersIfDirty();
 
-        // Keep the read position honest against the caller's clock; this also handles the first
-        // block after a seek and any drift from fractional input consumption.
-        double wanted = SourceRead(relStart);
-        if (Math.Abs(wanted - _sourcePos) > 2)
-        {
-            // The clock jumped — a seek, or the playhead just reached this clip. Re-prime the EQ as
-            // well as the read position: its delay line still holds whatever came before, and
-            // without this the first LatencySamples of the clip come out as that instead of as the
-            // clip. On a clip whose opening IS the transient, those samples are the whole point.
-            _sourcePos = wanted;
-            _needsPrime = true;
-            _inCarry = 0;
-            Eq.Reset();
-            PrimeEq();
-        }
-
         var work = _outScratch.AsSpan(0, frames * _channels);
         work.Clear();
+        var env = _envScratch.AsSpan(0, frames);
+        env.Clear();
 
-        if (IsUnprocessed) RenderDirect(work, frames, end);
-        else if (_mode == StretchMode.Linked) RenderLinked(work, frames, end);
-        else RenderIndependent(work, frames, end);
+        // Walk the block as runs. Each is wholly inside one section or wholly in a gap, so a join
+        // that lands mid-block is rendered from both sides rather than dropping one of them.
+        int f = 0;
+        while (f < frames)
+        {
+            long rel = relStart + f;
+            long trackFrame = TrackFrameAt(rel);
+            int idx = timeline.IndexAt(trackFrame);
 
-        Eq.Process(work);
+            if (idx < 0)
+            {
+                // A gap. Still run it through the EQ so the filter stays continuous across it.
+                long nextStart = timeline.NextStartAtOrAfter(trackFrame);
+                int gap = nextStart < 0
+                    ? frames - f
+                    : (int)Math.Clamp((long)Math.Floor(nextStart / _speed) - rel, 1, frames - f);
 
-        // Gain, pan and the clip envelope, per frame so nothing clicks.
-        long clipLength = TimelineLengthFrames;
-        int fadeIn = EnvelopeFrames(FadeInSeconds, TrimmedAtStart);
-        int fadeOut = EnvelopeFrames(FadeOutSeconds, TrimmedAtEnd(end));
+                Eq.Process(work.Slice(f * _channels, gap * _channels));
+                f += gap;
+                continue;
+            }
 
-        for (int f = 0; f < frames; f++)
+            var clip = timeline[idx];
+            long endRel = (long)Math.Ceiling(clip.TrackEndFrame / _speed);
+            int run = (int)Math.Clamp(endRel - rel, 1, frames - f);
+
+            RenderRun(work.Slice(f * _channels, run * _channels), env.Slice(f, run),
+                      timeline, idx, rel, run);
+            f += run;
+        }
+
+        // Gain, pan, mute and the section envelope, per frame so nothing clicks.
+        for (int i = 0; i < frames; i++)
         {
             _gain = Approach(_gain, _targetGain, _gainRamp);
             _muteGain = Approach(_muteGain, Muted ? 0 : 1, _gainRamp);
 
-            long posInClip = relStart + f;
-            double env = ClipEnvelope(posInClip, clipLength, fadeIn, fadeOut) * _muteGain;
-
-            double l = _gain * env * (_pan <= 0 ? 1 : 1 - _pan);
-            double r = _gain * env * (_pan >= 0 ? 1 : 1 + _pan);
-            int i = f * _channels;
-            output[i] += (float)(work[i] * l);
-            if (_channels > 1) output[i + 1] += (float)(work[i + 1] * r);
+            double e = env[i] * _muteGain;
+            double l = _gain * e * (_pan <= 0 ? 1 : 1 - _pan);
+            double r = _gain * e * (_pan >= 0 ? 1 : 1 + _pan);
+            int k = i * _channels;
+            output[k] += (float)(work[k] * l);
+            if (_channels > 1) output[k + 1] += (float)(work[k + 1] * r);
         }
         return frames;
     }
 
+    /// <summary>Renders one run: a stretch of output frames belonging to exactly one section.</summary>
+    private void RenderRun(Span<float> work, Span<float> env, ClipTimeline timeline,
+                           int idx, long rel, int frames)
+    {
+        var clip = timeline[idx];
+        double wanted = SourceReadFor(clip, rel);
+
+        // Rebind when the section changed, or when the read position no longer agrees with the
+        // caller's clock. At a SEAM the second section's read position is exactly where the first
+        // one had already got to, so this does not fire and nothing is re-primed — which is what
+        // makes splitting a clip and leaving it alone change no samples at all.
+        if (!ReferenceEquals(_bound, clip) || Math.Abs(wanted - _sourcePos) > 2)
+        {
+            bool continuous = ReferenceEquals(_bound, clip) is false
+                           && idx > 0 && timeline.SeamBefore(idx)
+                           && Math.Abs(wanted - _sourcePos) <= 2;
+
+            _bound = clip;
+            if (!continuous)
+            {
+                _sourcePos = wanted;
+                _inCarry = 0;
+                _needsPrime = true;
+                // The EQ's delay line still holds whatever came before, and without re-priming it
+                // the first LatencySamples of the section come out as that instead of as the
+                // section. On a clip whose opening IS the transient, those samples are the point.
+                Eq.Reset();
+                PrimeEq();
+            }
+        }
+
+        // How far this section is allowed to read. Normally its own end — but the read position
+        // runs the EQ's and the stretcher's latency AHEAD of what is coming out, so stopping dead
+        // at the end would feed those filters silence for the last few hundred frames of every
+        // section. After a non-seam join that silence is thrown away by the re-prime; across a
+        // SEAM there is no re-prime, and it would emerge as a notch at a join that is supposed to
+        // be inaudible. A seam continues in the same file, so the read simply carries on into it.
+        long sourceEnd = clip.SourceEnd;
+        for (int j = idx; j + 1 < timeline.Count && timeline.SeamAfter(j); j++)
+            sourceEnd = timeline[j + 1].SourceEnd;
+
+        if (IsUnprocessed) RenderDirect(work, frames, clip, sourceEnd);
+        else if (_mode == StretchMode.Linked) RenderLinked(work, frames, clip, sourceEnd);
+        else RenderIndependent(work, frames, clip, sourceEnd);
+
+        // A genuine internal join would otherwise put this section's fade-in immediately after the
+        // previous one's fade-out: two ramps back to back, which is a hole rather than a join. On
+        // the paths where we can read the outgoing section's continuation, blend against it
+        // instead, so the two sum to unity. The vocoder path cannot — one stretcher cannot emit
+        // two sections — and relies on its own 120 ms overlap-add to smooth the switch.
+        if (idx > 0 && !timeline.SeamBefore(idx) && _mode != StretchMode.Independent
+            && clip.FadeInSeconds <= 0 && TrackFrameAt(rel) == clip.TrackStartFrame)
+        {
+            var prev = timeline[idx - 1];
+            if (prev.TrackEndFrame == clip.TrackStartFrame && prev.Audio is not null
+                && prev.FadeOutSeconds <= 0)
+                BlendAgainstHandle(work, frames, prev);
+        }
+
+        Eq.Process(work);
+        FillEnvelope(env, timeline, idx, rel, frames);
+    }
+
+    /// <summary>
+    /// Crossfades the first <see cref="DeclickSeconds"/> of this run against what the previous
+    /// section would have played had it carried on — its "handle". Equal power, so the two sum to
+    /// unity through the join rather than dipping.
+    /// </summary>
+    private void BlendAgainstHandle(Span<float> work, int frames, VoiceClip prev)
+    {
+        int n = Math.Min(frames, (int)(DeclickSeconds * _sampleRate));
+        if (n <= 0 || prev.Audio is null) return;
+
+        int need = n * _channels;
+        if (_handleScratch.Length < need) _handleScratch = new float[need];
+        var handle = _handleScratch.AsSpan(0, need);
+        handle.Clear();
+
+        // The handle starts exactly where the previous section was cut off, and is read at the
+        // same rate the main path is running at so the two stay in step.
+        double pos = prev.SourceEnd + (Eq.LatencySamples + StretchLatencyFrames) * _speed;
+        if (_mode == StretchMode.Linked && _speed != 1.0)
+        {
+            var kernel = SincResampler.KernelFor(_speed);
+            var src = prev.Audio.Samples.AsSpan();
+            long count = prev.Audio.FrameCount;
+            for (int f = 0; f < n; f++, pos += _speed)
+                for (int c = 0; c < _channels; c++)
+                    handle[f * _channels + c] =
+                        (float)SincResampler.Sample(src, count, _channels, c, pos, kernel);
+        }
+        else
+        {
+            CopySource(prev, (long)Math.Round(pos), n, handle, prev.Audio.FrameCount);
+        }
+
+        for (int f = 0; f < n; f++)
+        {
+            double t = (f + 0.5) / n;
+            double rise = Math.Sin(Math.PI / 2 * t);
+            double fall = Math.Cos(Math.PI / 2 * t);
+            for (int c = 0; c < _channels; c++)
+            {
+                int i = f * _channels + c;
+                work[i] = (float)(work[i] * rise + handle[i] * fall);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes this run's share of the section envelope.
+    ///
+    /// <para>
+    /// An explicit fade always wins. Otherwise an edge gets a declick only where it was actually
+    /// <b>cut</b> and there is nothing butted up against it. An uncut edge gets no ramp at all,
+    /// which is what keeps an unedited track bit-identical through the render.
+    /// </para>
+    /// <para>
+    /// Both sides of a butt join are left alone deliberately. Two abutting declicks do not sum to
+    /// unity — one ramps down to nothing and the next ramps back up, so every loop repeat would
+    /// punch a ten-millisecond hole in itself. The join is covered instead by the crossfade
+    /// against the outgoing section's handle, or, on the vocoder path where that is not possible,
+    /// by the stretcher's own overlap-add.
+    /// </para>
+    /// </summary>
+    private void FillEnvelope(Span<float> env, ClipTimeline timeline, int idx, long rel, int frames)
+    {
+        var clip = timeline[idx];
+        long lengthOut = (long)(clip.LengthFrames / _speed);
+        long startRel = (long)(clip.TrackStartFrame / _speed);
+
+        bool joinedIn = idx > 0 && timeline[idx - 1].TrackEndFrame == clip.TrackStartFrame;
+        bool joinedOut = idx + 1 < timeline.Count
+                      && timeline[idx + 1].TrackStartFrame == clip.TrackEndFrame;
+
+        int fadeIn = clip.FadeInSeconds > 0
+            ? (int)(clip.FadeInSeconds * _sampleRate)
+            : joinedIn ? 0 : EnvelopeFrames(0, clip.CutAtStart);
+
+        int fadeOut = clip.FadeOutSeconds > 0
+            ? (int)(clip.FadeOutSeconds * _sampleRate)
+            : joinedOut ? 0 : EnvelopeFrames(0, clip.CutAtEnd);
+
+        for (int f = 0; f < frames; f++)
+            env[f] = (float)ClipEnvelope(rel + f - startRel, lengthOut, fadeIn, fadeOut);
+    }
+
     /// <summary>Straight copy for a track with no speed or pitch change — no DSP in the path at all.</summary>
-    private void RenderDirect(Span<float> work, int frames, long sourceEnd)
+    private void RenderDirect(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
     {
         long start = (long)Math.Round(_sourcePos);
-        CopySource(start, frames, work, sourceEnd);
+        CopySource(clip, start, frames, work, sourceEnd);
         _sourcePos = start + frames;
     }
 
-    private void RenderLinked(Span<float> work, int frames, long sourceEnd)
+    private void RenderLinked(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
     {
         var kernel = SincResampler.KernelFor(_speed);
-        var src = Clip!.Samples.AsSpan();
-        long count = Clip.FrameCount;
+        var src = clip.Audio!.Samples.AsSpan();
+        long count = clip.Audio.FrameCount;
 
         for (int f = 0; f < frames; f++)
         {
@@ -338,7 +580,7 @@ public sealed class TrackVoice : IDisposable
         }
     }
 
-    private void RenderIndependent(Span<float> work, int frames, long sourceEnd)
+    private void RenderIndependent(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
     {
         var st = _stretch ??= CreateStretch();      // EnsureStretchIfNeeded normally got here first
         // CreateStretch sets _dirty, but ApplyParametersIfDirty already ran for this block — before
@@ -347,19 +589,19 @@ public sealed class TrackVoice : IDisposable
         // whether anything previously created the stretcher, so two renders of one project differ.
         ApplyParametersIfDirty();
 
-        // How many input frames this block of output consumes, carrying the fraction forward so
-        // the read position does not drift over a four-minute song.
+        // How many input frames this run of output consumes, carrying the fraction forward so the
+        // read position does not drift over a four-minute song.
         double exact = frames * _speed + _inCarry;
         int inFrames = (int)Math.Floor(exact);
         _inCarry = exact - inFrames;
         if (inFrames <= 0) inFrames = 1;
 
-        if (_needsPrime) { Prime(st); _needsPrime = false; }
+        if (_needsPrime) { Prime(st, clip); _needsPrime = false; }
 
         long start = (long)Math.Round(_sourcePos);
         EnsureInScratch(inFrames);
         var input = _inScratch.AsSpan(0, inFrames * _channels);
-        CopySource(start, inFrames, input, sourceEnd);
+        CopySource(clip, start, inFrames, input, sourceEnd);
 
         st.Process(input, inFrames, work, frames);
         _sourcePos = start + inFrames;
@@ -367,7 +609,7 @@ public sealed class TrackVoice : IDisposable
 
     /// <summary>
     /// Feeds the stretcher the audio immediately before the read position, so the first block
-    /// after a seek is continuous instead of fading up out of an empty analysis window.
+    /// after a jump is continuous instead of fading up out of an empty analysis window.
     ///
     /// <para>
     /// Both halves have to be primed. <c>Seek</c> fills the <b>analysis</b> history only; the
@@ -376,23 +618,23 @@ public sealed class TrackVoice : IDisposable
     /// it is a delay: every frame that follows comes out 150 ms late as well. Measured against an
     /// unprocessed track it is exactly a quarter of a beat at 98 BPM, which in a mashup is the two
     /// songs audibly flamming against each other. <c>OutputSeek</c> is the library's own primer for
-    /// that half, and is fed the same thing by a different clock: the audio that <i>should already
-    /// have come out</i>, ending at the read position.
+    /// that half, and is fed the audio that <i>should already have come out</i>.
     /// </para>
     /// </summary>
-    private unsafe void Prime(Stretch st)
+    private unsafe void Prime(Stretch st, VoiceClip clip)
     {
         st.Reset();
-        if (Clip is null) return;
+        if (clip.Audio is null) return;
 
         long at = (long)Math.Round(_sourcePos);
+        long count = clip.Audio.FrameCount;
 
         int need = Math.Max(0, st.SeekLength());
         if (need > 0)
         {
             EnsureInScratch(need);
             var buf = _inScratch.AsSpan(0, need * _channels);
-            CopySource(at - need, need, buf, Clip.FrameCount);
+            CopySource(clip, at - need, need, buf, count);
             st.Seek(buf, need, (float)_speed);
         }
 
@@ -403,21 +645,24 @@ public sealed class TrackVoice : IDisposable
 
         EnsureInScratch(outNeed);
         var outBuf = _inScratch.AsSpan(0, outNeed * _channels);
-        CopySource(at - outNeed, outNeed, outBuf, Clip.FrameCount);
+        CopySource(clip, at - outNeed, outNeed, outBuf, count);
 
         // The pointer overload, deliberately: the span overload infers the frame count from the
         // span's length, which on interleaved stereo would send it reading twice past the end.
         fixed (float* p = outBuf) st.OutputSeek(p, outNeed);
     }
 
-    private void CopySource(long startFrame, int frames, Span<float> dest, long sourceEnd)
+    private void CopySource(VoiceClip clip, long startFrame, int frames, Span<float> dest, long sourceEnd)
     {
         dest.Clear();
-        var src = Clip!.Samples;
+        var audio = clip.Audio;
+        if (audio is null) return;
+
+        var src = audio.Samples;
         for (int f = 0; f < frames; f++)
         {
             long idx = startFrame + f;
-            if (idx < 0 || idx >= sourceEnd || idx >= Clip.FrameCount) continue;
+            if (idx < 0 || idx >= sourceEnd || idx >= audio.FrameCount) continue;
             for (int c = 0; c < _channels; c++)
                 dest[f * _channels + c] = src[idx * _channels + c];
         }
@@ -458,6 +703,7 @@ public sealed class TrackVoice : IDisposable
     {
         int need = frames * _channels;
         if (_outScratch.Length < need) _outScratch = new float[need];
+        if (_envScratch.Length < frames) _envScratch = new float[frames];
     }
 
     private void EnsureInScratch(int frames)
@@ -466,24 +712,20 @@ public sealed class TrackVoice : IDisposable
         if (_inScratch.Length < need) _inScratch = new float[need];
     }
 
-    private bool TrimmedAtStart => SourceStartFrame > 0;
-
-    private bool TrimmedAtEnd(long effectiveEnd) => Clip is not null && effectiveEnd < Clip.FrameCount;
-
     /// <summary>
     /// Fade length in frames. An explicit fade always applies. Otherwise a declick applies only
-    /// where the clip was actually <b>cut</b> — cutting into a waveform lands on a non-zero sample
-    /// and that is a click. An untrimmed clip starts and ends however the record does, and gets no
-    /// ramp at all, which is what keeps an unedited track bit-identical through the render.
+    /// where the section was actually <b>cut</b> — cutting into a waveform lands on a non-zero
+    /// sample and that is a click. A section that runs from the start of its file to the end of it
+    /// gets no ramp at all, which is what keeps an unedited track bit-identical through the render.
     /// </summary>
-    private int EnvelopeFrames(double seconds, bool trimmedAtThisEdge)
+    private int EnvelopeFrames(double seconds, bool cutAtThisEdge)
     {
         if (seconds > 0) return (int)(seconds * _sampleRate);
-        return trimmedAtThisEdge ? (int)(DeclickSeconds * _sampleRate) : 0;
+        return cutAtThisEdge ? (int)(DeclickSeconds * _sampleRate) : 0;
     }
 
     /// <summary>
-    /// Clip fade envelope at a position, equal-power rather than linear. Two clips crossfading
+    /// Section fade envelope at a position, equal-power rather than linear. Two clips crossfading
     /// with linear ramps dip in the middle, because at the halfway point both are at half
     /// amplitude and the sum is 0.5 rather than 1; a sine law keeps the power constant instead.
     /// </summary>

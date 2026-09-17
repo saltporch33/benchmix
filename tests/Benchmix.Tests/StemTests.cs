@@ -165,8 +165,8 @@ public class StemSplitTests
         // Give it a distinctive placement so we can prove the stems inherit it.
         source.TimelineOffsetSeconds = 7.5;
         source.Speed = 0.9118;
-        source.SourceStartSeconds = 30;
-        source.SourceEndSeconds = 75;
+        source.Clips[0].SourceStartSeconds = 30;
+        source.Clips[0].SourceEndSeconds = 75;
         session.Apply(source);
 
         var (vocals, instrumental) = await session.SplitStemsAsync(source);
@@ -178,8 +178,11 @@ public class StemSplitTests
         {
             Assert.Equal(7.5, stem.TimelineOffsetSeconds, 4);
             Assert.Equal(0.9118, stem.Speed, 6);
-            Assert.Equal(30, stem.SourceStartSeconds, 4);
-            Assert.Equal(75, stem.SourceEndSeconds, 4);
+            // The trim now lives on the section rather than the track, and the stem inherits it
+            // section for section so it still lands exactly on top of the original.
+            Assert.Single(stem.Clips);
+            Assert.Equal(30, stem.Clips[0].SourceStartSeconds, 4);
+            Assert.Equal(75, stem.Clips[0].SourceEndSeconds, 4);
             Assert.Equal(source.Bpm, stem.Bpm);
             Assert.Equal(source.Key, stem.Key);
 

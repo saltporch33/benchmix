@@ -12,7 +12,12 @@ namespace Benchmix.Core.Model;
 /// </summary>
 public sealed class BenchmixProject
 {
-    public const int CurrentSchemaVersion = 1;
+    /// <summary>
+    /// 2 added <see cref="TrackModel.Clips"/>: a track holds a list of sections rather than one.
+    /// A version 1 file migrates to a single clip covering what the track used to cover, which is
+    /// arithmetically identical, so old projects open and sound the same.
+    /// </summary>
+    public const int CurrentSchemaVersion = 2;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -50,21 +55,72 @@ public sealed class BenchmixProject
     }
 }
 
+/// <summary>
+/// One section of audio on a track.
+///
+/// <para>
+/// <see cref="TrackStartSeconds"/> is measured in the track's <b>own, unstretched</b> timebase,
+/// not on the timeline. A clip's real timeline position is
+/// <c>track.TimelineOffsetSeconds + TrackStartSeconds / track.Speed</c>. Holding it this way means
+/// changing a track's tempo rescales its whole arrangement together — a loop cut on bar lines is
+/// still a loop afterwards — and it keeps <c>Speed</c> out of the structural path entirely, so
+/// turning the TEMPO knob never rebuilds the clip list.
+/// </para>
+/// </summary>
+public sealed class ClipModel
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    /// <summary>
+    /// Which file this section comes from. Usually the track's own, but a section pasted from
+    /// another song keeps pointing at that song.
+    /// </summary>
+    public string SourcePath { get; set; } = "";
+
+    /// <summary>Where this section starts in the track's own unstretched timebase.</summary>
+    public double TrackStartSeconds { get; set; }
+
+    /// <summary>First second of the source file used.</summary>
+    public double SourceStartSeconds { get; set; }
+
+    /// <summary>One past the last second used; negative means play to the end of the file.</summary>
+    public double SourceEndSeconds { get; set; } = -1;
+
+    /// <summary>Fade in at this section's start. Zero still declicks a cut edge.</summary>
+    public double FadeInSeconds { get; set; }
+
+    /// <summary>Fade out at this section's end. Zero still declicks a cut edge.</summary>
+    public double FadeOutSeconds { get; set; }
+
+    public ClipModel Clone() => (ClipModel)MemberwiseClone();
+}
+
 /// <summary>One track: where its audio comes from, where it sits, and what is done to it.</summary>
 public sealed class TrackModel
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public string Name { get; set; } = "";
+
+    /// <summary>
+    /// The track's own song. Clips normally come from here; one pasted from elsewhere does not,
+    /// which is why the path that matters for loading audio is <see cref="ClipModel.SourcePath"/>.
+    /// </summary>
     public string SourcePath { get; set; } = "";
 
-    /// <summary>Where the clip starts on the timeline.</summary>
+    /// <summary>Where this track's origin sits on the timeline. Clips are placed relative to it.</summary>
     public double TimelineOffsetSeconds { get; set; }
 
-    /// <summary>Trim into the source file.</summary>
-    public double SourceStartSeconds { get; set; }
+    /// <summary>The sections this track plays, in order and never overlapping.</summary>
+    public List<ClipModel> Clips { get; set; } = new();
 
-    /// <summary>Trim out of the source file; negative means play to the end.</summary>
-    public double SourceEndSeconds { get; set; } = -1;
+    // ---- version 1 fields, read on load and then folded into Clips ----
+    // Nullable so that once migrated they are omitted from the file rather than written as zeros.
+
+    /// <summary>Version 1 only. Superseded by <see cref="ClipModel.SourceStartSeconds"/>.</summary>
+    public double? SourceStartSeconds { get; set; }
+
+    /// <summary>Version 1 only. Superseded by <see cref="ClipModel.SourceEndSeconds"/>.</summary>
+    public double? SourceEndSeconds { get; set; }
 
     /// <summary>1.0 is the original tempo.</summary>
     public double Speed { get; set; } = 1.0;
@@ -79,11 +135,11 @@ public sealed class TrackModel
     public double EqMid { get; set; } = 1.0;
     public double EqHigh { get; set; } = 1.0;
 
-    /// <summary>Fade in at the clip's start. Zero still declicks a trimmed edge.</summary>
-    public double FadeInSeconds { get; set; }
+    /// <summary>Version 1 only. Superseded by <see cref="ClipModel.FadeInSeconds"/>.</summary>
+    public double? FadeInSeconds { get; set; }
 
-    /// <summary>Fade out at the clip's end. Zero still declicks a trimmed edge.</summary>
-    public double FadeOutSeconds { get; set; }
+    /// <summary>Version 1 only. Superseded by <see cref="ClipModel.FadeOutSeconds"/>.</summary>
+    public double? FadeOutSeconds { get; set; }
 
     public double Gain { get; set; } = 1.0;
     public double Pan { get; set; }
@@ -103,5 +159,38 @@ public sealed class TrackModel
     [JsonIgnore]
     public double EffectiveBpm => Bpm * Speed;
 
-    public TrackModel Clone() => (TrackModel)MemberwiseClone();
+    /// <summary>
+    /// How far this track reaches in its own unstretched timebase, i.e. the end of its last clip.
+    /// </summary>
+    [JsonIgnore]
+    public double TrackEndSeconds
+    {
+        get
+        {
+            double end = 0;
+            foreach (var c in Clips)
+                end = Math.Max(end, c.TrackStartSeconds + Math.Max(0, ClipLength(c)));
+            return end;
+        }
+    }
+
+    /// <summary>
+    /// A clip's length in source seconds, or 0 when its end is unknown. A negative
+    /// <see cref="ClipModel.SourceEndSeconds"/> means "to the end of the file", which only the
+    /// session can resolve, so callers that need the real number ask it instead.
+    /// </summary>
+    private static double ClipLength(ClipModel c)
+        => c.SourceEndSeconds < 0 ? 0 : c.SourceEndSeconds - c.SourceStartSeconds;
+
+    /// <summary>
+    /// Deep, because of <see cref="Clips"/>. MemberwiseClone alone would hand the undo snapshot the
+    /// same list the live project is about to edit, so every "previous state" on the stack would
+    /// silently track the present and undo would do nothing.
+    /// </summary>
+    public TrackModel Clone()
+    {
+        var copy = (TrackModel)MemberwiseClone();
+        copy.Clips = Clips.Select(c => c.Clone()).ToList();
+        return copy;
+    }
 }

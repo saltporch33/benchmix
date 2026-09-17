@@ -124,7 +124,7 @@ public static class ProjectStore
         }
     }
 
-    /// <summary>Brings older schemas forward. Nothing to do yet, but the seam exists from day one.</summary>
+    /// <summary>Brings older schemas forward.</summary>
     private static void Migrate(BenchmixProject p)
     {
         if (p.SampleRate <= 0) p.SampleRate = 48000;
@@ -134,6 +134,33 @@ public static class ProjectStore
             if (t.Speed <= 0) t.Speed = 1.0;
             if (t.Id == Guid.Empty) t.Id = Guid.NewGuid();
             if (string.IsNullOrEmpty(t.Name)) t.Name = Path.GetFileNameWithoutExtension(t.SourcePath);
+
+            // Version 1 had one section per track, described by fields on the track itself. It
+            // becomes one clip starting at the track's own origin, which places and trims it
+            // exactly where it was, then the old fields are dropped so they are not written again.
+            if (t.Clips.Count == 0)
+            {
+                t.Clips.Add(new ClipModel
+                {
+                    SourcePath = t.SourcePath,
+                    TrackStartSeconds = 0,
+                    SourceStartSeconds = t.SourceStartSeconds ?? 0,
+                    SourceEndSeconds = t.SourceEndSeconds ?? -1,
+                    FadeInSeconds = t.FadeInSeconds ?? 0,
+                    FadeOutSeconds = t.FadeOutSeconds ?? 0,
+                });
+            }
+
+            t.SourceStartSeconds = null;
+            t.SourceEndSeconds = null;
+            t.FadeInSeconds = null;
+            t.FadeOutSeconds = null;
+
+            foreach (var c in t.Clips)
+            {
+                if (c.Id == Guid.Empty) c.Id = Guid.NewGuid();
+                if (string.IsNullOrEmpty(c.SourcePath)) c.SourcePath = t.SourcePath;
+            }
         }
         p.SchemaVersion = BenchmixProject.CurrentSchemaVersion;
     }
