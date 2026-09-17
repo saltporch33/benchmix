@@ -269,6 +269,41 @@ public class TimelineEditorTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// The real project on this machine, if it is there. A hand-written version 1 file proves the
+    /// migration arithmetic; this proves it against something somebody actually built and would
+    /// notice being wrong.
+    /// </summary>
+    [SkippableFact]
+    public void TheRealKhaledTygaProjectStillOpensUnchanged()
+    {
+        var path = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "OneDrive", "Documents", "Mixes", "Benchmix", "Khaled_Tyga.benchmix");
+        Skip.IfNot(File.Exists(path), "the reference project is not on this machine");
+
+        var project = ProjectStore.Load(path).Project;
+
+        Assert.Equal(2, project.SchemaVersion);
+        Assert.Equal(3, project.Tracks.Count);
+
+        // Three tracks, each one uninterrupted section, exactly where they were.
+        foreach (var t in project.Tracks)
+        {
+            Assert.Single(t.Clips);
+            Assert.Equal(0, t.Clips[0].TrackStartSeconds);
+            Assert.Null(t.SourceStartSeconds);
+        }
+
+        // The second Taste section: 206.54 to 228.60 of the song, dropped at 215.42 with its bass
+        // killed. If the migration moved any of these, the mix would come out wrong.
+        var taste2 = project.Tracks[2];
+        Assert.Equal(215.42170641363907, taste2.TimelineOffsetSeconds, 9);
+        Assert.Equal(206.53857868654737, taste2.Clips[0].SourceStartSeconds, 9);
+        Assert.Equal(228.60413797342935, taste2.Clips[0].SourceEndSeconds, 9);
+        Assert.True(taste2.EqLow <= 0.0001, $"the killed LOW came back as {taste2.EqLow}");
+    }
+
     [Fact]
     public void AVersionOneProjectMigratesToOneSectionCoveringWhatItCovered()
     {
