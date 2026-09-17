@@ -4,8 +4,22 @@ using Benchmix.Engine.Audio;
 
 namespace Benchmix.App.Controls;
 
+/// <summary>One section as the lane needs to draw it.</summary>
+/// <param name="Peaks">Envelope of the whole file this section is cut from.</param>
+/// <param name="TimelineStartSeconds">Where it begins on the timeline, after the track's tempo.</param>
+/// <param name="IsForeign">True when it came from a different song than the rest of the track.</param>
+public sealed record ClipVisual(
+    PeakData? Peaks,
+    int SampleRate,
+    double TimelineStartSeconds,
+    double SourceStartSeconds,
+    double SourceEndSeconds,
+    double Speed,
+    bool IsSelected,
+    bool IsForeign);
+
 /// <summary>
-/// Draws one track's waveform on the timeline.
+/// Draws one track's sections on the timeline.
 ///
 /// It draws from a precomputed min/max peak envelope rather than the samples, so redrawing while
 /// scrolling or zooming costs one pass over the visible pixel columns instead of one pass over
@@ -15,16 +29,18 @@ namespace Benchmix.App.Controls;
 /// stretched to 92%, its waveform gets visually wider by the same amount, because that is where
 /// the audio now actually falls. A waveform that ignored the stretch would put every transient in
 /// the wrong place and make the display useless for lining anything up.
+///
+/// <para>
+/// A track holds several sections, each possibly cut from a different song, so each carries its
+/// own peaks. They arrive as one immutable array: WPF repaints when a bound value <b>changes</b>,
+/// and a list edited in place leaves the reference identical and the lane stale.
+/// </para>
 /// </summary>
 public sealed class WaveformView : FrameworkElement
 {
-    public static readonly DependencyProperty PeaksProperty = DependencyProperty.Register(
-        nameof(Peaks), typeof(PeakData), typeof(WaveformView),
+    public static readonly DependencyProperty ClipsProperty = DependencyProperty.Register(
+        nameof(Clips), typeof(IReadOnlyList<ClipVisual>), typeof(WaveformView),
         new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
-
-    public static readonly DependencyProperty SampleRateProperty = DependencyProperty.Register(
-        nameof(SampleRate), typeof(int), typeof(WaveformView),
-        new FrameworkPropertyMetadata(48000, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public static readonly DependencyProperty PixelsPerSecondProperty = DependencyProperty.Register(
         nameof(PixelsPerSecond), typeof(double), typeof(WaveformView),
@@ -34,25 +50,6 @@ public sealed class WaveformView : FrameworkElement
         nameof(ScrollSeconds), typeof(double), typeof(WaveformView),
         new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    /// <summary>Where the clip begins on the timeline.</summary>
-    public static readonly DependencyProperty ClipOffsetSecondsProperty = DependencyProperty.Register(
-        nameof(ClipOffsetSeconds), typeof(double), typeof(WaveformView),
-        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
-
-    public static readonly DependencyProperty SourceStartSecondsProperty = DependencyProperty.Register(
-        nameof(SourceStartSeconds), typeof(double), typeof(WaveformView),
-        new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
-
-    /// <summary>Negative means play to the end of the source.</summary>
-    public static readonly DependencyProperty SourceEndSecondsProperty = DependencyProperty.Register(
-        nameof(SourceEndSeconds), typeof(double), typeof(WaveformView),
-        new FrameworkPropertyMetadata(-1.0, FrameworkPropertyMetadataOptions.AffectsRender));
-
-    /// <summary>1.0 is the original tempo; the waveform widens or narrows to match.</summary>
-    public static readonly DependencyProperty SpeedProperty = DependencyProperty.Register(
-        nameof(Speed), typeof(double), typeof(WaveformView),
-        new FrameworkPropertyMetadata(1.0, FrameworkPropertyMetadataOptions.AffectsRender));
-
     public static readonly DependencyProperty WaveBrushProperty = DependencyProperty.Register(
         nameof(WaveBrush), typeof(Brush), typeof(WaveformView),
         new FrameworkPropertyMetadata(Brushes.DodgerBlue, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -61,25 +58,20 @@ public sealed class WaveformView : FrameworkElement
         nameof(ClipBackground), typeof(Brush), typeof(WaveformView),
         new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    public static readonly DependencyProperty IsSelectedProperty = DependencyProperty.Register(
-        nameof(IsSelected), typeof(bool), typeof(WaveformView),
-        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
-
     public static readonly DependencyProperty IsMutedProperty = DependencyProperty.Register(
         nameof(IsMuted), typeof(bool), typeof(WaveformView),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    public PeakData? Peaks { get => (PeakData?)GetValue(PeaksProperty); set => SetValue(PeaksProperty, value); }
-    public int SampleRate { get => (int)GetValue(SampleRateProperty); set => SetValue(SampleRateProperty, value); }
+    public IReadOnlyList<ClipVisual>? Clips
+    {
+        get => (IReadOnlyList<ClipVisual>?)GetValue(ClipsProperty);
+        set => SetValue(ClipsProperty, value);
+    }
+
     public double PixelsPerSecond { get => (double)GetValue(PixelsPerSecondProperty); set => SetValue(PixelsPerSecondProperty, value); }
     public double ScrollSeconds { get => (double)GetValue(ScrollSecondsProperty); set => SetValue(ScrollSecondsProperty, value); }
-    public double ClipOffsetSeconds { get => (double)GetValue(ClipOffsetSecondsProperty); set => SetValue(ClipOffsetSecondsProperty, value); }
-    public double SourceStartSeconds { get => (double)GetValue(SourceStartSecondsProperty); set => SetValue(SourceStartSecondsProperty, value); }
-    public double SourceEndSeconds { get => (double)GetValue(SourceEndSecondsProperty); set => SetValue(SourceEndSecondsProperty, value); }
-    public double Speed { get => (double)GetValue(SpeedProperty); set => SetValue(SpeedProperty, value); }
     public Brush WaveBrush { get => (Brush)GetValue(WaveBrushProperty); set => SetValue(WaveBrushProperty, value); }
     public Brush? ClipBackground { get => (Brush?)GetValue(ClipBackgroundProperty); set => SetValue(ClipBackgroundProperty, value); }
-    public bool IsSelected { get => (bool)GetValue(IsSelectedProperty); set => SetValue(IsSelectedProperty, value); }
     public bool IsMuted { get => (bool)GetValue(IsMutedProperty); set => SetValue(IsMutedProperty, value); }
 
     protected override void OnRender(DrawingContext dc)
@@ -90,18 +82,25 @@ public sealed class WaveformView : FrameworkElement
         // A transparent hit-test surface, so clicks on empty lane area still reach this element.
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
 
-        var peaks = Peaks;
-        if (peaks is null || peaks.BucketCount == 0 || SampleRate <= 0) return;
+        var clips = Clips;
+        if (clips is null) return;
+        foreach (var clip in clips) DrawClip(dc, clip, w, h);
+    }
+
+    private void DrawClip(DrawingContext dc, ClipVisual clip, double w, double h)
+    {
+        var peaks = clip.Peaks;
+        if (peaks is null || peaks.BucketCount == 0 || clip.SampleRate <= 0) return;
 
         double pps = Math.Max(0.01, PixelsPerSecond);
-        double speed = Math.Max(0.01, Speed);
-        double srcStart = Math.Max(0, SourceStartSeconds);
-        double srcTotal = peaks.FrameCount / (double)SampleRate;
-        double srcEnd = SourceEndSeconds < 0 ? srcTotal : Math.Min(SourceEndSeconds, srcTotal);
+        double speed = Math.Max(0.01, clip.Speed);
+        double srcStart = Math.Max(0, clip.SourceStartSeconds);
+        double srcTotal = peaks.FrameCount / (double)clip.SampleRate;
+        double srcEnd = clip.SourceEndSeconds < 0 ? srcTotal : Math.Min(clip.SourceEndSeconds, srcTotal);
         if (srcEnd <= srcStart) return;
 
-        // Timeline extent of this clip after the stretch.
-        double clipStart = ClipOffsetSeconds;
+        // Timeline extent of this section after the stretch.
+        double clipStart = clip.TimelineStartSeconds;
         double clipEnd = clipStart + (srcEnd - srcStart) / speed;
 
         double viewStart = ScrollSeconds;
@@ -126,7 +125,7 @@ public sealed class WaveformView : FrameworkElement
 
         double mid = h / 2;
         double halfHeight = (h / 2) - 2;
-        double secondsPerBucket = peaks.SamplesPerBucket / (double)SampleRate;
+        double secondsPerBucket = peaks.SamplesPerBucket / (double)clip.SampleRate;
 
         // One vertical line per pixel column, from the min/max of every bucket that column covers.
         // Columns are drawn into a StreamGeometry so the whole waveform is a single draw call.
@@ -174,9 +173,21 @@ public sealed class WaveformView : FrameworkElement
         pen.Freeze();
         dc.DrawGeometry(null, pen, geometry);
 
-        if (IsSelected)
+        // A section from another song is outlined, so it is obvious that this track's tempo, pitch
+        // and EQ are about to be applied to audio that did not come from this track's song.
+        if (clip.IsForeign)
         {
-            var outline = new Pen(new SolidColorBrush(Color.FromArgb(200, 255, 255, 255)), 1.5);
+            var foreign = new Pen(new SolidColorBrush(Color.FromArgb(160, 245, 197, 24)), 1)
+            {
+                DashStyle = DashStyles.Dash,
+            };
+            foreign.Freeze();
+            dc.DrawRoundedRectangle(null, foreign, new Rect(xFrom, 1, Math.Max(1, xTo - xFrom), h - 2), 3, 3);
+        }
+
+        if (clip.IsSelected)
+        {
+            var outline = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1.5);
             outline.Freeze();
             dc.DrawRoundedRectangle(null, outline, new Rect(xFrom, 0.75, Math.Max(1, xTo - xFrom), h - 1.5), 3, 3);
         }

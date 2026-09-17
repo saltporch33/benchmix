@@ -679,6 +679,132 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         finally { IsBusy = false; }
     }
 
+    // ---------------- sections: split, cut, copy, paste ----------------
+
+    /// <summary>
+    /// The section commands all act on one selected section, not on a time range.
+    ///
+    /// <para>
+    /// A time range would have meant reusing the loop region, which is a <i>transport</i> gesture —
+    /// shift-dragging the ruler to audition a passage would then also be arming a destructive one.
+    /// Selecting the block you can already see and click is both smaller to learn and impossible
+    /// to trigger by accident, and it costs one extra keystroke: split at each end, click the
+    /// middle, then repeat.
+    /// </para>
+    /// </summary>
+    [ObservableProperty] private ClipViewModel? _selectedClip;
+
+    private ClipModel? _clipboard;
+
+    /// <summary>True when something has been copied and can be pasted.</summary>
+    public bool HasClipboard => _clipboard is not null;
+
+    /// <summary>Selects one section, clearing any other. Null clears the selection entirely.</summary>
+    public void SelectClip(ClipViewModel? clip)
+    {
+        foreach (var t in Tracks)
+            foreach (var c in t.Clips)
+                if (c.IsSelected && !ReferenceEquals(c, clip)) c.IsSelected = false;
+
+        if (clip is not null) clip.IsSelected = true;
+        SelectedClip = clip;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+    }
+
+    /// <summary>The section a command should act on, falling back to the one under the playhead.</summary>
+    private ClipViewModel? TargetClip()
+    {
+        if (SelectedClip is not null && Tracks.Contains(SelectedClip.Track)) return SelectedClip;
+        if (SelectedTrack is null) return null;
+        return SelectedTrack.Clips.FirstOrDefault(
+            c => PositionSeconds >= c.TimelineStartSeconds && PositionSeconds < c.TimelineEndSeconds);
+    }
+
+    /// <summary>Republishes a track after its sections changed, and reports what happened.</summary>
+    private void AfterClipEdit(TrackViewModel track, EditResult result, ClipModel? select = null)
+    {
+        if (!result.Changed) { Status = result.Message; return; }
+
+        Session.Apply(track.Model);
+        track.RebuildClips();
+        RecomputeLength();
+        MarkDirty();
+
+        var chosen = select is null ? null : track.Clips.FirstOrDefault(c => c.Id == select.Id);
+        SelectClip(chosen);
+        Status = result.Message;
+    }
+
+    [RelayCommand]
+    private void SplitAtPlayhead()
+    {
+        if (_session is null || SelectedTrack is not { } track) { Status = "Select a track first."; return; }
+
+        PushUndo($"{track.Name}: split");
+        var result = TimelineEditor.Split(track.Model, PositionSeconds, Session);
+        AfterClipEdit(track, result, result.Clip);
+    }
+
+    [RelayCommand]
+    private void CopyClip()
+    {
+        if (TargetClip() is not { } clip) { Status = "Click a section to copy it."; return; }
+        _clipboard = TimelineEditor.Copy(clip.Model);
+        OnPropertyChanged(nameof(HasClipboard));
+        Status = $"Copied {clip.LengthSeconds:0.0}s. Ctrl+V drops it at the playhead.";
+    }
+
+    [RelayCommand]
+    private void CutClip()
+    {
+        if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
+
+        _clipboard = TimelineEditor.Copy(clip.Model);
+        OnPropertyChanged(nameof(HasClipboard));
+
+        var track = clip.Track;
+        PushUndo($"{track.Name}: cut section");
+        var result = TimelineEditor.Delete(track.Model, clip.Model);
+        AfterClipEdit(track, result with { Message = $"Cut {clip.LengthSeconds:0.0}s. The gap is left as it is." });
+    }
+
+    [RelayCommand]
+    private void DeleteClip()
+    {
+        if (TargetClip() is not { } clip) { Status = "Click a section to delete it."; return; }
+
+        var track = clip.Track;
+        PushUndo($"{track.Name}: delete section");
+        AfterClipEdit(track, TimelineEditor.Delete(track.Model, clip.Model));
+    }
+
+    [RelayCommand]
+    private void PasteClip()
+    {
+        if (_session is null) return;
+        if (_clipboard is null) { Status = "Nothing has been copied yet."; return; }
+        if (SelectedTrack is not { } track) { Status = "Select a track to paste onto."; return; }
+
+        PushUndo($"{track.Name}: paste section");
+        var result = TimelineEditor.Paste(track.Model, _clipboard, PositionSeconds, Session);
+        AfterClipEdit(track, result, result.Clip);
+    }
+
+    [RelayCommand]
+    private void DuplicateClip()
+    {
+        if (_session is null) return;
+        if (TargetClip() is not { } clip) { Status = "Click a section to repeat it."; return; }
+
+        var track = clip.Track;
+        PushUndo($"{track.Name}: repeat section");
+        var result = TimelineEditor.Duplicate(track.Model, clip.Model, Session);
+
+        // The copy becomes the selection, so holding Ctrl+D walks a loop along the timeline
+        // instead of stacking every repeat on the same spot.
+        AfterClipEdit(track, result, result.Clip);
+    }
+
     /// <summary>
     /// Records the project state before a gesture. Continuous gestures — a knob drag, a clip drag —
     /// coalesce into one step: pass the same <paramref name="coalesceKey"/> for every event of the

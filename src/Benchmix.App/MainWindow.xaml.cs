@@ -21,7 +21,7 @@ public partial class MainWindow : Window
     private double _loopAnchorSeconds;
     private bool _settingLoop;
 
-    // clip drag
+    // section drag
     private TrackViewModel? _dragTrack;
     private Point _dragOrigin;
     private double _dragStartOffset;
@@ -48,7 +48,7 @@ public partial class MainWindow : Window
         if (App.LoadCheck)
         {
             foreach (var t in _vm.Tracks)
-                App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} peaks={(t.Peaks is null ? "no" : "yes")}");
+                App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} sections={t.Clips.Count} peaks={(t.Clips.Any(c => c.Peaks is not null) ? "yes" : "no")}");
             App.Log($"loadcheck: verdict={(_vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded) ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
             EndVerificationRun();
             return;
@@ -231,6 +231,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Runs the dispatcher until <paramref name="done"/> is true or the wait runs out. The gesture
+    /// test is synchronous but some commands are not, and reading a result while it is still in
+    /// flight would report a failure that is really a race in the test.
+    /// </summary>
+    private static void PumpUntil(Func<bool> done, int millis = 4000)
+    {
+        var until = Environment.TickCount64 + millis;
+        while (!done() && Environment.TickCount64 < until)
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
+                () => { }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
     /// Drives the right-drag and double-click gestures through the real handlers with a scripted
     /// pointer, and logs what each one did. No physical input is synthesised, so this can run while
     /// someone else is using the machine.
@@ -324,6 +337,87 @@ public partial class MainWindow : Window
         _vm.PlayFrom(25.0);
         Check("double-click while playing keeps playing", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
         _vm.StopCommand.Execute(null);
+
+        // --- sections: split, repeat, copy, paste, delete, undo ---
+        //
+        // None of this is reachable from the test project, which references Core and Engine but
+        // not the app. Driving the real commands here is the only evidence that the wiring between
+        // a keystroke and the model actually exists.
+        if (_vm.Tracks.FirstOrDefault() is { } t0 && t0.IsLoaded)
+        {
+            _vm.SelectedTrack = t0;
+            Check($"a freshly loaded track is one section (got {t0.Clips.Count})", t0.Clips.Count == 1);
+
+            _vm.SeekTo(10);
+            _vm.SplitAtPlayheadCommand.Execute(null);
+            Check($"split makes two sections (got {t0.Clips.Count})", t0.Clips.Count == 2);
+
+            // The halves must meet exactly, or the engine stops seeing a seam and the join ticks.
+            bool meet = t0.Clips.Count == 2
+                     && t0.Clips[0].SourceEndSeconds == t0.Clips[1].SourceStartSeconds;
+            Check("the two halves meet exactly where the first stops", meet);
+
+            _vm.SeekTo(20);
+            _vm.SplitAtPlayheadCommand.Execute(null);
+            Check($"splitting again makes three (got {t0.Clips.Count})", t0.Clips.Count == 3);
+
+            // Repeat the middle section: this is the loop-building gesture.
+            _vm.SelectClip(t0.Clips[1]);
+            double middleLength = t0.Clips[1].LengthSeconds;
+            _vm.DuplicateClipCommand.Execute(null);
+            Check($"repeat adds a section (got {t0.Clips.Count})", t0.Clips.Count == 4);
+            Check($"the repeat is the same length ({_vm.SelectedClip?.LengthSeconds:0.00} vs {middleLength:0.00})",
+                  _vm.SelectedClip is not null
+                  && Math.Abs(_vm.SelectedClip.LengthSeconds - middleLength) < 0.01);
+            Check("the repeat becomes the selection, so holding the key walks along",
+                  _vm.SelectedClip is not null && _vm.SelectedClip.IsSelected);
+
+            // Delete must leave a hole rather than closing it.
+            var after = t0.Clips.Last();
+            double afterStart = after.TrackStartSeconds;
+            _vm.SelectClip(t0.Clips[0]);
+            _vm.DeleteClipCommand.Execute(null);
+            var stillThere = t0.Clips.FirstOrDefault(c => Math.Abs(c.TrackStartSeconds - afterStart) < 1e-6);
+            Check("deleting a section leaves the others where they were", stillThere is not null);
+
+            // Undo must put it back. It runs through the async reload path, so the dispatcher is
+            // pumped until it lands rather than read while it is still in flight.
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => _vm.Tracks.FirstOrDefault()?.Clips.Count == 4);
+            Check($"undo restores the deleted section (got {_vm.Tracks.FirstOrDefault()?.Clips.Count})",
+                  _vm.Tracks.FirstOrDefault()?.Clips.Count == 4);
+
+            // Copy and paste onto the same track.
+            var t1 = _vm.Tracks.First();
+            _vm.SelectedTrack = t1;
+            _vm.SelectClip(t1.Clips[0]);
+            _vm.CopyClipCommand.Execute(null);
+            Check("copying fills the clipboard", _vm.HasClipboard);
+
+            // Pasting into the middle of a section splits it, so the count rises by two: the head
+            // of what was there, the pasted audio, and the tail. What matters is that the pasted
+            // section landed at the playhead.
+            int countBeforePaste = t1.Clips.Count;
+            _vm.SeekTo(120);
+            _vm.PasteClipCommand.Execute(null);
+            Check($"paste lands a section at the playhead (at {_vm.SelectedClip?.TimelineStartSeconds:0.00}s)",
+                  _vm.SelectedClip is not null
+                  && Math.Abs(_vm.SelectedClip.TimelineStartSeconds - 120) < 0.05);
+            Check($"paste overwrites rather than stacking (got {t1.Clips.Count}, was {countBeforePaste})",
+                  t1.Clips.Count > countBeforePaste);
+
+            // Nothing may overlap, whatever was pasted where.
+            var ordered = t1.Clips.OrderBy(c => c.TrackStartSeconds).ToList();
+            bool overlap = false;
+            for (int i = 0; i + 1 < ordered.Count; i++)
+                if (ordered[i + 1].TrackStartSeconds < ordered[i].TrackStartSeconds + ordered[i].LengthSeconds - 1e-6)
+                    overlap = true;
+            Check("no two sections overlap after a paste", !overlap);
+        }
+        else
+        {
+            pass.Add("(no track loaded, so the section commands are untested - pass a file to cover them)");
+        }
 
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
@@ -565,20 +659,33 @@ public partial class MainWindow : Window
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
     }
 
-    /// <summary>How close to a clip edge counts as grabbing the edge rather than the body.</summary>
+    /// <summary>How close to a section's edge counts as grabbing the edge rather than the body.</summary>
     private const double EdgeGrabPixels = 7;
 
     private enum DragKind { Move, TrimStart, TrimEnd }
 
+    private ClipViewModel? _dragClip;
     private DragKind _dragKind;
+    private double _dragStartTrackStart;
     private double _dragStartSourceStart;
     private double _dragStartSourceEnd;
 
-    /// <summary>Which part of a clip the pointer is over, in a lane's own coordinates.</summary>
-    private DragKind HitTestClip(TrackViewModel vm, double x)
+    private double SecondsAtLaneX(double x) => Math.Max(0, _vm.ScrollSeconds + x / _vm.PixelsPerSecond);
+
+    /// <summary>The section under a lane x position, or null in a gap.</summary>
+    private ClipViewModel? ClipAtLaneX(TrackViewModel vm, double x)
     {
-        double left = (vm.TimelineOffsetSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
-        double right = left + vm.TimelineDurationSeconds * _vm.PixelsPerSecond;
+        double t = SecondsAtLaneX(x);
+        foreach (var c in vm.Clips)
+            if (t >= c.TimelineStartSeconds && t < c.TimelineEndSeconds) return c;
+        return null;
+    }
+
+    /// <summary>Which part of a section the pointer is over, in a lane's own coordinates.</summary>
+    private DragKind HitTestClip(ClipViewModel clip, double x)
+    {
+        double left = (clip.TimelineStartSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
+        double right = (clip.TimelineEndSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
 
         if (Math.Abs(x - left) <= EdgeGrabPixels) return DragKind.TrimStart;
         if (Math.Abs(x - right) <= EdgeGrabPixels) return DragKind.TrimEnd;
@@ -591,25 +698,33 @@ public partial class MainWindow : Window
         if (host.DataContext is not TrackViewModel vm) return;
 
         _vm.SelectedTrack = vm;
+        double x = e.GetPosition(host).X;
 
         if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
         {
-            // Alt-click puts the playhead here without disturbing the clip.
-            _vm.SeekTo(Math.Max(0, _vm.ScrollSeconds + e.GetPosition(host).X / _vm.PixelsPerSecond));
+            // Alt-click puts the playhead here without disturbing anything.
+            _vm.SeekTo(SecondsAtLaneX(x));
             e.Handled = true;
             return;
         }
 
-        _dragTrack = vm;
-        _dragKind = HitTestClip(vm, e.GetPosition(host).X);
+        var clip = ClipAtLaneX(vm, x);
+        _vm.SelectClip(clip);
+        if (clip is null) { e.Handled = true; return; }     // clicking a gap just clears the selection
 
-        // A track that failed to load has no usable source span, so there is nothing to trim and
-        // the clamps below would be handed min > max. Treat the whole lane as a move instead.
-        if (vm.SourceDurationSeconds <= 0.001) _dragKind = DragKind.Move;
+        _dragTrack = vm;
+        _dragClip = clip;
+        _dragKind = HitTestClip(clip, x);
+
+        // A section whose audio never loaded has no usable source span, so there is nothing to
+        // trim and the clamps below would be handed min > max. Treat it as a move instead.
+        if (clip.SourceDurationSeconds <= 0.001) _dragKind = DragKind.Move;
+
         _dragOrigin = e.GetPosition(this);
+        _dragStartTrackStart = clip.TrackStartSeconds;
         _dragStartOffset = vm.TimelineOffsetSeconds;
-        _dragStartSourceStart = vm.SourceStartSeconds;
-        _dragStartSourceEnd = vm.SourceEndSeconds < 0 ? vm.SourceDurationSeconds : vm.SourceEndSeconds;
+        _dragStartSourceStart = clip.SourceStartSeconds;
+        _dragStartSourceEnd = clip.SourceEndSeconds < 0 ? clip.SourceDurationSeconds : clip.SourceEndSeconds;
         _dragging = false;
         host.CaptureMouse();
         e.Handled = true;
@@ -620,68 +735,74 @@ public partial class MainWindow : Window
         var host = (FrameworkElement)sender;
 
         // Hovering near an edge shows the resize cursor, so trimming is discoverable without a manual.
-        if (_dragTrack is null && host.DataContext is TrackViewModel hover)
+        if (_dragClip is null && host.DataContext is TrackViewModel hover)
         {
-            host.Cursor = HitTestClip(hover, e.GetPosition(host).X) == DragKind.Move
-                ? Cursors.Arrow
-                : Cursors.SizeWE;
+            var over = ClipAtLaneX(hover, e.GetPosition(host).X);
+            host.Cursor = over is not null && HitTestClip(over, e.GetPosition(host).X) != DragKind.Move
+                ? Cursors.SizeWE
+                : Cursors.Arrow;
         }
 
-        if (_dragTrack is null || e.LeftButton != MouseButtonState.Pressed) return;
+        if (_dragClip is null || _dragTrack is null || e.LeftButton != MouseButtonState.Pressed) return;
 
         double dx = e.GetPosition(this).X - _dragOrigin.X;
 
-        // A few pixels of slop so a click does not nudge a clip by accident.
+        // A few pixels of slop so a click does not nudge a section by accident.
         if (!_dragging && Math.Abs(dx) < 4) return;
         _dragging = true;
 
         double deltaSeconds = dx / _vm.PixelsPerSecond;
+        double speed = Math.Max(0.01, _dragTrack.Speed);
 
         switch (_dragKind)
         {
             case DragKind.Move:
             {
-                double target = Snap(Math.Max(0, _dragStartOffset + deltaSeconds));
-                _dragTrack.TimelineOffsetSeconds = target;
-                _vm.Status = $"{_dragTrack.Name} starts at {target:0.00}s";
+                // A section moves within its own track, in the track's unstretched timebase, so
+                // dragging it does not drag the whole deck out of line with the other songs.
+                double targetTimeline = Snap(Math.Max(0, TimelineStartOf(_dragStartTrackStart) + deltaSeconds));
+                double trackStart = Math.Max(0, (targetTimeline - _dragTrack.TimelineOffsetSeconds) * speed);
+                _dragClip.TrackStartSeconds = trackStart;
+                _vm.Status = $"{_dragTrack.Name}: section at {TimelineStartOf(trackStart):0.00}s";
                 break;
             }
 
             case DragKind.TrimStart:
             {
-                // Dragging the left edge eats into the source AND moves the clip, so the audio
-                // under the pointer stays put instead of sliding away. The two must be clamped
-                // together: the clip cannot start before timeline zero, so cap how much source the
-                // edge may give back, rather than clamping the offset separately and letting the
-                // audio slide later.
-                double deltaSource = deltaSeconds * _dragTrack.Speed;
-                double lowestStart = Math.Max(0, _dragStartSourceStart - _dragStartOffset * _dragTrack.Speed);
+                // Dragging the left edge eats into the source AND moves the section, so the audio
+                // under the pointer stays put instead of sliding away.
+                double deltaSource = deltaSeconds * speed;
+                double lowestStart = Math.Max(0, _dragStartSourceStart - _dragStartTrackStart);
                 double newStart = Math.Clamp(_dragStartSourceStart + deltaSource,
                                              lowestStart,
                                              Math.Max(lowestStart, _dragStartSourceEnd - 0.05));
                 double consumed = newStart - _dragStartSourceStart;
 
-                _dragTrack.SourceStartSeconds = newStart;
-                _dragTrack.TimelineOffsetSeconds = Math.Max(0, _dragStartOffset + consumed / _dragTrack.Speed);
-                _vm.Status = $"{_dragTrack.Name}: trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s";
+                _dragClip.SourceStartSeconds = newStart;
+                _dragClip.TrackStartSeconds = Math.Max(0, _dragStartTrackStart + consumed);
+                _vm.Status = $"{_dragTrack.Name}: section {_dragClip.LengthSeconds:0.0}s";
                 break;
             }
 
             case DragKind.TrimEnd:
             {
-                double deltaSource = deltaSeconds * _dragTrack.Speed;
-                double floor = Math.Min(_dragTrack.SourceStartSeconds + 0.05, _dragTrack.SourceDurationSeconds);
+                double deltaSource = deltaSeconds * speed;
+                double floor = Math.Min(_dragClip.SourceStartSeconds + 0.05, _dragClip.SourceDurationSeconds);
                 double newEnd = Math.Clamp(_dragStartSourceEnd + deltaSource,
                                            floor,
-                                           Math.Max(floor, _dragTrack.SourceDurationSeconds));
-                _dragTrack.SourceEndSeconds = newEnd;
-                _vm.Status = $"{_dragTrack.Name}: trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s";
+                                           Math.Max(floor, _dragClip.SourceDurationSeconds));
+                _dragClip.SourceEndSeconds = newEnd;
+                _vm.Status = $"{_dragTrack.Name}: section {_dragClip.LengthSeconds:0.0}s";
                 break;
             }
         }
 
         _vm.RecomputeLength();
     }
+
+    /// <summary>Where a position in the dragged track's own timebase sits on the timeline.</summary>
+    private double TimelineStartOf(double trackSeconds)
+        => (_dragTrack?.TimelineOffsetSeconds ?? 0) + trackSeconds / Math.Max(0.01, _dragTrack?.Speed ?? 1);
 
     /// <summary>
     /// Snaps to bar lines unless Ctrl is held. Mashups are assembled on bars, so snapping is the
@@ -698,13 +819,14 @@ public partial class MainWindow : Window
     {
         ((FrameworkElement)sender).ReleaseMouseCapture();
         _vm.EndGesture();
-        if (_dragging && _dragTrack is not null)
+        if (_dragging && _dragClip is not null && _dragTrack is not null)
         {
             _vm.Status = _dragKind == DragKind.Move
-                ? $"{_dragTrack.Name} moved to {_dragTrack.TimelineOffsetSeconds:0.00}s."
-                : $"{_dragTrack.Name} trimmed to {_dragTrack.TrimmedDurationSeconds:0.0}s.";
+                ? $"{_dragTrack.Name}: section moved to {_dragClip.TimelineStartSeconds:0.00}s."
+                : $"{_dragTrack.Name}: section is {_dragClip.LengthSeconds:0.0}s.";
         }
         _dragTrack = null;
+        _dragClip = null;
         _dragging = false;
     }
 
@@ -712,6 +834,13 @@ public partial class MainWindow : Window
 
     private static TrackViewModel? TrackOf(object sender)
         => (sender as FrameworkElement)?.DataContext as TrackViewModel;
+
+    /// <summary>
+    /// The section a menu item acts on: whichever one is selected on that track, which the
+    /// right-click itself just set.
+    /// </summary>
+    private ClipViewModel? ClipOf(object sender)
+        => TrackOf(sender)?.Clips.FirstOrDefault(c => c.IsSelected);
 
     /// <summary>
     /// Parses a menu Tag invariantly. These are literals in XAML, so they are always written with a
@@ -725,66 +854,79 @@ public partial class MainWindow : Window
 
     private void OnFadeIn(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        t.FadeInSeconds = TagSeconds(sender);
-        _vm.Status = $"{t.Name}: {t.FadeText}.";
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        _vm.PushUndo("fade in", null);
+        c.FadeInSeconds = TagSeconds(sender);
+        _vm.Status = $"{c.Track.Name}: {c.FadeText}.";
     }
 
     private void OnFadeOut(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        t.FadeOutSeconds = TagSeconds(sender);
-        _vm.Status = $"{t.Name}: {t.FadeText}.";
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        _vm.PushUndo("fade out", null);
+        c.FadeOutSeconds = TagSeconds(sender);
+        _vm.Status = $"{c.Track.Name}: {c.FadeText}.";
     }
 
     private void OnTrimStartToPlayhead(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed;
-        if (into <= 0) { _vm.Status = "The playhead is before this clip."; return; }
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        double into = (_vm.PositionSeconds - c.TimelineStartSeconds) * c.Track.Speed;
+        if (into <= 0) { _vm.Status = "The playhead is before this section."; return; }
 
-        // Clamp against this clip's own end, not the whole file's. Past it, the trim would invert
-        // and the clip would vanish entirely.
-        double end = t.SourceEndSeconds < 0 ? t.SourceDurationSeconds : t.SourceEndSeconds;
-        if (t.SourceStartSeconds + into >= end - 0.05)
+        // Clamp against this section's own end, not the whole file's. Past it, the trim would
+        // invert and the section would vanish entirely.
+        double end = c.SourceEndSeconds < 0 ? c.SourceDurationSeconds : c.SourceEndSeconds;
+        if (c.SourceStartSeconds + into >= end - 0.05)
         {
-            _vm.Status = "The playhead is past the end of this clip.";
+            _vm.Status = "The playhead is past the end of this section.";
             return;
         }
 
-        t.SourceStartSeconds = t.SourceStartSeconds + into;
-        t.TimelineOffsetSeconds = _vm.PositionSeconds;
+        _vm.PushUndo("trim", null);
+        c.SourceStartSeconds += into;
+        c.TrackStartSeconds += into;
         _vm.RecomputeLength();
-        _vm.Status = $"{t.Name}: {t.TrimText}.";
+        _vm.Status = $"{c.Track.Name}: {c.TrimText}.";
     }
 
     private void OnTrimEndToPlayhead(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        double into = (_vm.PositionSeconds - t.TimelineOffsetSeconds) * t.Speed + t.SourceStartSeconds;
-        if (into <= t.SourceStartSeconds + 0.05) { _vm.Status = "The playhead is at or before the clip's start."; return; }
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        double into = (_vm.PositionSeconds - c.TimelineStartSeconds) * c.Track.Speed + c.SourceStartSeconds;
+        if (into <= c.SourceStartSeconds + 0.05) { _vm.Status = "The playhead is at or before the section's start."; return; }
 
-        t.SourceEndSeconds = Math.Min(into, t.SourceDurationSeconds);
+        _vm.PushUndo("trim", null);
+        c.SourceEndSeconds = Math.Min(into, c.SourceDurationSeconds);
         _vm.RecomputeLength();
-        _vm.Status = $"{t.Name}: {t.TrimText}.";
+        _vm.Status = $"{c.Track.Name}: {c.TrimText}.";
     }
 
     private void OnClearTrim(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        t.SourceStartSeconds = 0;
-        t.SourceEndSeconds = -1;
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        _vm.PushUndo("clear trim", null);
+        c.SourceStartSeconds = 0;
+        c.SourceEndSeconds = -1;
         _vm.RecomputeLength();
-        _vm.Status = $"{t.Name}: full length restored.";
+        _vm.Status = $"{c.Track.Name}: full length restored.";
     }
 
     private void OnMoveToPlayhead(object sender, RoutedEventArgs e)
     {
-        if (TrackOf(sender) is not { } t) return;
-        t.TimelineOffsetSeconds = _vm.PositionSeconds;
+        if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
+        _vm.PushUndo("move", null);
+        c.TrackStartSeconds = Math.Max(0, (_vm.PositionSeconds - c.Track.TimelineOffsetSeconds) * c.Track.Speed);
         _vm.RecomputeLength();
-        _vm.Status = $"{t.Name} moved to {t.TimelineOffsetSeconds:0.00}s.";
+        _vm.Status = $"{c.Track.Name}: section moved to {c.TimelineStartSeconds:0.00}s.";
     }
+
+    private void OnSplitHere(object sender, RoutedEventArgs e) => _vm.SplitAtPlayheadCommand.Execute(null);
+    private void OnCutSection(object sender, RoutedEventArgs e) => _vm.CutClipCommand.Execute(null);
+    private void OnCopySection(object sender, RoutedEventArgs e) => _vm.CopyClipCommand.Execute(null);
+    private void OnPasteSection(object sender, RoutedEventArgs e) => _vm.PasteClipCommand.Execute(null);
+    private void OnDuplicateSection(object sender, RoutedEventArgs e) => _vm.DuplicateClipCommand.Execute(null);
+    private void OnDeleteSection(object sender, RoutedEventArgs e) => _vm.DeleteClipCommand.Execute(null);
 
     // ---------------- right-drag: pan the timeline ----------------
 

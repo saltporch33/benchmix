@@ -53,40 +53,70 @@ public sealed partial class TrackViewModel : ObservableObject
     [ObservableProperty] private bool _muted;
     [ObservableProperty] private bool _soloed;
     [ObservableProperty] private double _timelineOffsetSeconds;
-    [ObservableProperty] private double _sourceStartSeconds;
-    [ObservableProperty] private double _sourceEndSeconds = -1;
-    [ObservableProperty] private double _fadeInSeconds;
-    [ObservableProperty] private double _fadeOutSeconds;
     [ObservableProperty] private bool _linkPitchToTempo;
     [ObservableProperty] private bool _preserveFormants = true;
     [ObservableProperty] private float _meterLevel;
 
-    public PeakData? Peaks => _session.ClipFor(Model)?.EnsurePeaks();
-    public double SourceDurationSeconds => _session.ClipFor(Model)?.DurationSeconds ?? 0;
+    /// <summary>This track's sections, in playing order.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ClipViewModel> Clips { get; } = new();
 
-    /// <summary>How much of the source this clip actually uses, after trimming.</summary>
-    public double TrimmedDurationSeconds
+    /// <summary>
+    /// What the lane draws, as one immutable array.
+    ///
+    /// It is rebuilt rather than mutated because WPF only repaints a dependency property when the
+    /// value it is bound to CHANGES — editing a list in place leaves the reference identical and
+    /// the waveform stale.
+    /// </summary>
+    public IReadOnlyList<Controls.ClipVisual> ClipVisuals { get; private set; } = Array.Empty<Controls.ClipVisual>();
+
+    /// <summary>Rebuilds the section view-models from the model, keeping the selected one selected.</summary>
+    public void RebuildClips()
     {
-        get
+        var selected = Clips.FirstOrDefault(c => c.IsSelected)?.Id;
+        Clips.Clear();
+        foreach (var m in Model.Clips)
         {
-            double end = SourceEndSeconds < 0 ? SourceDurationSeconds : Math.Min(SourceEndSeconds, SourceDurationSeconds);
-            return Math.Max(0, end - Math.Max(0, SourceStartSeconds));
+            var vm = new ClipViewModel(_session, this, m, _onChanged);
+            if (m.Id == selected) vm.IsSelected = true;
+            Clips.Add(vm);
         }
+        NotifyClipsChanged();
     }
 
-    /// <summary>How long it occupies the timeline, i.e. after trimming and after the speed change.</summary>
-    public double TimelineDurationSeconds => TrimmedDurationSeconds / Math.Max(0.01, Speed);
+    /// <summary>Republishes what the lane draws. Called after anything structural.</summary>
+    public void NotifyClipsChanged()
+    {
+        ClipVisuals = Clips.Select(c => new Controls.ClipVisual(
+            c.Peaks, c.SampleRate, c.TimelineStartSeconds, c.SourceStartSeconds,
+            c.SourceEndSeconds < 0 ? c.SourceDurationSeconds : c.SourceEndSeconds,
+            Speed, c.IsSelected, c.IsForeign)).ToArray();
 
-    public bool IsTrimmed => SourceStartSeconds > 0.0001
-        || (SourceEndSeconds >= 0 && SourceEndSeconds < SourceDurationSeconds - 0.0001);
+        OnPropertyChanged(nameof(ClipVisuals));
+        OnPropertyChanged(nameof(TimelineDurationSeconds));
+        OnPropertyChanged(nameof(TrimText));
+    }
 
-    public string TrimText => IsTrimmed
-        ? $"trimmed {TrimmedDurationSeconds:0.0}s of {SourceDurationSeconds:0.0}s"
-        : $"{SourceDurationSeconds:0.0}s";
+    /// <summary>The whole song this track is about, for the strip's readouts.</summary>
+    public double SourceDurationSeconds => _session.ClipFor(Model)?.DurationSeconds ?? 0;
 
-    public string FadeText => FadeInSeconds <= 0 && FadeOutSeconds <= 0
-        ? "no fades"
-        : $"fade {FadeInSeconds:0.#}s / {FadeOutSeconds:0.#}s";
+    /// <summary>How far this track reaches on the timeline, sections and gaps included.</summary>
+    public double TimelineDurationSeconds
+        => Model.Clips.Count == 0 ? 0
+         : Clips.Count == 0 ? 0
+         : Clips.Max(c => c.TimelineEndSeconds) - TimelineOffsetSeconds;
+
+    public bool IsTrimmed => Model.Clips.Count != 1
+        || Model.Clips[0].SourceStartSeconds > 0.0001
+        || (Model.Clips[0].SourceEndSeconds >= 0
+            && Model.Clips[0].SourceEndSeconds < SourceDurationSeconds - 0.0001);
+
+    public string TrimText => Model.Clips.Count switch
+    {
+        0 => "empty",
+        1 => IsTrimmed ? $"trimmed to {Clips.FirstOrDefault()?.LengthSeconds ?? 0:0.0}s" : $"{SourceDurationSeconds:0.0}s",
+        var n => $"{n} sections",
+    };
+
     public int SampleRate => _session.SampleRate;
 
     public Brush ColorBrush => Brushed(Model.ColorHex, 255);
@@ -149,10 +179,6 @@ public sealed partial class TrackViewModel : ObservableObject
         _muted = Model.Muted;
         _soloed = Model.Soloed;
         _timelineOffsetSeconds = Model.TimelineOffsetSeconds;
-        _sourceStartSeconds = Model.SourceStartSeconds;
-        _sourceEndSeconds = Model.SourceEndSeconds;
-        _fadeInSeconds = Model.FadeInSeconds;
-        _fadeOutSeconds = Model.FadeOutSeconds;
         _linkPitchToTempo = Model.Mode == StretchMode.Linked;
         _preserveFormants = Model.PreserveFormants;
         OnPropertyChanged(string.Empty);
@@ -163,7 +189,7 @@ public sealed partial class TrackViewModel : ObservableObject
     {
         IsLoaded = true;
         LoadError = null;
-        OnPropertyChanged(nameof(Peaks));
+        RebuildClips();
         OnPropertyChanged(nameof(SourceDurationSeconds));
         OnPropertyChanged(nameof(TimelineDurationSeconds));
     }
@@ -181,7 +207,7 @@ public sealed partial class TrackViewModel : ObservableObject
         OnPropertyChanged(nameof(PlayingBpm));
         OnPropertyChanged(nameof(BpmText));
         OnPropertyChanged(nameof(SemitonesText));
-        OnPropertyChanged(nameof(TimelineDurationSeconds));
+        NotifyClipsChanged();
     }
 
     partial void OnSemitonesChanged(double value)
@@ -217,45 +243,12 @@ public sealed partial class TrackViewModel : ObservableObject
         Snapshot("position");
         Model.TimelineOffsetSeconds = Math.Max(0, value);
         Push();
+        NotifyClipsChanged();
     }
 
-    partial void OnSourceStartSecondsChanged(double value)
-    {
-        Snapshot("trim");
-        Model.SourceStartSeconds = Math.Max(0, value);
-        Push();
-        NotifyTrimChanged();
-    }
 
-    partial void OnSourceEndSecondsChanged(double value)
-    {
-        Snapshot("trim");
-        Model.SourceEndSeconds = value;
-        Push();
-        NotifyTrimChanged();
-    }
 
-    partial void OnFadeInSecondsChanged(double value)
-    {
-        Model.FadeInSeconds = Math.Max(0, value);
-        Push();
-        OnPropertyChanged(nameof(FadeText));
-    }
 
-    partial void OnFadeOutSecondsChanged(double value)
-    {
-        Model.FadeOutSeconds = Math.Max(0, value);
-        Push();
-        OnPropertyChanged(nameof(FadeText));
-    }
-
-    private void NotifyTrimChanged()
-    {
-        OnPropertyChanged(nameof(TrimmedDurationSeconds));
-        OnPropertyChanged(nameof(TimelineDurationSeconds));
-        OnPropertyChanged(nameof(IsTrimmed));
-        OnPropertyChanged(nameof(TrimText));
-    }
 
     partial void OnLinkPitchToTempoChanged(bool value)
     {

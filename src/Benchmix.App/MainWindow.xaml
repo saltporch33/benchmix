@@ -21,6 +21,16 @@
         <KeyBinding Key="OemPlus" Modifiers="Ctrl" Command="{Binding ZoomInCommand}"/>
         <KeyBinding Key="OemMinus" Modifiers="Ctrl" Command="{Binding ZoomOutCommand}"/>
         <KeyBinding Key="D0" Modifiers="Ctrl" Command="{Binding ZoomFitCommand}"/>
+
+        <!-- Sections. Every one is Ctrl-modified on purpose: a bare-key binding on the Window
+             fires from inside the PROJECT BPM box too, because a TextBox does not mark a plain
+             character's KeyDown as handled. Binding Delete or S here would make editing that box
+             destructive. -->
+        <KeyBinding Key="I" Modifiers="Ctrl" Command="{Binding SplitAtPlayheadCommand}"/>
+        <KeyBinding Key="X" Modifiers="Ctrl" Command="{Binding CutClipCommand}"/>
+        <KeyBinding Key="C" Modifiers="Ctrl" Command="{Binding CopyClipCommand}"/>
+        <KeyBinding Key="V" Modifiers="Ctrl" Command="{Binding PasteClipCommand}"/>
+        <KeyBinding Key="D" Modifiers="Ctrl" Command="{Binding DuplicateClipCommand}"/>
     </Window.InputBindings>
 
     <Grid>
@@ -276,7 +286,15 @@
                                             <MenuItem Header="Trim end to playhead"   Click="OnTrimEndToPlayhead"/>
                                             <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
                                             <Separator/>
-                                            <MenuItem Header="Move clip to playhead"  Click="OnMoveToPlayhead"/>
+                                            <MenuItem Header="Split at playhead"      Click="OnSplitHere"      InputGestureText="Ctrl+I"/>
+                                            <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D"/>
+                                            <Separator/>
+                                            <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X"/>
+                                            <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C"/>
+                                            <MenuItem Header="Paste at playhead"      Click="OnPasteSection"   InputGestureText="Ctrl+V"/>
+                                            <MenuItem Header="Delete section"         Click="OnDeleteSection"/>
+                                            <Separator/>
+                                            <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
                                             <Separator/>
                                             <MenuItem Header="Split into vocals + instrumental"
                                                       Command="{Binding DataContext.SplitStemsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -286,15 +304,9 @@
                                     </Border.ContextMenu>
                                     <Grid>
                                         <c:WaveformView
-                                            Peaks="{Binding Peaks}"
-                                            SampleRate="{Binding SampleRate}"
+                                            Clips="{Binding ClipVisuals}"
                                             PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
                                             ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            ClipOffsetSeconds="{Binding TimelineOffsetSeconds}"
-                                            SourceStartSeconds="{Binding SourceStartSeconds}"
-                                            SourceEndSeconds="{Binding SourceEndSeconds}"
-                                            Speed="{Binding Speed}"
-                                            IsSelected="{Binding IsSelected}"
                                             IsMuted="{Binding Muted}"
                                             WaveBrush="{Binding ColorBrush}"
                                             ClipBackground="{Binding ClipBackground}"/>

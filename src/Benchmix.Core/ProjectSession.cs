@@ -344,17 +344,26 @@ public sealed class ProjectSession : IDisposable
         ApplyAll();
     }
 
-    /// <summary>Loads a project's audio, replacing whatever is open.</summary>
+    /// <summary>
+    /// Loads a project's audio, replacing whatever is open.
+    ///
+    /// <para>
+    /// Already-decoded audio is deliberately kept. Undo and redo come through here, and an undo of
+    /// a section edit changes no audio at all — dropping the cache would re-decode every song from
+    /// disk to put a clip back where it was, which on a four-minute file is a multi-second stall on
+    /// every Ctrl+Z. Anything the new project no longer refers to is released afterwards.
+    /// </para>
+    /// </summary>
     public async Task OpenAsync(BenchmixProject project, CancellationToken cancel = default)
     {
         Graph.Clear();
         _voices.Clear();
-        _clips.Clear();
 
         Project = project;
         foreach (var t in project.Tracks)
             await LoadAudioAsync(t, cancel);
 
+        ReleaseUnusedClips();
         ApplyAll();
         Engine.Seek(0);
     }
