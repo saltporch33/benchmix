@@ -54,6 +54,13 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (App.LatencyCheck)
+        {
+            RunLatencyCheck();
+            EndVerificationRun();
+            return;
+        }
+
         if (App.GestureTest)
         {
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
@@ -158,6 +165,69 @@ public partial class MainWindow : Window
 
         _vm.StopCommand.Execute(null);
         EndVerificationRun();
+    }
+
+    /// <summary>
+    /// Measures how far a pitched track lands from an untouched one, inside the shipped exe.
+    ///
+    /// Synthetic audio, no file needed: half a second of silence then a tone, rendered twice —
+    /// once straight through, once through the phase vocoder. The onset of each is unambiguous,
+    /// and the gap between them is the thing that was 7200 frames wrong.
+    /// </summary>
+    private static void RunLatencyCheck()
+    {
+        const int Rate = 48000;
+        const int SilentFrames = Rate / 2;
+
+        var samples = new float[Rate * 2 * 2];
+        for (int f = SilentFrames; f < Rate * 2; f++)
+        {
+            float v = (float)(0.7 * Math.Sin(2 * Math.PI * 1000 * (f - SilentFrames) / Rate));
+            samples[f * 2] = v;
+            samples[f * 2 + 1] = v;
+        }
+        var clip = Benchmix.Engine.Audio.AudioClip.FromSamples("latency", samples, Rate);
+
+        static int Onset(Action<Benchmix.Engine.Audio.TrackVoice> configure,
+                         Benchmix.Engine.Audio.AudioClip clip, int frames)
+        {
+            using var graph = new Benchmix.Engine.Audio.MixGraph(Rate);
+            var t = graph.AddTrack();
+            t.SetClip(clip);
+            configure(t);
+            graph.LimiterEnabled = false;
+            graph.Seek(0);
+            graph.SnapParameters();
+
+            var buf = new float[frames * 2];
+            for (int done = 0; done < frames;)
+            {
+                int n = Math.Min(4096, frames - done);
+                graph.Render(buf.AsSpan(done * 2, n * 2), n);
+                done += n;
+            }
+            for (int f = 0; f < frames; f++) if (Math.Abs(buf[f * 2]) > 0.05f) return f;
+            return -1;
+        }
+
+        try
+        {
+            int plain = Onset(_ => { }, clip, Rate * 2);
+            int pitched = Onset(t =>
+            {
+                t.Mode = Benchmix.Engine.Audio.StretchMode.Independent;
+                t.Semitones = 0.01;
+            }, clip, Rate * 2);
+
+            int drift = pitched - plain;
+            App.Log($"latencycheck: untouched onset={plain} pitched onset={pitched} "
+                  + $"drift={drift} frames ({drift * 1000.0 / Rate:F1} ms)");
+            App.Log($"latencycheck: verdict={(Math.Abs(drift) < 256 && plain > 0 ? "PASS - the two land together in the published exe" : $"FAIL - {drift} frames apart")}");
+        }
+        catch (Exception ex)
+        {
+            App.Log("latencycheck: FAILED - " + ex);
+        }
     }
 
     /// <summary>

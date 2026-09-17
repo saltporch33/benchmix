@@ -51,6 +51,16 @@ public partial class App : Application
     /// </summary>
     public static bool GestureTest { get; private set; }
 
+    /// <summary>
+    /// Renders a pitched track and an untouched one and logs how far apart they land, then exits.
+    ///
+    /// The compensation for the phase vocoder's latency reaches into the native library through a
+    /// P/Invoke that nothing else uses, and a single-file self-contained exe is exactly where a new
+    /// native entry point fails to resolve. Proving it in the tests proves it in the dev build; this
+    /// proves it in the thing actually on Daniel's machine.
+    /// </summary>
+    public static bool LatencyCheck { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -91,6 +101,9 @@ public partial class App : Application
                     break;
                 case "--gesturetest":
                     GestureTest = true;
+                    break;
+                case "--latencycheck":
+                    LatencyCheck = true;
                     break;
                 case "--stemtest":
                     if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];
