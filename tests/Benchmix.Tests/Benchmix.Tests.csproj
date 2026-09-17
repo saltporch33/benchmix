@@ -13,4 +13,11 @@
     <ProjectReference Include="..\..\src\Benchmix.Core\Benchmix.Core.csproj" />
     <ProjectReference Include="..\..\src\Benchmix.Engine\Benchmix.Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- A real project file, captured the day before sections existed. It is the only evidence
+         that opening a version 1 project preserves a mix somebody actually built and would notice
+         being wrong, so it is committed rather than read from Daniel's working folder - that file
+         is live and he edits it. -->
+    <None Update="fixtures\*.benchmix" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

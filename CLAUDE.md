@@ -1,0 +1,114 @@
+# Benchmix — read this first
+
+An offline mashup editor for Daniel Mackey. `README.md` says what it is, `docs/DESIGN.md` is the
+architecture, `docs/DECISIONS.md` what was decided and why, `docs/VERIFICATION.md` the evidence.
+
+This file only covers what a confident first read gets **wrong**. It earns its place by preventing
+mistakes, not by describing the project.
+
+## Things that look like bugs and are not
+
+- **Cut and delete leave a hole. They never ripple.** Audacity closes the gap; this deliberately
+  does not. Two songs are aligned by ear, and sliding one along pulls it out of time with every
+  other deck — silently, usually unnoticed until thirty seconds later in the mix.
+- **Sections on one track never overlap**, and paste overwrites what is under it. A track is one
+  read position, one stretcher and one EQ; two sections sounding at once is not representable.
+  Two things at once is a second track.
+- **Splitting a section and moving neither half changes not one sample.** That is the *seam rule*
+  (`VoiceClip.JoinsSeamlesslyTo`) and it is load-bearing — it is why hand-built loops do not tick.
+  It rests on an **exact** equality between one section's `SourceEnd` and the next one's
+  `SourceStart`. Do not "improve" it with a tolerance: that would start suppressing declicks
+  between sections the user meant to be separate.
+- **Neither side of a butt join gets a declick.** Two abutting 5 ms ramps do not sum to unity —
+  they punch a hole at every loop repeat. The join is covered by a crossfade against the outgoing
+  section's handle, or on the vocoder path by the stretcher's own overlap-add.
+- **Build output goes to `%LOCALAPPDATA%\Benchmix.build\`** on purpose, to keep bin/obj out of
+  OneDrive *and* because the native `SignalsmithStretch.dll` fails to load from a deep path
+  (MAX_PATH). Do not "fix" it.
+- **`--playtest` runs at master zero** and `--uiprobe` uses `RenderTargetBitmap` rather than a
+  screen grab. Daniel uses this machine while work happens here. Nothing may steal focus, make
+  noise, or photograph his desktop.
+
+## Two words that mean two different things
+
+- A **loop** is either hand-built (Ctrl+D repeating a section) or the transport loop region
+  (shift-drag the ruler, listening only). They share no code. "My loop does X" is ambiguous — ask.
+- A **repeat is not a seam.** The seam rule needs the source to continue; a repeat jumps the source
+  backwards. Every seam test is about splitting and *not* moving. They do not cover loops.
+
+## How to prove a change
+
+No CI. Every gate is a human typing a command.
+
+```bash
+dotnet test        # bar: 0 failed AND 0 skipped
+```
+
+Anything touching native interop, timing or the stretcher must **also** be proved in the published
+single-file exe — that is where a new P/Invoke fails to resolve and nowhere else:
+
+```bash
+dotnet publish src/Benchmix.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
+```
+
+Then, against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe`:
+
+| Switch | Proves |
+| --- | --- |
+| `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
+| `--gesturetest <song>` | pan, double-click-to-play and every section command, 27 checks |
+| `--demosections --uiprobe <png>` | the lane really draws sections and selection |
+| `--loadcheck <songs>` | tracks are actually ready to split into stems |
+| `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
+| `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent) |
+
+These **exit 1 on failure** and also log a `verdict=` line to
+`%LOCALAPPDATA%\Benchmix\benchmix.log`. Close any running Benchmix first — it locks the exe.
+
+### Test house style — copy it or the test will lie
+
+- **Never a constant tone for anything positional.** The first regression test for the clip-offset
+  bug used one and passed against the very bug it was written for. Use a ramp (value == position)
+  or a single marker sample.
+- **Measure a processed track against an unprocessed one**, never a number in isolation. The
+  150 ms stretcher delay survived for months because every test checked *what note* came out and
+  none checked *when*.
+- Where the invariant is exactness, assert `==`, not a tolerance.
+- One regression test per fixed defect, named for the behaviour that was wrong, with an assertion
+  message stating the musical consequence.
+
+## Decided — do not quietly reopen
+
+`docs/DECISIONS.md` has the full list and the reasoning. The ones most likely to be reopened:
+
+- **Not an Audacity fork or wrapper.** Investigated and rejected with five reasons.
+- **Offline editor, not a live DJ app and not a DAW.** No effects, plugins, automation or MIDI.
+- **Stems are an option beside the EQ, never a replacement** — *"But not Asa a replacement for the
+  eq knobs."*
+- **One signal path** for preview and render. A second implementation is not permitted.
+- **An untouched track is bit-identical — with the limiter OFF.** The limiter is on by default and
+  does attenuate a loud track. Overstating this is a logged mistake with its own test.
+- **Every editing shortcut is Ctrl-modified**, because a bare key bound on the Window also fires
+  from inside the PROJECT BPM TextBox.
+- **Nothing touches his own music files without an explicit yes.** Tag write-back is offered, not
+  done.
+
+Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that rule.
+
+## Unproven — say so rather than implying otherwise
+
+- **Nobody has ever listened to Benchmix's output.** Every claim in this repo is a measurement.
+  Measurements can be right about the wrong thing. Do not say something "sounds" any way.
+- The vocoder path's behaviour at a genuine (non-seam) join is reasoned about, not measured.
+- Stem separation quality is proven only by a 39 dB control test, not by ear.
+
+## Working with Daniel
+
+- Lead with the answer; he skims. No internal vocabulary.
+- **When a turn ends blocked on him, call `PushNotification` and say plainly that work has
+  stopped.** A question buried in a long report reads as "still working". He has asked for this
+  three times.
+- Prefer deciding on a stated default over stopping to ask.
+- A status question wants a status answer, not an audit.
+
+*Revised 2026-09-17.*

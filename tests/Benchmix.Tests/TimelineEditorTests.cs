@@ -270,21 +270,26 @@ public class TimelineEditorTests : IDisposable
     }
 
     /// <summary>
-    /// The real project on this machine, if it is there. A hand-written version 1 file proves the
-    /// migration arithmetic; this proves it against something somebody actually built and would
-    /// notice being wrong.
+    /// A real version 1 project, opened.
+    ///
+    /// <para>
+    /// A hand-written file proves the arithmetic; this proves it against a mix somebody actually
+    /// built and would notice being wrong. It is a committed fixture rather than a path into
+    /// Daniel's working folder: the first version of this test pinned the live file, and it broke
+    /// the moment he opened Benchmix and edited it. A test that fails because the user did some
+    /// work is a bad test, and worse, the obvious repair — pasting the new numbers into the
+    /// assertions — would have quietly destroyed the only evidence that the migration works.
+    /// </para>
     /// </summary>
-    [SkippableFact]
-    public void TheRealKhaledTygaProjectStillOpensUnchanged()
+    [Fact]
+    public void ARealVersionOneProjectOpensWithItsMixIntact()
     {
-        var path = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            "OneDrive", "Documents", "Mixes", "Benchmix", "Khaled_Tyga.benchmix");
-        Skip.IfNot(File.Exists(path), "the reference project is not on this machine");
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "khaled-tyga-v1.benchmix");
+        Assert.True(File.Exists(path), $"the fixture is missing from the build output: {path}");
 
         var project = ProjectStore.Load(path).Project;
 
-        Assert.Equal(2, project.SchemaVersion);
+        Assert.Equal(BenchmixProject.CurrentSchemaVersion, project.SchemaVersion);
         Assert.Equal(3, project.Tracks.Count);
 
         // Three tracks, each one uninterrupted section, exactly where they were.
@@ -292,7 +297,8 @@ public class TimelineEditorTests : IDisposable
         {
             Assert.Single(t.Clips);
             Assert.Equal(0, t.Clips[0].TrackStartSeconds);
-            Assert.Null(t.SourceStartSeconds);
+            Assert.Null(t.SourceStartSeconds);          // the superseded field is gone, not zeroed
+            Assert.Equal(t.SourcePath, t.Clips[0].SourcePath);
         }
 
         // The second Taste section: 206.54 to 228.60 of the song, dropped at 215.42 with its bass
@@ -302,6 +308,9 @@ public class TimelineEditorTests : IDisposable
         Assert.Equal(206.53857868654737, taste2.Clips[0].SourceStartSeconds, 9);
         Assert.Equal(228.60413797342935, taste2.Clips[0].SourceEndSeconds, 9);
         Assert.True(taste2.EqLow <= 0.0001, $"the killed LOW came back as {taste2.EqLow}");
+
+        // Khalid runs to the end of its file, which version 1 spelled as -1 and so does version 2.
+        Assert.True(project.Tracks[1].Clips[0].SourceEndSeconds < 0);
     }
 
     [Fact]

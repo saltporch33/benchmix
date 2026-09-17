@@ -99,7 +99,7 @@ Automation, runs minimised and never steals focus:
 powershell -ExecutionPolicy Bypass -File scripts/ui-verify.ps1
 ```
 
-The app also has three switches used for verification: `--uiprobe <png>` renders the live window
+The app also has several switches used for verification (the authoritative list is the switch block in `src/Benchmix.App/App.xaml.cs`): `--uiprobe <png>` renders the live window
 to a file, `--playtest <seconds>` checks the audio device is pulling in realtime (silently), and
 `--autoclose <seconds>` closes it again. Passing file paths preloads them as tracks.
 

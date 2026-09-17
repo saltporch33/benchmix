@@ -127,8 +127,11 @@ would be right for a large model and would only add ways to be wrong here.
 
 ## Known limits
 
-- **One clip per track.** Enough for mashups; a second clip means a second track.
+- **Sections on one track never overlap.** A track is one read position, one stretcher and one EQ;
+  two sections sounding at once is not representable in that. Two things at once is a second track.
+- **No per-section EQ, volume or speed.** Those belong to the track, so every section on it gets
+  the same treatment. A section that needs its own EQ wants its own track.
 - **No automation curves.** Knobs are static per track; fades are per clip.
 - **Key detection is 47%.** Documented, surfaced, and worked around rather than hidden.
-- **No stem separation yet** — see `DECISIONS.md` for where that stands.
+- **No effects** — no reverb, delay, compression or plugins, by design.
 - **Memory grows with track count.** Eight 4-minute tracks is roughly 740 MB.

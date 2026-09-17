@@ -73,7 +73,7 @@ Recorded so they are visible and reversible, not buried in code.
 | **Key values always labelled as estimates** | Mine is 47% accurate. Presenting that as fact would be a lie the tool tells hourly. |
 | **Chroma cross-correlation NOT implemented** | The research round recommended it; measuring it over 888 pairs put it at or below random chance. |
 | **Clips held fully in RAM** | ~92 MB per 4-minute stereo track against 32 GB. Makes every seek, loop and scrub free. |
-| **Per-track stretch, not per-clip** | Matches the mental model of a deck with one tempo fader. One clip per track for now. |
+| **Per-track stretch, not per-clip** | Matches the mental model of a deck with one tempo fader. Still true now that a track holds several sections: tempo, pitch and EQ belong to the track, and a section pasted from another song takes them on. |
 | **5 ms declick on trimmed edges only** | Cutting into a waveform lands on a non-zero sample, which clicks. Untrimmed clips get no ramp, which is what preserves bit-exact passthrough. |
 | **Snap clips to bars by default**, Ctrl to override | Mashups are assembled on bar lines. |
 | **Self-contained single-file exe** (68.5 MB) | He asked for "one .exe, keep it clean". Self-contained means it keeps working even if the .NET SDK is ever removed. |

@@ -49,23 +49,22 @@ public partial class MainWindow : Window
         {
             foreach (var t in _vm.Tracks)
                 App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} sections={t.Clips.Count} peaks={(t.Clips.Any(c => c.Peaks is not null) ? "yes" : "no")}");
-            App.Log($"loadcheck: verdict={(_vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded) ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
-            EndVerificationRun();
+            bool allLoaded = _vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded);
+            App.Log($"loadcheck: verdict={(allLoaded ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
+            EndVerificationRun(allLoaded);
             return;
         }
 
         if (App.LatencyCheck)
         {
-            RunLatencyCheck();
-            EndVerificationRun();
+            EndVerificationRun(RunLatencyCheck());
             return;
         }
 
         if (App.GestureTest)
         {
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
-            RunGestureTest();
-            EndVerificationRun();
+            EndVerificationRun(RunGestureTest());
             return;
         }
 
@@ -139,13 +138,16 @@ public partial class MainWindow : Window
                   + $"bandlimit={result.BandLimitHz:F0}Hz");
             App.Log($"stemtest: mix={Db(clip.Samples):F1}dB vocals={Db(result.Primary.Samples):F1}dB "
                   + $"instrumental={Db(result.Secondary.Samples):F1}dB");
-            App.Log($"stemtest: verdict={(Db(result.Primary.Samples) > -100 ? "PASS - separation ran in the published app" : "FAIL - vocals stem is silent")}");
+            bool separated = Db(result.Primary.Samples) > -100;
+            App.Log($"stemtest: verdict={(separated ? "PASS - separation ran in the published app" : "FAIL - vocals stem is silent")}");
+            EndVerificationRun(separated);
+            return;
         }
         catch (Exception ex)
         {
             App.Log("stemtest: FAILED - " + ex);
         }
-        EndVerificationRun();
+        EndVerificationRun(false);
     }
 
     /// <summary>
@@ -175,10 +177,11 @@ public partial class MainWindow : Window
         double ratio = advancedSeconds / sw.Elapsed.TotalSeconds;
 
         App.Log($"playtest: wall={sw.Elapsed.TotalSeconds:F2}s audio-advanced={advancedSeconds:F2}s ratio={ratio:F3}");
-        App.Log($"playtest: state={s.Engine.State} verdict={(ratio is > 0.95 and < 1.05 ? "PASS - device is pulling in realtime" : "FAIL - stream is not running at realtime")}");
+        bool realtime = ratio is > 0.95 and < 1.05;
+        App.Log($"playtest: state={s.Engine.State} verdict={(realtime ? "PASS - device is pulling in realtime" : "FAIL - stream is not running at realtime")}");
 
         _vm.StopCommand.Execute(null);
-        EndVerificationRun();
+        EndVerificationRun(realtime);
     }
 
     /// <summary>
@@ -188,7 +191,7 @@ public partial class MainWindow : Window
     /// once straight through, once through the phase vocoder. The onset of each is unambiguous,
     /// and the gap between them is the thing that was 7200 frames wrong.
     /// </summary>
-    private static void RunLatencyCheck()
+    private static bool RunLatencyCheck()
     {
         const int Rate = 48000;
         const int SilentFrames = Rate / 2;
@@ -236,11 +239,14 @@ public partial class MainWindow : Window
             int drift = pitched - plain;
             App.Log($"latencycheck: untouched onset={plain} pitched onset={pitched} "
                   + $"drift={drift} frames ({drift * 1000.0 / Rate:F1} ms)");
-            App.Log($"latencycheck: verdict={(Math.Abs(drift) < 256 && plain > 0 ? "PASS - the two land together in the published exe" : $"FAIL - {drift} frames apart")}");
+            bool aligned = Math.Abs(drift) < 256 && plain > 0;
+            App.Log($"latencycheck: verdict={(aligned ? "PASS - the two land together in the published exe" : $"FAIL - {drift} frames apart")}");
+            return aligned;
         }
         catch (Exception ex)
         {
             App.Log("latencycheck: FAILED - " + ex);
+            return false;
         }
     }
 
@@ -262,7 +268,7 @@ public partial class MainWindow : Window
     /// pointer, and logs what each one did. No physical input is synthesised, so this can run while
     /// someone else is using the machine.
     /// </summary>
-    private void RunGestureTest()
+    private bool RunGestureTest()
     {
         var pass = new List<string>();
         var fail = new List<string>();
@@ -449,22 +455,29 @@ public partial class MainWindow : Window
         foreach (var p in pass) App.Log("gesturetest: PASS - " + p);
         foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
+        return fail.Count == 0;
     }
 
     /// <summary>
-    /// Ends a <c>--gesturetest</c> / <c>--loadcheck</c> / <c>--stemtest</c> / <c>--playtest</c> /
-    /// <c>--uiprobe</c> run.
+    /// Ends a verification run, carrying its verdict into the process exit code.
     ///
-    /// Shutdown() alone is not enough from inside Loaded: measured, the process was still alive an
-    /// hour later, still holding the audio device and the exe — which is how a later build failed
-    /// with a file lock. Closing the window normally does exit (<c>--autoclose 3</c> terminates on
-    /// its own), so this is about the switches, not about the app. A switch whose entire job is to
-    /// log an answer and go away is allowed to insist.
+    /// <para>
+    /// The exit code is the point. Every one of these switches used to exit 0 whether it passed or
+    /// failed, so the PASS/FAIL line in the log was the only evidence — fine while a person is
+    /// reading the log, useless to anything that is not.
+    /// </para>
+    /// <para>
+    /// Shutdown() alone is also not enough from inside Loaded: measured, the process was still
+    /// alive an hour later, still holding the audio device and the exe — which is how a later build
+    /// failed with a file lock. Closing the window normally does exit, so the watchdog is about the
+    /// switches rather than about the app.
+    /// </para>
     /// </summary>
-    private void EndVerificationRun()
+    private void EndVerificationRun(bool passed = true)
     {
         _vm.Dispose();
-        Application.Current.Shutdown();
+        App.Log($"verification run: exit code {(passed ? 0 : 1)}");
+        Application.Current.Shutdown(passed ? 0 : 1);
 
         var watchdog = new System.Windows.Threading.DispatcherTimer
         {
@@ -474,7 +487,7 @@ public partial class MainWindow : Window
         {
             watchdog.Stop();
             App.Log("verification run: shutdown did not take, exiting hard");
-            Environment.Exit(0);
+            Environment.Exit(passed ? 0 : 1);
         };
         watchdog.Start();
     }

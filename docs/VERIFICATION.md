@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**91 tests, 0 failures, 0 skipped.** `dotnet test` — about 8 seconds.
+**118 tests, 0 failures, 0 skipped.** `dotnet test` — about 80 seconds (the stem tests dominate).
 
 The ones that matter most:
 
@@ -73,7 +73,7 @@ Audible proof for a human is in `Music\Benchmix Demo\`:
   verdict=PASS - device is pulling in realtime
   ```
   Run at master zero, so proving the pipeline did not mean playing music at anyone.
-- **Published build runs standalone.** 68.5 MB single self-contained file, clean exit, desktop
+- **Published build runs standalone.** 78 MB single self-contained file, clean exit, desktop
   shortcut at `OneDrive\Desktop\Benchmix.lnk`.
 - **Zero build warnings** across the solution.
 
@@ -131,7 +131,8 @@ Stated plainly so nobody assumes otherwise:
 - **Nobody has listened to live playback through the speakers.** The pipeline is proven to run at
   realtime and the rendered files are proven correct; the final "does sound come out" step needs a
   human to press play. Thirty seconds of Daniel's time.
-- **Pointer gestures have not been exercised.** Buttons are now driven and checked by
+- **Pointer gestures are exercised by `--gesturetest`** (27 checks, including the section commands).
+  Buttons are also driven and checked by
   `ui-verify.ps1`, but knob dragging, clip dragging, edge-trimming and shift-drag loop selection
   are mouse gestures UI Automation cannot invoke. Their maths is unit-tested; the feel is not.
 - **Long-session behaviour.** No soak test. Memory should be flat once clips are loaded, but that
