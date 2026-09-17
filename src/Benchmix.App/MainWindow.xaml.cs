@@ -79,6 +79,20 @@ public partial class MainWindow : Window
             // otherwise the probe photographs a half-built window.
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
             await Task.Delay(1200);
+
+            if (App.DemoSections && _vm.Tracks.FirstOrDefault() is { } demo)
+            {
+                _vm.SelectedTrack = demo;
+                foreach (double at in new[] { 30.0, 45.0, 60.0 })
+                {
+                    _vm.SeekTo(at);
+                    _vm.SplitAtPlayheadCommand.Execute(null);
+                }
+                _vm.SelectClip(demo.Clips.Count > 1 ? demo.Clips[1] : demo.Clips.FirstOrDefault());
+                _vm.SeekTo(100);          // clear of the section edges, so the outline is visible
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                await Task.Delay(400);
+            }
             CaptureTo(probe);
             App.Log($"ui probe written to {probe}");
             EndVerificationRun();

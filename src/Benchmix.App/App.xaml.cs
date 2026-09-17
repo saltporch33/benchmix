@@ -61,6 +61,13 @@ public partial class App : Application
     /// </summary>
     public static bool LatencyCheck { get; private set; }
 
+    /// <summary>
+    /// Splits the first track into sections and selects one before taking a --uiprobe shot, so the
+    /// section drawing can actually be looked at. None of the lane drawing is reachable from the
+    /// test project, so a picture is the only evidence that it works.
+    /// </summary>
+    public static bool DemoSections { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -104,6 +111,9 @@ public partial class App : Application
                     break;
                 case "--latencycheck":
                     LatencyCheck = true;
+                    break;
+                case "--demosections":
+                    DemoSections = true;
                     break;
                 case "--stemtest":
                     if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];
