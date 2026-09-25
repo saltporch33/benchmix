@@ -75,6 +75,34 @@ public partial class App : Application
     /// </summary>
     public static bool DemoEditing { get; private set; }
 
+    /// <summary>
+    /// Presses the real Match BPM, Reset and Match key buttons through their own automation peers
+    /// and reads the real labels back, then exits: what scripts/ui-verify.ps1 did from outside with
+    /// UI Automation. It moved inside on 2026-09-24 because the outside client made Windows
+    /// activate the hidden window — measured, at its very first call — taking focus from whoever
+    /// was working. From inside, nothing reaches across processes and nothing is activated.
+    /// </summary>
+    public static bool ButtonTest { get; private set; }
+
+    /// <summary>
+    /// True for a scripted run: any verification switch, or <c>--autoclose</c>. Someone is using
+    /// this machine while those run, so they keep entirely out of the way — the window opens beyond
+    /// the edge of every monitor, has no taskbar button, never takes focus, and never shows a
+    /// dialog. (Minimising was not enough: a minimised window still has a taskbar button, and
+    /// closing a scripted run with its unsaved project used to pop up "Discard them?" until a
+    /// watchdog killed it two seconds later.)
+    /// </summary>
+    public static bool IsScriptedRun => UiProbePath is not null || PlayTestSeconds > 0 || StemTestFile is not null
+                                      || LoadCheck || GestureTest || ButtonTest || LatencyCheck || AutoCloseSeconds > 0;
+
+    /// <summary>
+    /// Whether this run opens the audio device. Every scripted run but <c>--playtest</c>, whose
+    /// whole point is the device, works without one: the transport state and the renderer are the
+    /// same — only the playhead does not advance on its own — and nothing reaches the speakers or
+    /// disturbs whatever else is playing through them.
+    /// </summary>
+    public static bool UseAudioDevice => !IsScriptedRun || PlayTestSeconds > 0;
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -99,22 +127,60 @@ public partial class App : Application
 
         Log($"=== start === args: {string.Join(" ", e.Args)}");
 
+        // Strict on purpose. A switch whose value is missing or unreadable used to be skipped
+        // quietly, and the run became an ordinary session: on screen, taking focus, on the real
+        // audio device at full volume — the opposite of what a scripted run promises. Now it is
+        // written down and the app exits before any window exists.
         var files = new List<string>();
-        for (int i = 0; i < e.Args.Length; i++)
+        string? refused = null;
+        string? missing = null;
+        var args = e.Args;
+
+        bool Seconds(ref int i, out double value)
         {
-            switch (e.Args[i])
+            value = 0;
+            // Finite, positive, and short enough for a timer to hold. NaN in particular parses,
+            // fails every comparison, and would have left the run an ordinary session.
+            if (i + 1 >= args.Length
+                || !double.TryParse(args[i + 1], System.Globalization.NumberStyles.Float,
+                                    System.Globalization.CultureInfo.InvariantCulture, out value)
+                || !double.IsFinite(value) || value <= 0 || value > int.MaxValue / 1000.0) return false;
+            i++;
+            return true;
+        }
+
+        bool Value(ref int i, out string value)
+        {
+            value = "";
+            if (i + 1 >= args.Length || args[i + 1].StartsWith("--", StringComparison.Ordinal)) return false;
+            value = args[++i];
+            return true;
+        }
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
             {
                 case "--autoclose":
-                    if (i + 1 < e.Args.Length && double.TryParse(e.Args[++i], out var s)) AutoCloseSeconds = s;
+                    if (Seconds(ref i, out var s)) AutoCloseSeconds = s;
+                    else refused ??= "--autoclose needs a number of seconds";
                     break;
                 case "--uiprobe":
-                    if (i + 1 < e.Args.Length) UiProbePath = e.Args[++i];
+                    // The capture deletes whatever is at this path and writes a picture there, so it
+                    // only ever takes a .png. With the arguments the wrong way round it would have
+                    // been handed a song, and deleted it.
+                    if (Value(ref i, out var u) && string.Equals(Path.GetExtension(u), ".png", StringComparison.OrdinalIgnoreCase))
+                        UiProbePath = u;
+                    else refused ??= "--uiprobe needs a .png path to write";
                     break;
                 case "--loadcheck":
                     LoadCheck = true;
                     break;
                 case "--gesturetest":
                     GestureTest = true;
+                    break;
+                case "--buttontest":
+                    ButtonTest = true;
                     break;
                 case "--latencycheck":
                     LatencyCheck = true;
@@ -126,18 +192,37 @@ public partial class App : Application
                     DemoEditing = true;
                     break;
                 case "--stemtest":
-                    if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];
+                    if (Value(ref i, out var f)) StemTestFile = f;
+                    else refused ??= "--stemtest needs a song to separate";
                     break;
                 case "--playtest":
-                    if (i + 1 < e.Args.Length && double.TryParse(e.Args[++i], out var t)) PlayTestSeconds = t;
+                    if (Seconds(ref i, out var t)) PlayTestSeconds = t;
+                    else refused ??= "--playtest needs a number of seconds";
                     break;
                 default:
-                    if (File.Exists(e.Args[i])) files.Add(e.Args[i]);
+                    if (File.Exists(args[i])) files.Add(args[i]);
+                    else if (args[i].StartsWith('-') || args[i].StartsWith('/')) refused ??= $"unknown switch {args[i]}";
+                    else missing ??= args[i];
                     break;
             }
         }
+
+        // The demo switches only set a --uiprobe shot up; alone they would quietly be an ordinary
+        // session. And a scripted run given a song that is not there would pass having tested
+        // nothing, so it is refused too. (An ordinary launch with a stale path just opens.)
+        if ((DemoSections || DemoEditing) && UiProbePath is null)
+            refused ??= "--demosections and --demoediting only work with --uiprobe";
+        if (missing is not null && IsScriptedRun) refused ??= $"no such file: {missing}";
+
+        if (refused is not null)
+        {
+            Log($"refused to start: {refused}. Nothing was opened.");
+            Environment.Exit(1);
+        }
+
         StartupFiles = files.ToArray();
-        Log($"startup files: {StartupFiles.Length}, autoclose: {AutoCloseSeconds}");
+        Log($"startup files: {StartupFiles.Length}, autoclose: {AutoCloseSeconds}"
+          + (IsScriptedRun ? $", scripted run: off-screen, no taskbar button, audio device: {(UseAudioDevice ? "yes" : "none")}" : ""));
 
         base.OnStartup(e);
         Log("base.OnStartup returned");
@@ -146,6 +231,13 @@ public partial class App : Application
     private void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         Log("FATAL (dispatcher): " + e.Exception);
+        if (IsScriptedRun)
+        {
+            // No dialog in a scripted run: it would land on the screen of whoever is working, and
+            // it would sit there waiting for a click nobody is going to make. Fail the run instead.
+            Log("scripted run: failed on an unhandled error, exit code 1");
+            Environment.Exit(1);
+        }
         MessageBox.Show($"{e.Exception.GetType().Name}: {e.Exception.Message}\n\nDetails in {LogPath}",
                         "Benchmix hit a problem", MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;

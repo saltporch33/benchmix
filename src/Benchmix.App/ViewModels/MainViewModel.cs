@@ -29,8 +29,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // Separation is GPU-bound and memory-hungry; two at once would fight for both.
     private bool _splitting;
 
-    public MainViewModel()
+    private readonly bool _useAudioDevice;
+    private readonly bool _interactive;
+
+    /// <param name="useAudioDevice">
+    /// False for a scripted check that does not need to be heard: it runs on the offline engine
+    /// and never opens the speakers. Play, pause, stop, seek and render go through the same
+    /// transport and the same graph, but nothing pulls the graph in real time, so the playhead
+    /// does not move on its own while playing. A check that needs it to move needs the device.
+    /// </param>
+    /// <param name="interactive">
+    /// False for a scripted run: no dialog of any kind — no file pickers, no "discard changes?",
+    /// no download prompt. Someone else is using the machine, and a dialog would land on their
+    /// screen and wait for a click nobody is going to make.
+    /// </param>
+    public MainViewModel(bool useAudioDevice = true, bool interactive = true)
     {
+        _useAudioDevice = useAudioDevice;
+        _interactive = interactive;
         Tracks = new ObservableCollection<TrackViewModel>();
 
         // 30 Hz is enough for a playhead to look smooth and costs nothing.
@@ -40,7 +56,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<TrackViewModel> Tracks { get; }
 
-    public ProjectSession Session => _session ??= ProjectSession.CreateEmpty();
+    public ProjectSession Session => _session ??= _useAudioDevice ? ProjectSession.CreateEmpty() : ProjectSession.CreateOffline();
 
     [ObservableProperty] private TrackViewModel? _selectedTrack;
     [ObservableProperty] private double _positionSeconds;
@@ -246,6 +262,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task AddTracksAsync()
     {
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
         var dlg = new OpenFileDialog
         {
             Title = "Add audio",
@@ -396,6 +413,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         bool firstRun = !Benchmix.Engine.Stems.StemSeparator.IsModelInstalled;
         if (firstRun)
         {
+            if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
             var ok = MessageBox.Show(
                 """
                 Splitting a song into vocals and instrumental needs a 64 MB model, downloaded once.
@@ -491,6 +509,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private async Task OpenAsync()
     {
         if (!ConfirmDiscard()) return;
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
 
         var dlg = new OpenFileDialog { Title = "Open project", Filter = ProjectStore.FileFilter };
         if (dlg.ShowDialog() != true) return;
@@ -549,6 +568,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void SaveAs()
     {
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
         var dlg = new SaveFileDialog
         {
             Title = "Save project",
@@ -585,6 +605,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private async Task RenderAsync()
     {
         if (_session is null || Tracks.Count == 0) { Status = "Nothing to render yet."; return; }
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
 
         var dlg = new SaveFileDialog
         {
@@ -1242,7 +1263,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private bool ConfirmDiscard()
     {
-        if (!_dirty) return true;
+        if (!_dirty || !_interactive) return true;
         var r = MessageBox.Show("This project has unsaved changes. Discard them?", "Benchmix",
                                 MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         return r == MessageBoxResult.OK;

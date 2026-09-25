@@ -1,99 +1,61 @@
 <#
-    Drives the real Benchmix UI through UI Automation and checks what it did.
+    Presses the real Benchmix buttons — Match BPM, Reset, Match key — and checks what they did,
+    by reading the real labels back.
 
     This exists because "it compiles and the unit tests pass" says nothing about whether clicking
-    a button in the actual window does the right thing. UIA clicks the real controls in the real
-    app, then reads the real labels back.
+    a button in the actual window does the right thing.
 
-    It runs the window minimised and never steals focus, so it is safe to run while someone is
-    using the machine.
+    Until 2026-09-24 this script drove the buttons from outside with UI Automation. Watched from
+    outside, that turned out to make Windows ACTIVATE the hidden window at the very first UI
+    Automation call, taking the keyboard from whoever was working for as long as the run lasted —
+    even though the window cannot be activated any other way. So the same presses now happen
+    inside the app (--buttontest), through each button's own automation peer, which is the object
+    an outside client ends up calling anyway. Nothing reaches across processes, and nothing is
+    activated. This script launches that run quietly and watches it from outside (Intrusion.cs).
 
-    Usage:  powershell -ExecutionPolicy Bypass -File scripts\ui-verify.ps1
-    Exit:   0 = all checks passed, 1 = something failed
+    Usage:  powershell -ExecutionPolicy Bypass -File scripts\ui-verify.ps1 [-Exe <path>]
+    Exit:   0 = all checks passed and it stayed out of the way, 1 = something failed,
+            2 = incomplete: the sample songs are missing
 #>
+param([string]$Exe = "$env:LOCALAPPDATA\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe")
 
 $ErrorActionPreference = 'Stop'
+if (-not (Test-Path $Exe)) { Write-Host "No exe at $Exe - publish first."; exit 1 }
 
-$exe = "$env:LOCALAPPDATA\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe"
-if (-not (Test-Path $exe)) { Write-Host "publish the app first: dotnet publish src\Benchmix.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true"; exit 1 }
+# A build from before scripted runs were invisible would open on screen and take focus.
+$repo = Split-Path $PSScriptRoot
+$newest = @(Get-ChildItem (Join-Path $repo 'src') -Recurse -File -Include *.cs, *.xaml, *.csproj, *.manifest) +
+          @(Get-Item (Join-Path $repo 'Directory.Build.props')) | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($newest.LastWriteTime -gt (Get-Item $Exe).LastWriteTime) {
+    Write-Host "The exe is older than $($newest.FullName.Substring($repo.Length + 1)) - publish first. Nothing was launched."
+    exit 1
+}
 
 $audio = "$env:USERPROFILE\Music\Sports DJ\audio"
 $bed = Join-Path $audio "CFBCA39E-E325-485F-839D-CF95466767AA.mp3"   # Still D.R.E.  93 BPM G#m
 $top = Join-Path $audio "9523F493-5F99-4F39-9784-0C129F7286A7.mp3"   # T.R.O.Y.     102 BPM G#m
-if (-not (Test-Path $bed) -or -not (Test-Path $top)) { Write-Host "SKIP: sample library not present"; exit 0 }
+if (-not (Test-Path $bed) -or -not (Test-Path $top)) { Write-Host "INCOMPLETE: sample library not present"; exit 2 }
 
-Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, WindowsBase
-$AE = [System.Windows.Automation.AutomationElement]
-$scope = [System.Windows.Automation.TreeScope]::Descendants
+Add-Type -Path (Join-Path $PSScriptRoot 'Intrusion.cs')
+$log = "$env:LOCALAPPDATA\Benchmix\benchmix.log"
+$before = if (Test-Path $log) { (Get-Content $log).Count } else { 0 }
 
-$failures = 0
-function Check($name, $condition, $detail) {
-    if ($condition) { Write-Host "  PASS  $name" }
-    else { Write-Host "  FAIL  $name  -- $detail"; $script:failures++ }
-}
+$p = New-Object QuietProcess $Exe, "--buttontest `"$bed`" `"$top`""
+$watch = New-Object IntrusionWatch $p.Id
+if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Host "  FAIL  it did not finish" }
+$watch.Stop()
+$exit = $p.ExitCode
+$p.Dispose()
 
-$p = Start-Process -FilePath $exe -ArgumentList @("`"$bed`"", "`"$top`"", "--autoclose", "120") -PassThru -WindowStyle Minimized
-try {
-    Start-Sleep -Seconds 14
-    $p.Refresh()
-    if ($p.MainWindowHandle -eq 0) { Write-Host "FAIL: no window appeared"; exit 1 }
+$lines = if (Test-Path $log) { Get-Content $log | Select-Object -Skip $before } else { @() }
+$lines | Select-String 'buttontest: (PASS|FAIL) - ' | ForEach-Object { Write-Host ("  " + ($_.Line.Substring(26) -replace '^(PASS|FAIL) - ', '$1  ')) }
+$inside = ($lines | Select-String -SimpleMatch 'scripted run: off-screen=' | ForEach-Object { $_.Line.Substring(14) }) -join ' | '
 
-    function Labels {
-        $c = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
-        $AE::FromHandle($p.MainWindowHandle).FindAll($scope, $c) | ForEach-Object { $_.Current.Name }
-    }
+Write-Host "`nStayed out of the way"
+Write-Host "  outside: $($watch.Describe())"
+Write-Host "  inside:  $(if ($inside) { $inside } else { 'MISSING - the run never checked itself' })"
 
-    function Buttons($label) {
-        $root = $AE::FromHandle($p.MainWindowHandle)
-        $n = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $label)
-        $t = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
-        $root.FindAll($scope, (New-Object System.Windows.Automation.AndCondition($n, $t)))
-    }
-
-    function Click($element) {
-        $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-        Start-Sleep -Milliseconds 1500
-    }
-
-    Write-Host "`nLoading"
-    $before = Labels
-    Check "both tracks loaded"      (($before -join '|') -match 'Added 2 tracks')                  "status did not report two tracks"
-    Check "bed tempo from tag"      (($before -join '|') -match '93\.0 BPM')                       "93.0 BPM not shown"
-    Check "topper tempo from tag"   (($before -join '|') -match '102\.0 BPM')                      "102.0 BPM not shown"
-    Check "keys read from tags"     (($before -join '|') -match 'G#m')                             "G#m not shown"
-
-    Write-Host "`nMatch BPM on the second track"
-    $match = Buttons "Match BPM"
-    Check "two Match BPM buttons"   ($match.Count -eq 2)                                           "found $($match.Count)"
-    if ($match.Count -eq 2) {
-        Click $match.Item(1)
-        $after = Labels -join '|'
-        Check "topper stretched to 93"  ($after -match '93\.0 BPM\s+\(was 102\.0\)')               "label did not update"
-        Check "status explains it"      ($after -match '-8\.8% to hit 93\.0 BPM')                  "status did not report the stretch"
-    }
-
-    Write-Host "`nReset on the second track"
-    $reset = Buttons "Reset"
-    if ($reset.Count -ge 2) {
-        Click $reset.Item(1)
-        $after = Labels -join '|'
-        Check "topper back to 102"      ($after -match '102\.0 BPM')                               "reset did not restore the tempo"
-        Check "status confirms reset"   ($after -match 'original tempo, pitch and EQ')             "status did not confirm"
-    } else { Check "Reset buttons present" $false "found $($reset.Count)" }
-
-    Write-Host "`nMatch key"
-    $key = Buttons "Match key"
-    if ($key.Count -ge 2) {
-        Click $key.Item(1)
-        $after = Labels -join '|'
-        # Both tracks are G#m, so the correct answer is no shift at all.
-        Check "same key recognised"     ($after -match 'same key')                                 "did not report the keys as matching"
-    } else { Check "Match key buttons present" $false "found $($key.Count)" }
-}
-finally {
-    try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch {}
-}
-
+$ok = $exit -eq 0 -and -not $watch.GotInTheWay -and $inside -ne ''
 Write-Host ""
-if ($failures -eq 0) { Write-Host "UI VERIFY: all checks passed"; exit 0 }
-Write-Host "UI VERIFY: $failures check(s) failed"; exit 1
+if ($ok) { Write-Host "UI VERIFY: all checks passed, and it stayed out of the way"; exit 0 }
+Write-Host "UI VERIFY: failed (exit $exit$(if ($watch.GotInTheWay) { ', and it got in the way' }))"; exit 1

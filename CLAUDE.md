@@ -38,6 +38,14 @@ mistakes, not by describing the project.
 - **`--playtest` runs at master zero** and `--uiprobe` uses `RenderTargetBitmap` rather than a
   screen grab. Daniel uses this machine while work happens here. Nothing may steal focus, make
   noise, or photograph his desktop.
+- **Every scripted run is invisible, on purpose** (`App.IsScriptedRun`: any verification switch or
+  `--autoclose`). The window is placed beyond every monitor, has no taskbar button, carries
+  `WS_EX_NOACTIVATE` so Windows can never activate it, shows no dialog of any kind, and — except
+  `--playtest` — uses the offline engine, so the speakers are never opened. That is not a bug in
+  the probes. Minimising was not enough: it left a taskbar button, and closing the dirty project
+  popped "Discard them?" on his screen until a watchdog killed it. Never launch the exe with
+  `-WindowStyle Minimized`. `scripts/verify-exe.ps1` and `scripts/ui-verify.ps1` watch each run
+  from outside (`scripts/Intrusion.cs`) and fail it if it ever got in the way.
 
 ## Two words that mean two different things
 
@@ -63,14 +71,21 @@ single-file exe — that is where a new P/Invoke fails to resolve and nowhere el
 dotnet publish src/Benchmix.App -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
 ```
 
-Then, against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe`:
+Then run all of the switches below, invisibly, with the outside watch, in one go:
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/verify-exe.ps1
+```
+
+They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe`:
 
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode — 56 checks |
-| `--demosections --uiprobe <png>` | the lane really draws sections and selection |
-| `--demoediting --uiprobe <png>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
+| `--gesturetest <song>` | pan, double-click-to-play, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode — 58 checks |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, from inside (an outside UI Automation client made Windows activate the hidden window) — 12 checks |
+| `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
+| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent) |

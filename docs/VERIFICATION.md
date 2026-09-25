@@ -153,9 +153,10 @@ Audible proof for a human is in `Music\Benchmix Demo\`:
 
 ## The UI, driven for real
 
-`scripts/ui-verify.ps1` clicks the actual buttons in the actual window through UI Automation and
-reads the actual labels back. It runs minimised and never takes focus, so it is safe to run while
-someone is using the machine. **10/10 checks pass:**
+`scripts/ui-verify.ps1` presses the actual buttons in the actual window and reads the actual
+labels back. On 2026-09-16 it did so from outside, through UI Automation, with the window
+minimised; since 2026-09-24 the same presses happen inside the app (`--buttontest`) — see "Staying
+out of the way" below for why. **10/10 checks passed** on 2026-09-16:
 
 ```
 Loading
@@ -173,6 +174,62 @@ Match key
 The substantive one: before the click the second track reads `102.0 BPM`; after it reads
 `93.0 BPM  (was 102.0)` and the status bar says *"They Reminisce Over You (T.R.O.Y.) (Clean):
 -8.8% to hit 93.0 BPM."* That is the whole feature working through the real control.
+
+The 2026-09-24 in-app version makes the same checks, plus the button counts: **12/12 pass** in the
+published exe.
+
+## Staying out of the way
+
+*2026-09-24.* Daniel uses this machine while work happens here, and the verification runs were
+interrupting him — his words: *"I keep getting interrupted by you opening and closing the app,
+playing songs, etc."* Two things were wrong. The runs were launched minimised, which still puts a
+button on the taskbar for each one. And every run that loaded a song ended by closing an unsaved
+project, which popped *"This project has unsaved changes. Discard them?"* on his screen until a
+two-second watchdog killed the process — the log's "shutdown did not take, exiting hard".
+
+Now any verification switch, or `--autoclose`, makes a **scripted run** (`App.IsScriptedRun`): the
+window is placed beyond every monitor, has no taskbar button, carries `WS_EX_NOACTIVATE` so Windows
+never activates it, shows no dialog of any kind, and — except `--playtest` — uses the offline
+engine, so the audio device is never opened. A mistyped switch is refused before any window
+exists rather than becoming an ordinary on-screen session.
+
+It is measured twice, independently. Inside, `EndVerificationRun` asks Windows (not the WPF
+properties it set) whether the window is on any monitor, has a taskbar button or can be activated,
+and whether it was ever activated, and fails the run on any of them. Outside,
+`scripts/Intrusion.cs` starts each run without the "working in background" pointer and samples it
+on its own thread about every 10 ms: whether the foreground window belongs to it, and whether any
+of its visible windows is on a monitor, would have a taskbar button, or could be activated. The
+watcher was first pointed at Daniel's own open Benchmix, a normal window, to prove it can say yes:
+on screen, taskbar button, activatable — all YES.
+
+`scripts/verify-exe.ps1`, published exe, all eight runs:
+
+```
+latencycheck      PASS  focus taken: no  on screen: no  taskbar button: no  activatable: no
+gesturetest       PASS  (58 checks)                               — same four: no
+buttontest        PASS  (12 checks)                               — same four: no
+loadcheck         PASS                                            — same four: no
+playtest          PASS  (ratio 1.000, the one run with a device)  — same four: no
+stemtest          PASS                                            — same four: no
+uiprobe-sections  PASS                                            — same four: no
+uiprobe-editing   PASS                                            — same four: no
+VERIFY: every run passed and stayed out of the way
+```
+
+**What the watch caught.** The first run of the old `ui-verify.ps1` under this regime — still
+driving the buttons from outside with UI Automation — passed every functional check and failed on
+both watches: *took focus = YES*. The app's own log put the activation at 14.06 s after launch, the
+exact moment the script woke from its 14-second wait and made its first UI Automation call; the
+window then held the keyboard for about 30 seconds until the run closed itself. Anything typed in
+that time went to the hidden window. `WS_EX_NOACTIVATE` did not stop it. So the button presses
+moved inside the app (`--buttontest`), through each button's own automation peer, and that run
+takes no focus.
+
+Two adversarial review rounds (52 and 49 agents, none of them allowed to launch the app) went over
+this before it was run; between them they found the activation route through Windows' own
+choice of the next window, the dialogs, the switch-parsing hole, a `--uiprobe` path that would
+have deleted a song given in the wrong argument position, and checks that could not fail. All
+are fixed.
 
 ## The adversarial review
 

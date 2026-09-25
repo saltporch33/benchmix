@@ -14,7 +14,7 @@ namespace Benchmix.App;
 /// </summary>
 public partial class MainWindow : Window
 {
-    private readonly MainViewModel _vm = new();
+    private readonly MainViewModel _vm = new(App.UseAudioDevice, interactive: !App.IsScriptedRun);
 
     // ruler drag
     private bool _scrubbing;
@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
+        if (App.IsScriptedRun) KeepOutOfTheWay();
         Loaded += OnLoaded;
         Closing += OnClosing;
     }
@@ -62,12 +63,32 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (App.ButtonTest)
+        {
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            EndVerificationRun(await RunButtonTestAsync());
+            return;
+        }
+
         if (App.StemTestFile is { } stemFile) { await RunStemTestAsync(stemFile); return; }
 
         if (App.PlayTestSeconds > 0) { await RunPlayTestAsync(App.PlayTestSeconds); return; }
 
         if (App.UiProbePath is { } probe)
         {
+            // An old picture or control map left behind would look like this run's output.
+            foreach (var old in new[] { probe, Path.ChangeExtension(probe, ".map.tsv") })
+                try { if (File.Exists(old)) File.Delete(old); } catch { }
+
+            // A demo needs a song to demonstrate on. Without one the shot would show an empty
+            // project and still pass.
+            if ((App.DemoSections || App.DemoEditing) && _vm.Tracks.FirstOrDefault() is not { IsLoaded: true })
+            {
+                App.Log("ui probe failed: the demo needs a song that loads, and none did - nothing was demonstrated");
+                EndVerificationRun(false);
+                return;
+            }
+
             // Give layout, the waveform peaks and the first render tick a moment to settle,
             // otherwise the probe photographs a half-built window.
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
@@ -82,6 +103,12 @@ public partial class MainWindow : Window
                     _vm.SplitAtPlayheadCommand.Execute(null);
                 }
                 _vm.SelectClip(demo.Clips.Count > 1 ? demo.Clips[1] : demo.Clips.FirstOrDefault());
+                if (demo.Clips.Count != 4 || _vm.SelectedClip is null)
+                {
+                    App.Log($"ui probe failed: the sections demo made {demo.Clips.Count} sections, not 4, or selected none");
+                    EndVerificationRun(false);
+                    return;
+                }
                 _vm.SeekTo(100);          // clear of the section edges, so the outline is visible
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 await Task.Delay(400);
@@ -112,14 +139,20 @@ public partial class MainWindow : Window
                 _vm.AddEmptyTrackCommand.Execute(null);                 // and one still empty
                 _vm.SelectedTrack = empty;
                 _vm.SelectClip(empty.Clips.OrderBy(c => c.TimelineStartSeconds).First());
+                if (empty.Clips.Count != 4 || _vm.SelectedClip is null)
+                {
+                    App.Log($"ui probe failed: the editing demo left {empty.Clips.Count} sections on the empty track, not 4, or selected none");
+                    EndVerificationRun(false);
+                    return;
+                }
                 _vm.SnapLineSeconds = 38;                               // as a drag would show it
                 _vm.SeekTo(60);
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 await Task.Delay(400);
             }
-            CaptureTo(probe);
-            App.Log($"ui probe written to {probe}");
-            EndVerificationRun();
+            bool captured = CaptureTo(probe);
+            if (captured) App.Log($"ui probe written to {probe}");
+            EndVerificationRun(captured);
             return;
         }
 
@@ -129,7 +162,7 @@ public partial class MainWindow : Window
             {
                 Interval = TimeSpan.FromSeconds(App.AutoCloseSeconds),
             };
-            timer.Tick += (_, _) => { timer.Stop(); _vm.Dispose(); Application.Current.Shutdown(); };
+            timer.Tick += (_, _) => { timer.Stop(); EndVerificationRun(); };
             timer.Start();
         }
     }
@@ -297,6 +330,7 @@ public partial class MainWindow : Window
     {
         var pass = new List<string>();
         var fail = new List<string>();
+        var notes = new List<string>();          // what could not be tested — never counted as a pass
         void Check(string what, bool ok) => (ok ? pass : fail).Add(what);
 
         // Handled cannot even be read on args with no RoutedEvent, so each one is stamped with the
@@ -368,20 +402,26 @@ public partial class MainWindow : Window
         _scriptedPointerX = null;
 
         // --- double-click on the ruler plays from that point ---
-        // Silent, like --playtest: this really does start the audio device, and someone is using
-        // this machine. Whether the transport runs is the question, not what it sounds like.
+        // A scripted run has no audio device (App.UseAudioDevice), so this drives the offline
+        // engine's transport — the same TransportSource the device pulls from — and nothing is
+        // heard. The playhead does not advance offline; whether the transport is running is the
+        // question, and the engine itself is asked, not the view-model's copy of it. Whether a
+        // device really pulls in realtime is --playtest's job.
         _vm.MasterGain = 0;
         _vm.Session.Graph.MasterGain = 0;
         _vm.Session.Graph.SnapParameters();
         _vm.StopCommand.Execute(null);
         _vm.PlayFrom(18.5);
         Check($"double-click seeks (got {_vm.PositionSeconds:F2})", Math.Abs(_vm.PositionSeconds - 18.5) < 0.05);
-        Check("double-click starts the transport", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
-        if (_vm.Session.Engine.IsOffline) pass.Add("(no audio device here, so 'is playing' is untested)");
+        Check("double-click starts the transport", _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing);
 
         _vm.PlayFrom(25.0);
-        Check("double-click while playing keeps playing", _vm.IsPlaying || _vm.Session.Engine.IsOffline);
+        Check("double-click while playing keeps playing", _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing);
         _vm.StopCommand.Execute(null);
+
+        if (App.StartupFiles.Length > 0)
+            Check($"the song given on the command line loaded ({_vm.Tracks.FirstOrDefault()?.LoadError ?? "ok"})",
+                  _vm.Tracks.FirstOrDefault()?.IsLoaded == true);
 
         // --- sections: split, repeat, copy, paste, delete, undo ---
         //
@@ -461,11 +501,11 @@ public partial class MainWindow : Window
         }
         else
         {
-            pass.Add("(no track loaded, so the section commands are untested - pass a file to cover them)");
+            notes.Add("no track loaded, so the section commands are untested - pass a file to cover them");
         }
 
         // --- empty tracks, paste target, dragging between tracks, snapping, loop mode ---
-        try { RunEditingGestures(Check, pass); }
+        try { RunEditingGestures(Check, notes); }
         finally
         {
             _scriptedWindowPoint = null;
@@ -483,12 +523,14 @@ public partial class MainWindow : Window
         }
         else
         {
-            pass.Add("(no track loaded, so the knob clamp is untested - pass a file to cover it)");
+            notes.Add("no track loaded, so the knob clamp is untested - pass a file to cover it");
         }
 
         foreach (var p in pass) App.Log("gesturetest: PASS - " + p);
         foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
-        App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
+        foreach (var n in notes) App.Log("gesturetest: NOTE - " + n);
+        string untested = notes.Count == 0 ? "" : $", {notes.Count} areas untested";
+        App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks{untested}" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}{untested}")}");
         return fail.Count == 0;
     }
 
@@ -503,7 +545,7 @@ public partial class MainWindow : Window
     /// clipboard of whoever is using the machine.
     /// </para>
     /// </summary>
-    private void RunEditingGestures(Action<string, bool> Check, List<string> pass)
+    private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
     {
         // The shortcuts are XAML wiring, which no unit test can see.
         bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
@@ -519,7 +561,7 @@ public partial class MainWindow : Window
 
         if (_vm.Tracks.FirstOrDefault() is not { IsLoaded: true } song)
         {
-            pass.Add("(no track loaded, so the editing gestures are untested - pass a file to cover them)");
+            notes.Add("no track loaded, so the editing gestures are untested - pass a file to cover them");
             return;
         }
 
@@ -686,6 +728,85 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// The checks scripts/ui-verify.ps1 used to make from outside with UI Automation, made from
+    /// inside: the real buttons pressed through their own automation peers — the same object an
+    /// outside client ends up calling — and the real labels read back from the window. Expects the
+    /// two songs ui-verify uses: Still D.R.E. at 93 BPM and T.R.O.Y. at 102, both G#m.
+    /// </summary>
+    private async Task<bool> RunButtonTestAsync()
+    {
+        var pass = new List<string>();
+        var fail = new List<string>();
+        void Check(string what, bool ok) => (ok ? pass : fail).Add(what);
+
+        string Labels() => string.Join("|", Descendants<TextBlock>(this).Where(t => t.IsVisible).Select(t => t.Text));
+        List<Button> Buttons(string content) => Descendants<Button>(this).Where(b => b.IsVisible && b.Content as string == content).ToList();
+
+        async Task Click(Button button)
+        {
+            var peer = new System.Windows.Automation.Peers.ButtonAutomationPeer(button);
+            ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+            // The peer queues the click; let it and the relayout after it run.
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+
+        UpdateLayout();
+        var before = Labels();
+        Check("both tracks loaded", before.Contains("Added 2 tracks"));
+        Check("bed tempo from tag", System.Text.RegularExpressions.Regex.IsMatch(before, @"93\.0 BPM"));
+        Check("topper tempo from tag", System.Text.RegularExpressions.Regex.IsMatch(before, @"102\.0 BPM"));
+        Check("keys read from tags", before.Contains("G#m"));
+
+        var match = Buttons("Match BPM");
+        Check($"two Match BPM buttons (found {match.Count})", match.Count == 2);
+        if (match.Count == 2)
+        {
+            await Click(match[1]);
+            var after = Labels();
+            Check("topper stretched to 93", System.Text.RegularExpressions.Regex.IsMatch(after, @"93\.0 BPM\s+\(was 102\.0\)"));
+            Check("status explains it", after.Contains("-8.8% to hit 93.0 BPM"));
+        }
+
+        var reset = Buttons("Reset");
+        Check($"Reset buttons present (found {reset.Count})", reset.Count >= 2);
+        if (reset.Count >= 2)
+        {
+            await Click(reset[1]);
+            var after = Labels();
+            Check("topper back to 102", System.Text.RegularExpressions.Regex.IsMatch(after, @"102\.0 BPM"));
+            Check("status confirms reset", after.Contains("original tempo, pitch and EQ"));
+        }
+
+        var key = Buttons("Match key");
+        Check($"Match key buttons present (found {key.Count})", key.Count >= 2);
+        if (key.Count >= 2)
+        {
+            await Click(key[1]);
+            // Both tracks are G#m, so the right answer is no shift at all.
+            Check("same key recognised", Labels().Contains("same key"));
+        }
+
+        foreach (var p in pass) App.Log("buttontest: PASS - " + p);
+        foreach (var f in fail) App.Log("buttontest: FAIL - " + f);
+        App.Log($"buttontest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
+        return fail.Count == 0;
+    }
+
+    /// <summary>Every visual descendant of a given type, in tree order.</summary>
+    private static IEnumerable<T> Descendants<T>(DependencyObject node) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(node);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(node, i);
+            if (child is T match) yield return match;
+            foreach (var deeper in Descendants<T>(child)) yield return deeper;
+        }
+    }
+
+    /// <summary>
     /// Ends a verification run, carrying its verdict into the process exit code.
     ///
     /// <para>
@@ -702,6 +823,24 @@ public partial class MainWindow : Window
     /// </summary>
     private void EndVerificationRun(bool passed = true)
     {
+        if (App.IsScriptedRun)
+        {
+            // Measured from the window handle, as Windows sees it — not read back from the WPF
+            // properties this run set itself, which could not have come out any other way.
+            bool onScreen = OutOfTheWay.IsOnAnyMonitor(this);
+            bool taskbar = OutOfTheWay.HasTaskbarButton(this);
+            bool activatable = OutOfTheWay.CanBeActivated(this);
+            string device = _vm.Session.Engine.IsOffline ? "none" : $"'{_vm.Session.Engine.DeviceName}'";
+            App.Log($"scripted run: off-screen={(onScreen ? "NO" : "yes")} taskbar button={(taskbar ? "YES" : "no")} "
+                  + $"can be activated={(activatable ? "YES" : "no")} took focus={(_activatedDuringScriptedRun ? "YES" : "no")} "
+                  + $"audio device={device}");
+            if (onScreen || taskbar || activatable || _activatedDuringScriptedRun)
+            {
+                App.Log("scripted run: FAIL - it could get in the way of whoever was using the machine");
+                passed = false;
+            }
+        }
+
         _vm.Dispose();
         App.Log($"verification run: exit code {(passed ? 0 : 1)}");
         Application.Current.Shutdown(passed ? 0 : 1);
@@ -720,14 +859,18 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Renders the live window to a PNG at its real DPI.</summary>
-    private void CaptureTo(string path)
+    private bool CaptureTo(string path)
     {
         try
         {
             var dpi = VisualTreeHelper.GetDpi(this);
             int w = (int)Math.Ceiling(ActualWidth * dpi.DpiScaleX);
             int h = (int)Math.Ceiling(ActualHeight * dpi.DpiScaleY);
-            if (w < 1 || h < 1) return;
+            if (w < 1 || h < 1)
+            {
+                App.Log($"ui probe failed: the window has no size ({w}x{h}), nothing to capture");
+                return false;
+            }
 
             var rtb = new RenderTargetBitmap(w, h, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY, PixelFormats.Pbgra32);
             rtb.Render(this);
@@ -739,10 +882,12 @@ public partial class MainWindow : Window
             using (var fs = File.Create(path)) encoder.Save(fs);
 
             WriteControlMap(Path.ChangeExtension(path, ".map.tsv"), dpi);
+            return true;
         }
         catch (Exception ex)
         {
             App.Log("ui probe failed: " + ex);
+            return false;
         }
     }
 
@@ -811,9 +956,46 @@ public partial class MainWindow : Window
 
     private void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (!_vm.CanClose()) { e.Cancel = true; return; }
+        // A scripted run always has an unsaved project, and asking about it would put a dialog on
+        // the screen of whoever is working. It has nothing to keep.
+        if (!App.IsScriptedRun && !_vm.CanClose()) { e.Cancel = true; return; }
         _vm.Dispose();
     }
+
+    private bool _activatedDuringScriptedRun;
+
+    /// <summary>
+    /// Puts a scripted run where it cannot interrupt anyone: beyond the edge of every monitor, with
+    /// no taskbar button, never activated. It is still a real, shown window — layout, rendering,
+    /// UI Automation and RenderTargetBitmap all work exactly as they do on screen — it is just
+    /// somewhere nobody is looking.
+    /// </summary>
+    private void KeepOutOfTheWay()
+    {
+        ShowInTaskbar = false;
+        ShowActivated = false;
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        WindowState = WindowState.Normal;
+        Left = SystemParameters.VirtualScreenLeft - Width - 2000;
+        Top = SystemParameters.VirtualScreenTop - Height - 2000;
+
+        // ShowActivated only covers the first show. This covers the rest of its life: Windows
+        // never activates it, not even when the person at the machine closes or minimises their
+        // own window and Windows looks for the next one to hand focus to.
+        SourceInitialized += (_, _) => OutOfTheWay.NeverActivate(this);
+
+        // Evidence rather than hope: if the window ever takes focus, the run says so and fails.
+        Activated += (_, _) =>
+        {
+            _activatedDuringScriptedRun = true;
+            App.Log("scripted run: the window was activated — it took focus from whoever was working");
+        };
+        // Launched minimised anyway, it would sit on the desktop as a title bar with no taskbar
+        // button to hide behind; put it back where it belongs.
+        StateChanged += (_, _) => { if (WindowState != WindowState.Normal) WindowState = WindowState.Normal; };
+    }
+
+
 
     // ---------------- drag and drop ----------------
 

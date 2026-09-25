@@ -117,16 +117,33 @@ dotnet run --project src/Benchmix.App
 
 Build output goes to `%LOCALAPPDATA%\Benchmix.build\`, deliberately outside OneDrive.
 
-To check the real UI still works after a change — it clicks the actual buttons through UI
-Automation, runs minimised and never steals focus:
+To check the published exe after a change — every verification switch, one after another:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts/verify-exe.ps1
+```
+
+To check the real UI still works — it presses the actual buttons and reads the actual labels:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts/ui-verify.ps1
 ```
 
-The app also has several switches used for verification (the authoritative list is the switch block in `src/Benchmix.App/App.xaml.cs`): `--uiprobe <png>` renders the live window
-to a file, `--playtest <seconds>` checks the audio device is pulling in realtime (silently), and
+Both are safe to run while someone is using the machine, and both prove it: each run is watched
+from outside and fails if it ever took focus, appeared on a monitor, had a taskbar button, or could
+have been activated.
+
+The app also has several switches used for verification (the authoritative list is the switch
+block in `src/Benchmix.App/App.xaml.cs`): `--uiprobe <png>` renders the live window to a file,
+`--playtest <seconds>` checks the audio device is pulling in realtime (silently), and
 `--autoclose <seconds>` closes it again. Passing file paths preloads them as tracks.
+
+**Any of these switches, `--autoclose` included, makes it a scripted run**, which cannot be seen
+or heard: the window opens beyond the edge of every monitor, has no taskbar button, can never be
+activated, shows no dialogs (not even "discard unsaved changes?"), and — except for `--playtest` —
+opens no audio device. They are for checks, not for a normal session. A switch with a missing or
+unreadable value, or one it does not know, is refused: the app logs why and exits before opening
+anything. Do not launch them with `-WindowStyle Minimized`: a minimised window has a taskbar button.
 
 To publish a standalone exe:
 

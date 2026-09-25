@@ -245,3 +245,17 @@ One thing the review found is older and not part of this change, so it is record
 fixed: on the phase-vocoder path the output differs slightly with the size of the blocks it is
 pulled in, even with no joins, so live preview and the rendered file are not bit-identical there.
 It is flagged as its own task.
+
+## 2026-09-24 — verification runs must not interrupt him
+
+Daniel, 2026-09-24, verbatim: *"is there a way that you can work on this without interrupting
+whatever else i'm doing on my computer? I keep getting interrupted by you opening and closing the
+app, playing songs, etc."* — and, when that was first read as "stop": *"no no, i dont want you to
+stop. I was just asking if it was possible"*.
+
+| Decision | Why |
+| --- | --- |
+| Every scripted run (any verification switch, or `--autoclose`) is invisible: off every monitor, no taskbar button, never activatable, no dialogs, no audio device except `--playtest`. | Minimising left a taskbar button per run, and closing a run's unsaved project put a dialog on his screen. The runs still need a real, laid-out window — the probes photograph it and the gesture test aims at its lanes — so it is placed where nobody is looking rather than not created. |
+| The button checks moved inside the app (`--buttontest`); `ui-verify.ps1` no longer drives the window from outside with UI Automation. | Measured: the outside UI Automation client made Windows activate the hidden window at its first call, despite `WS_EX_NOACTIVATE`, taking his keyboard for about 30 seconds. The buttons' own automation peers, called from inside, exercise the same controls and activate nothing. |
+| Both the app and the scripts check that each run stayed out of the way, and a run that did not fails. | "It should be invisible" is an assumption; the watch is what caught the activation above. |
+| A mistyped switch is refused before any window exists. | Otherwise it quietly became an ordinary session: on screen, taking focus, on the real audio device. |
