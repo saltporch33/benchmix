@@ -21,12 +21,6 @@ public partial class MainWindow : Window
     private double _loopAnchorSeconds;
     private bool _settingLoop;
 
-    // section drag
-    private TrackViewModel? _dragTrack;
-    private Point _dragOrigin;
-    private double _dragStartOffset;
-    private bool _dragging;
-
     public MainWindow()
     {
         InitializeComponent();
@@ -89,6 +83,37 @@ public partial class MainWindow : Window
                 }
                 _vm.SelectClip(demo.Clips.Count > 1 ? demo.Clips[1] : demo.Clips.FirstOrDefault());
                 _vm.SeekTo(100);          // clear of the section edges, so the outline is visible
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                await Task.Delay(400);
+            }
+            if (App.DemoEditing && _vm.Tracks.FirstOrDefault() is { } song)
+            {
+                _vm.PixelsPerSecond = 22;
+                _vm.ScrollSeconds = 20;
+                _vm.SelectedTrack = song;
+                foreach (double at in new[] { 34.0, 38.0 })
+                {
+                    _vm.SeekTo(at);
+                    _vm.SplitAtPlayheadCommand.Execute(null);
+                }
+                _vm.AddEmptyTrackCommand.Execute(null);
+                var empty = _vm.Tracks[^1];
+
+                // Move the 4 s section onto the empty track, then loop it three more times.
+                var section = song.Clips.First(c => Math.Abs(c.TimelineStartSeconds - 34) < 0.01);
+                _vm.BeginMove(section);
+                _vm.DragMoveTo(empty, 34, free: true);
+                _vm.EndDrag();
+                var moved = empty.Clips.First();
+                _vm.LoopMode = true;
+                _vm.BeginLoop(moved, left: false);
+                _vm.DragLoopTo(moved.TimelineEndSeconds + 12, free: false);
+                _vm.EndDrag();
+                _vm.AddEmptyTrackCommand.Execute(null);                 // and one still empty
+                _vm.SelectedTrack = empty;
+                _vm.SelectClip(empty.Clips.OrderBy(c => c.TimelineStartSeconds).First());
+                _vm.SnapLineSeconds = 38;                               // as a drag would show it
+                _vm.SeekTo(60);
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 await Task.Delay(400);
             }
@@ -439,6 +464,15 @@ public partial class MainWindow : Window
             pass.Add("(no track loaded, so the section commands are untested - pass a file to cover them)");
         }
 
+        // --- empty tracks, paste target, dragging between tracks, snapping, loop mode ---
+        try { RunEditingGestures(Check, pass); }
+        finally
+        {
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _vm.LoopMode = false;
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -456,6 +490,199 @@ public partial class MainWindow : Window
         foreach (var f in fail) App.Log("gesturetest: FAIL - " + f);
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// The 2026-09-24 editing features, through the real lane handlers with a scripted pointer.
+    ///
+    /// <para>
+    /// Pointer positions are worked out from where the lanes actually are in the laid-out window,
+    /// so this also proves that a y position picks the track the eye would pick. Nothing is sent to
+    /// the real mouse or keyboard, and the Windows clipboard is only ever read — pasting a file
+    /// copied in Explorer is not exercised here, because setting that up would overwrite the
+    /// clipboard of whoever is using the machine.
+    /// </para>
+    /// </summary>
+    private void RunEditingGestures(Action<string, bool> Check, List<string> pass)
+    {
+        // The shortcuts are XAML wiring, which no unit test can see.
+        bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+T is bound to add an empty track", Bound(Key.T, _vm.AddEmptyTrackCommand));
+        Check("Ctrl+L is bound to loop mode", Bound(Key.L, _vm.ToggleLoopModeCommand));
+
+        // A new P/Invoke, and a single-file exe is exactly where those fail to resolve.
+        uint sequence = 0;
+        try { sequence = MainViewModel.ClipboardSequence(); }
+        catch (Exception ex) { App.Log("gesturetest: clipboard counter threw " + ex.Message); }
+        Check($"the Windows clipboard counter resolves in this build (it reads {sequence})", sequence > 0);
+
+        if (_vm.Tracks.FirstOrDefault() is not { IsLoaded: true } song)
+        {
+            pass.Add("(no track loaded, so the editing gestures are untested - pass a file to cover them)");
+            return;
+        }
+
+        _vm.PixelsPerSecond = 40;
+        _vm.ScrollSeconds = 40;
+        double pps = _vm.PixelsPerSecond;
+        double frame = 1.0 / _vm.Session.SampleRate;
+
+        // --- an empty track ---
+        int count = _vm.Tracks.Count;
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var empty = _vm.Tracks[^1];
+        Check("+ Empty track adds a track", _vm.Tracks.Count == count + 1);
+        Check("the new track is empty and not reported as a missing song",
+              empty.IsEmpty && empty.IsLoaded && empty.LoadError is null);
+        Check("the new track is selected, so Ctrl+V goes to it", ReferenceEquals(_vm.SelectedTrack, empty));
+
+        // --- paste lands on the selected track, at the playhead ---
+        _vm.SelectedTrack = song;
+        _vm.SeekTo(48);
+        _vm.SplitAtPlayheadCommand.Execute(null);
+        _vm.SeekTo(52);
+        _vm.SplitAtPlayheadCommand.Execute(null);
+        var four = song.Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - 48) < 0.01);
+        Check($"a 4 s section to work with ({four?.TimelineLengthSeconds:0.00}s)",
+              four is not null && Math.Abs(four.TimelineLengthSeconds - 4) < 0.01);
+        if (four is null) return;
+
+        _vm.SelectClip(four);
+        _vm.CopyClipCommand.Execute(null);
+        _vm.SelectedTrack = empty;
+        _vm.SeekTo(44.5);
+        _vm.PasteClipCommand.Execute(null);
+        PumpUntil(() => empty.Clips.Count == 1);
+        var pasted = empty.Clips.FirstOrDefault();
+        Check("paste lands on the selected track, not the one it was copied from", pasted is not null);
+        Check($"paste lands at the playhead (at {pasted?.TimelineStartSeconds:0.0000}s, playhead at 44.5)",
+              pasted is not null && Math.Abs(pasted.TimelineStartSeconds - 44.5) <= frame);
+        Check("the empty track took the tempo and pitch the section was playing at",
+              empty.Model.Speed == song.Model.Speed && empty.Model.Semitones == song.Model.Semitones);
+
+        // --- undo keeps the paste target where it was ---
+        _vm.UndoCommand.Execute(null);
+        var emptyId = empty.Id;
+        PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == emptyId) is { IsEmpty: true });
+        Check("undo keeps the selected track selected", _vm.SelectedTrack?.Id == emptyId);
+        empty = _vm.Tracks.First(t => t.Id == emptyId);                 // undo rebuilt every row
+        song = _vm.Tracks.First(t => t.Id == song.Id);
+        four = song.Clips.First(c => Math.Abs(c.TimelineStartSeconds - 48) < 0.01);
+
+        UpdateLayout();
+        PumpUntil(() => LaneOf(empty) is { ActualHeight: > 0 });
+        var songLane = LaneOf(song);
+        var emptyLane = LaneOf(empty);
+        Check($"both lanes are laid out ({songLane?.ActualHeight:0} and {emptyLane?.ActualHeight:0} px high)",
+              songLane is { ActualHeight: > 0 } && emptyLane is { ActualHeight: > 0 });
+        if (songLane is null || emptyLane is null) return;
+
+        Point At(FrameworkElement lane, double seconds)
+        {
+            var origin = lane.TranslatePoint(new Point(0, 0), this);
+            return new Point(origin.X + (seconds - _vm.ScrollSeconds) * pps, origin.Y + lane.ActualHeight / 2);
+        }
+
+        // Presses, moves and releases through the lane handlers; returns the guide line shown just
+        // before letting go.
+        double? Drag(FrameworkElement lane, Point from, Point to)
+        {
+            _scriptedWindowPoint = from;
+            LaneDown(lane, from);
+            var mid = new Point((from.X + to.X) / 2, (from.Y + to.Y) / 2);
+            _scriptedWindowPoint = mid;
+            LaneMove(lane, mid, true);
+            _scriptedWindowPoint = to;
+            LaneMove(lane, to, true);
+            double? guide = _vm.SnapLineSeconds;
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            return guide;
+        }
+
+        Check("the pointer over the empty lane picks the empty track",
+              ReferenceEquals(TrackAtWindowY(At(emptyLane, 50).Y), empty));
+        Check("the pointer over the song's lane picks the song",
+              ReferenceEquals(TrackAtWindowY(At(songLane, 50).Y), song));
+
+        // --- a right-click selects the lane it lands on ---
+        _vm.SelectedTrack = song;
+        OnLaneRightButtonDown(emptyLane, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+        { RoutedEvent = PreviewMouseRightButtonDownEvent });
+        Check("a right-click selects that track, so the menu's Paste goes there", ReferenceEquals(_vm.SelectedTrack, empty));
+
+        // --- drag the section down onto the empty track, 3 s later ---
+        var sectionId = four.Id;
+        _scriptedModifiers = ModifierKeys.Control;                  // free, so the landing point is exact
+        Drag(songLane, At(songLane, 50), At(emptyLane, 53));
+        _scriptedModifiers = null;
+
+        var moved = empty.Clips.FirstOrDefault(c => c.Id == sectionId);
+        Check("a section dragged down lands on the other track",
+              moved is not null && song.Clips.All(c => c.Id != sectionId));
+        Check($"it lands where it was dropped (at {moved?.TimelineStartSeconds:0.0000}s, expected 51)",
+              moved is not null && Math.Abs(moved.TimelineStartSeconds - 51) <= frame);
+        Check("the empty track took the section's tempo and pitch", empty.Model.Speed == song.Model.Speed);
+        Check("the dropped section is still the selection", _vm.SelectedClip?.Id == sectionId);
+        Check("the track it landed on becomes the selected track", ReferenceEquals(_vm.SelectedTrack, empty));
+        if (moved is null) return;
+
+        // --- snapping: dropped 6 px from the hole's edge at 48 s, it lands exactly on it ---
+        var guide = Drag(emptyLane, At(emptyLane, 53), At(emptyLane, 53 - 2.85));
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"a section dropped near another's edge snaps to it (at {moved.TimelineStartSeconds:0.00000}s)",
+              Math.Abs(moved.TimelineStartSeconds - 48) <= frame);
+        Check($"a guide line marks the edge it snapped to ({guide:0.000})", guide is { } g && Math.Abs(g - 48) <= frame);
+
+        // --- Ctrl lets go of snapping ---
+        _scriptedModifiers = ModifierKeys.Control;
+        Drag(emptyLane, At(emptyLane, 50), At(emptyLane, 50.1));
+        _scriptedModifiers = null;
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"with Ctrl held it goes exactly where it was put (at {moved.TimelineStartSeconds:0.00000}s)",
+              Math.Abs(moved.TimelineStartSeconds - 48.1) <= frame);
+
+        // --- loop mode: drag the right end three lengths further ---
+        _vm.LoopMode = true;
+        double end = moved.TimelineEndSeconds;
+        var grab = At(emptyLane, end - 2 / pps);
+        Drag(emptyLane, grab, new Point(grab.X + 12 * pps, grab.Y));
+        var repeats = empty.Clips.OrderBy(c => c.TimelineStartSeconds).ToList();
+        Check($"loop mode turns the drag into repeats (got {repeats.Count} sections, expected 4)", repeats.Count == 4);
+        Check("every repeat is the same length",
+              repeats.All(c => Math.Abs(c.LengthSeconds - repeats[0].LengthSeconds) < 1e-9));
+        var timeline = _vm.Session.VoiceFor(empty.Model)?.Timeline;
+        Check("each repeat butts exactly against the last, so the engine crossfades every join",
+              timeline is { Count: 4 } && timeline.ButtJoinAfter(0) && timeline.ButtJoinAfter(1) && timeline.ButtJoinAfter(2));
+
+        // --- and one undo takes the whole loop back ---
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == emptyId)?.Clips.Count == 1);
+        Check("one undo takes the whole loop back", _vm.Tracks.FirstOrDefault(t => t.Id == emptyId)?.Clips.Count == 1);
+        _vm.LoopMode = false;
+
+        // --- a song file put onto an empty track goes on that track, where it was aimed ---
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var target = _vm.Tracks[^1];
+        var placing = _vm.PlaceFilesAsync(target, new[] { song.Model.SourcePath }, 10);
+        PumpUntil(() => placing.IsCompleted, 20000);
+        var placed = target.Clips.FirstOrDefault();
+        Check($"a file placed on an empty track lands there at 10.00s (at {placed?.TimelineStartSeconds:0.0000}s)",
+              placed is not null && Math.Abs(placed.TimelineStartSeconds - 10) <= frame);
+        Check($"and the track becomes that song ('{target.Name}')", target.Model.SourcePath == song.Model.SourcePath);
+
+        // --- the menu's "Move section to playhead" goes the same way as a drag: exactly there ---
+        UpdateLayout();
+        if (placed is not null && LaneOf(target) is { } targetLane)
+        {
+            _vm.SelectClip(placed);
+            _vm.SeekTo(3.25);
+            OnMoveToPlayhead(targetLane, new RoutedEventArgs());
+            var after = target.Clips.FirstOrDefault(c => c.Id == placed.Id);
+            Check($"'Move section to playhead' lands it exactly there (at {after?.TimelineStartSeconds:0.00000}s)",
+                  after is not null && Math.Abs(after.TimelineStartSeconds - 3.25) <= frame);
+        }
     }
 
     /// <summary>
@@ -590,9 +817,6 @@ public partial class MainWindow : Window
 
     // ---------------- drag and drop ----------------
 
-    private static readonly string[] AudioExtensions =
-        { ".mp3", ".m4a", ".aac", ".wav", ".flac", ".wma", ".ogg", ".opus", ".aif", ".aiff", ".mp4", ".m4b" };
-
     private void OnDragOver(object sender, DragEventArgs e)
     {
         e.Effects = HasAudio(e) ? DragDropEffects.Copy : DragDropEffects.None;
@@ -613,6 +837,14 @@ public partial class MainWindow : Window
         var pos = e.GetPosition(this);
         if (pos.X > 392) at = Math.Max(0, _vm.ScrollSeconds + (pos.X - 392) / _vm.PixelsPerSecond);
 
+        // Aimed at an empty track's lane, the song goes onto that track rather than a new one —
+        // that is what the empty track was made for. Anywhere else still adds a track per file.
+        if (pos.X > 392 && TrackAtWindowY(pos.Y) is { IsEmpty: true } empty)
+        {
+            await _vm.PlaceFilesAsync(empty, files, at);
+            return;
+        }
+
         await _vm.AddFilesAsync(files, at);
     }
 
@@ -620,8 +852,7 @@ public partial class MainWindow : Window
         => e.Data.GetDataPresent(DataFormats.FileDrop)
            && ((string[])e.Data.GetData(DataFormats.FileDrop)!).Any(IsAudio);
 
-    private static bool IsAudio(string path)
-        => AudioExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+    private static bool IsAudio(string path) => MainViewModel.IsAudioFile(path);
 
     // ---------------- ruler: scrub and loop ----------------
 
@@ -675,7 +906,7 @@ public partial class MainWindow : Window
         _settingLoop = false;
     }
 
-    // ---------------- lanes: select, drag clips, seek ----------------
+    // ---------------- lanes: select, drag sections, seek ----------------
 
     /// <summary>Feeds the real lane width to the view-model, which Fit and the scrollbar both need.</summary>
     private void OnLaneSizeChanged(object sender, SizeChangedEventArgs e)
@@ -689,13 +920,30 @@ public partial class MainWindow : Window
     /// <summary>How close to a section's edge counts as grabbing the edge rather than the body.</summary>
     private const double EdgeGrabPixels = 7;
 
-    private enum DragKind { Move, TrimStart, TrimEnd }
+    private enum DragKind { Move, TrimStart, TrimEnd, LoopStart, LoopEnd }
 
+    private TrackViewModel? _dragTrack;
     private ClipViewModel? _dragClip;
     private DragKind _dragKind;
-    private double _dragStartTrackStart;
-    private double _dragStartSourceStart;
-    private double _dragStartSourceEnd;
+    private Point _dragOrigin;
+    private double _dragStartTimelineStart;
+    private double _dragStartEdge;
+    private bool _dragging;
+
+    /// <summary>
+    /// Scripted pointer for <c>--gesturetest</c>: a window position and the modifier keys held.
+    /// Null in normal use. The lane gestures take positions rather than event args so the test can
+    /// drive the very same code a mouse does without synthesising any real input.
+    /// </summary>
+    private Point? _scriptedWindowPoint;
+    private ModifierKeys? _scriptedModifiers;
+
+    private ModifierKeys Modifiers => _scriptedModifiers ?? Keyboard.Modifiers;
+
+    private Point WindowPoint(MouseEventArgs e) => _scriptedWindowPoint ?? e.GetPosition(this);
+
+    /// <summary>A window position as an x inside one lane.</summary>
+    private double LaneX(FrameworkElement lane, Point window) => window.X - lane.TranslatePoint(new Point(0, 0), this).X;
 
     private double SecondsAtLaneX(double x) => Math.Max(0, _vm.ScrollSeconds + x / _vm.PixelsPerSecond);
 
@@ -719,143 +967,199 @@ public partial class MainWindow : Window
         return DragKind.Move;
     }
 
+    /// <summary>
+    /// What pressing here would do. In loop mode an outer edge repeats the section instead of
+    /// trimming it; the edge between two repeats of a loop is inside it, and moves the repeat.
+    /// </summary>
+    private DragKind KindAt(ClipViewModel clip, double x)
+    {
+        var edge = HitTestClip(clip, x);
+        if (edge == DragKind.Move || !_vm.LoopMode) return edge;
+        bool left = edge == DragKind.TrimStart;
+        return _vm.CanLoopFrom(clip, left) ? (left ? DragKind.LoopStart : DragKind.LoopEnd) : DragKind.Move;
+    }
+
+    /// <summary>
+    /// The track whose row is under a window y, or null outside the visible lanes. Only rows the
+    /// scroller is actually showing count, or a drag over the ruler could land on a track scrolled
+    /// out of view above it.
+    /// </summary>
+    private TrackViewModel? TrackAtWindowY(double y)
+    {
+        double top = TrackScroller.TranslatePoint(new Point(0, 0), this).Y;
+        if (y < top || y > top + TrackScroller.ViewportHeight) return null;
+
+        foreach (var t in _vm.Tracks)
+        {
+            if (TrackList.ItemContainerGenerator.ContainerFromItem(t) is not FrameworkElement row) continue;
+            double rowTop = row.TranslatePoint(new Point(0, 0), this).Y;
+            if (y >= rowTop && y < rowTop + row.ActualHeight) return t;
+        }
+        return null;
+    }
+
+    /// <summary>The lane element of a track's row, for the gesture test to aim at.</summary>
+    private FrameworkElement? LaneOf(TrackViewModel t)
+    {
+        if (TrackList.ItemContainerGenerator.ContainerFromItem(t) is not ContentPresenter row) return null;
+        row.ApplyTemplate();
+        return row.ContentTemplate?.FindName("Lane", row) as FrameworkElement;
+    }
+
     private void OnLaneMouseDown(object sender, MouseButtonEventArgs e)
     {
-        var host = (FrameworkElement)sender;
-        if (host.DataContext is not TrackViewModel vm) return;
+        if (LaneDown((FrameworkElement)sender, WindowPoint(e))) e.Handled = true;
+    }
+
+    private void OnLaneMouseMove(object sender, MouseEventArgs e)
+        => LaneMove((FrameworkElement)sender, WindowPoint(e), e.LeftButton == MouseButtonState.Pressed);
+
+    private void OnLaneMouseUp(object sender, MouseButtonEventArgs e) => LaneUp((FrameworkElement)sender);
+
+    /// <summary>
+    /// Alt+Tab, a dialog, or a right-click mid-drag takes the mouse away without a button-up.
+    /// The drag is finished as if it had been let go — otherwise the drop, the only place overlap
+    /// is resolved, never happens, and two sections are left sounding at once.
+    /// </summary>
+    private void OnLaneLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_dragClip is not null) LaneUp((FrameworkElement)sender);
+    }
+
+    private bool LaneDown(FrameworkElement lane, Point window)
+    {
+        if (lane.DataContext is not TrackViewModel vm) return false;
 
         _vm.SelectedTrack = vm;
-        double x = e.GetPosition(host).X;
+        double x = LaneX(lane, window);
 
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+        if (Modifiers.HasFlag(ModifierKeys.Alt))
         {
             // Alt-click puts the playhead here without disturbing anything.
             _vm.SeekTo(SecondsAtLaneX(x));
-            e.Handled = true;
-            return;
+            return true;
         }
 
         var clip = ClipAtLaneX(vm, x);
         _vm.SelectClip(clip);
-        if (clip is null) { e.Handled = true; return; }     // clicking a gap just clears the selection
+        if (clip is null) return true;                 // clicking a gap just clears the selection
 
         _dragTrack = vm;
         _dragClip = clip;
-        _dragKind = HitTestClip(clip, x);
+        _dragKind = KindAt(clip, x);
 
         // A section whose audio never loaded has no usable source span, so there is nothing to
-        // trim and the clamps below would be handed min > max. Treat it as a move instead.
+        // trim or repeat. Treat it as a move instead.
         if (clip.SourceDurationSeconds <= 0.001) _dragKind = DragKind.Move;
 
-        _dragOrigin = e.GetPosition(this);
-        _dragStartTrackStart = clip.TrackStartSeconds;
-        _dragStartOffset = vm.TimelineOffsetSeconds;
-        _dragStartSourceStart = clip.SourceStartSeconds;
-        _dragStartSourceEnd = clip.SourceEndSeconds < 0 ? clip.SourceDurationSeconds : clip.SourceEndSeconds;
+        _dragOrigin = window;
+        _dragStartTimelineStart = clip.TimelineStartSeconds;
+        _dragStartEdge = _dragKind is DragKind.TrimStart or DragKind.LoopStart
+            ? clip.TimelineStartSeconds
+            : clip.TimelineEndSeconds;
         _dragging = false;
-        host.CaptureMouse();
-        e.Handled = true;
+        if (_scriptedWindowPoint is null) lane.CaptureMouse();
+        return true;
     }
 
-    private void OnLaneMouseMove(object sender, MouseEventArgs e)
+    private void LaneMove(FrameworkElement lane, Point window, bool pressed)
     {
-        var host = (FrameworkElement)sender;
-
-        // Hovering near an edge shows the resize cursor, so trimming is discoverable without a manual.
-        if (_dragClip is null && host.DataContext is TrackViewModel hover)
+        // Hovering near an edge shows what grabbing it would do, so trimming and looping are
+        // discoverable without a manual.
+        if (_dragClip is null && lane.DataContext is TrackViewModel hover)
         {
-            var over = ClipAtLaneX(hover, e.GetPosition(host).X);
-            host.Cursor = over is not null && HitTestClip(over, e.GetPosition(host).X) != DragKind.Move
-                ? Cursors.SizeWE
-                : Cursors.Arrow;
+            double hx = LaneX(lane, window);
+            var over = ClipAtLaneX(hover, hx);
+            lane.Cursor = over is null ? Cursors.Arrow : KindAt(over, hx) switch
+            {
+                DragKind.TrimStart or DragKind.TrimEnd => Cursors.SizeWE,
+                DragKind.LoopStart => Cursors.ScrollW,
+                DragKind.LoopEnd => Cursors.ScrollE,
+                _ => Cursors.Arrow,
+            };
         }
 
-        if (_dragClip is null || _dragTrack is null || e.LeftButton != MouseButtonState.Pressed) return;
+        if (_dragClip is null || _dragTrack is null || !(pressed || _scriptedWindowPoint is not null)) return;
 
-        double dx = e.GetPosition(this).X - _dragOrigin.X;
+        double dx = window.X - _dragOrigin.X;
+        double dy = window.Y - _dragOrigin.Y;
 
-        // A few pixels of slop so a click does not nudge a section by accident.
-        if (!_dragging && Math.Abs(dx) < 4) return;
-        _dragging = true;
+        if (!_dragging)
+        {
+            // A few pixels of slop so a click does not nudge a section by accident. A move also
+            // starts on a vertical pull alone, which is how a section goes to the track below.
+            bool started = Math.Abs(dx) >= 4 || (_dragKind == DragKind.Move && Math.Abs(dy) >= 8);
+            if (!started) return;
+            _dragging = true;
 
-        double deltaSeconds = dx / _vm.PixelsPerSecond;
-        double speed = Math.Max(0.01, _dragTrack.Speed);
+            switch (_dragKind)
+            {
+                case DragKind.Move: _vm.BeginMove(_dragClip); break;
+                case DragKind.TrimStart: _vm.BeginTrim(_dragClip, start: true); break;
+                case DragKind.TrimEnd: _vm.BeginTrim(_dragClip, start: false); break;
+                case DragKind.LoopStart: _vm.BeginLoop(_dragClip, left: true); break;
+                case DragKind.LoopEnd: _vm.BeginLoop(_dragClip, left: false); break;
+            }
+        }
+
+        // Ctrl is the one exception to snapping everywhere: it lets go of section edges, bar
+        // lines and whole repeats, and the drag goes exactly where the pointer does.
+        bool free = Modifiers.HasFlag(ModifierKeys.Control);
+        double delta = dx / Math.Max(0.01, _vm.PixelsPerSecond);
 
         switch (_dragKind)
         {
             case DragKind.Move:
-            {
-                // A section moves within its own track, in the track's unstretched timebase, so
-                // dragging it does not drag the whole deck out of line with the other songs.
-                double targetTimeline = Snap(Math.Max(0, TimelineStartOf(_dragStartTrackStart) + deltaSeconds));
-                double trackStart = Math.Max(0, (targetTimeline - _dragTrack.TimelineOffsetSeconds) * speed);
-                _dragClip.TrackStartSeconds = trackStart;
-                _vm.Status = $"{_dragTrack.Name}: section at {TimelineStartOf(trackStart):0.00}s";
+                _vm.DragMoveTo(TrackAtWindowY(window.Y), _dragStartTimelineStart + delta, free);
                 break;
-            }
-
             case DragKind.TrimStart:
-            {
-                // Dragging the left edge eats into the source AND moves the section, so the audio
-                // under the pointer stays put instead of sliding away.
-                double deltaSource = deltaSeconds * speed;
-                double lowestStart = Math.Max(0, _dragStartSourceStart - _dragStartTrackStart);
-                double newStart = Math.Clamp(_dragStartSourceStart + deltaSource,
-                                             lowestStart,
-                                             Math.Max(lowestStart, _dragStartSourceEnd - 0.05));
-                double consumed = newStart - _dragStartSourceStart;
-
-                _dragClip.SourceStartSeconds = newStart;
-                _dragClip.TrackStartSeconds = Math.Max(0, _dragStartTrackStart + consumed);
-                _vm.Status = $"{_dragTrack.Name}: section {_dragClip.LengthSeconds:0.0}s";
-                break;
-            }
-
             case DragKind.TrimEnd:
-            {
-                double deltaSource = deltaSeconds * speed;
-                double floor = Math.Min(_dragClip.SourceStartSeconds + 0.05, _dragClip.SourceDurationSeconds);
-                double newEnd = Math.Clamp(_dragStartSourceEnd + deltaSource,
-                                           floor,
-                                           Math.Max(floor, _dragClip.SourceDurationSeconds));
-                _dragClip.SourceEndSeconds = newEnd;
-                _vm.Status = $"{_dragTrack.Name}: section {_dragClip.LengthSeconds:0.0}s";
+                _vm.DragTrimTo(_dragStartEdge + delta, free);
                 break;
-            }
+            case DragKind.LoopStart:
+            case DragKind.LoopEnd:
+                _vm.DragLoopTo(_dragStartEdge + delta, free);
+                break;
         }
-
         _vm.RecomputeLength();
     }
 
-    /// <summary>Where a position in the dragged track's own timebase sits on the timeline.</summary>
-    private double TimelineStartOf(double trackSeconds)
-        => (_dragTrack?.TimelineOffsetSeconds ?? 0) + trackSeconds / Math.Max(0.01, _dragTrack?.Speed ?? 1);
-
-    /// <summary>
-    /// Snaps to bar lines unless Ctrl is held. Mashups are assembled on bars, so snapping is the
-    /// helpful default and holding a key is the exception.
-    /// </summary>
-    private double Snap(double seconds)
+    private void LaneUp(FrameworkElement lane)
     {
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control) || _vm.ProjectBpm <= 10) return seconds;
-        double bar = 4 * 60.0 / _vm.ProjectBpm;
-        return Math.Round(seconds / bar) * bar;
-    }
-
-    private void OnLaneMouseUp(object sender, MouseButtonEventArgs e)
-    {
-        ((FrameworkElement)sender).ReleaseMouseCapture();
-        _vm.EndGesture();
-        if (_dragging && _dragClip is not null && _dragTrack is not null)
-        {
-            _vm.Status = _dragKind == DragKind.Move
-                ? $"{_dragTrack.Name}: section moved to {_dragClip.TimelineStartSeconds:0.00}s."
-                : $"{_dragTrack.Name}: section is {_dragClip.LengthSeconds:0.0}s.";
-        }
+        // State first: releasing capture raises LostMouseCapture, which comes straight back here.
+        bool dragging = _dragging;
         _dragTrack = null;
         _dragClip = null;
         _dragging = false;
+
+        if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
+        if (dragging) _vm.EndDrag();
+        else _vm.EndGesture();
     }
+
+    /// <summary>
+    /// A right-click selects the track and the section under it before the menu opens, so the
+    /// menu acts on what was clicked — "Paste at playhead" included, which pastes onto the
+    /// selected track.
+    /// </summary>
+    private void OnLaneRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var lane = (FrameworkElement)sender;
+        if (lane.DataContext is not TrackViewModel vm) return;
+        _vm.SelectedTrack = vm;
+        _vm.SelectClip(ClipAtLaneX(vm, e.GetPosition(lane).X));
+    }
+
+    private void OnLaneContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (((FrameworkElement)sender).ContextMenu is not { } menu) return;
+        foreach (var item in menu.Items.OfType<MenuItem>())
+            if (item.Tag as string == "loopmode") item.IsChecked = _vm.LoopMode;
+    }
+
+    private void OnLoopModeMenu(object sender, RoutedEventArgs e) => _vm.LoopMode = ((MenuItem)sender).IsChecked;
+
+    private void OnAddEmptyTrackMenu(object sender, RoutedEventArgs e) => _vm.AddEmptyTrackCommand.Execute(null);
 
     // ---------------- clip context menu ----------------
 
@@ -910,11 +1214,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        _vm.PushUndo("trim", null);
-        c.SourceStartSeconds += into;
-        c.TrackStartSeconds += into;
-        _vm.RecomputeLength();
-        _vm.Status = $"{c.Track.Name}: {c.TrimText}.";
+        _vm.BeginTrim(c, start: true);
+        _vm.DragTrimTo(_vm.PositionSeconds, free: true);
+        _vm.EndDrag();
     }
 
     private void OnTrimEndToPlayhead(object sender, RoutedEventArgs e)
@@ -923,10 +1225,9 @@ public partial class MainWindow : Window
         double into = (_vm.PositionSeconds - c.TimelineStartSeconds) * c.Track.Speed + c.SourceStartSeconds;
         if (into <= c.SourceStartSeconds + 0.05) { _vm.Status = "The playhead is at or before the section's start."; return; }
 
-        _vm.PushUndo("trim", null);
-        c.SourceEndSeconds = Math.Min(into, c.SourceDurationSeconds);
-        _vm.RecomputeLength();
-        _vm.Status = $"{c.Track.Name}: {c.TrimText}.";
+        _vm.BeginTrim(c, start: false);
+        _vm.DragTrimTo(_vm.PositionSeconds, free: true);
+        _vm.EndDrag();
     }
 
     private void OnClearTrim(object sender, RoutedEventArgs e)
@@ -942,10 +1243,11 @@ public partial class MainWindow : Window
     private void OnMoveToPlayhead(object sender, RoutedEventArgs e)
     {
         if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
-        _vm.PushUndo("move", null);
-        c.TrackStartSeconds = Math.Max(0, (_vm.PositionSeconds - c.Track.TimelineOffsetSeconds) * c.Track.Speed);
-        _vm.RecomputeLength();
-        _vm.Status = $"{c.Track.Name}: section moved to {c.TimelineStartSeconds:0.00}s.";
+        // The same path as a drag with Ctrl held: exact, before the track's start if need be, and
+        // overwriting what it lands on rather than leaving two sections sounding at once.
+        _vm.BeginMove(c);
+        _vm.DragMoveTo(c.Track, _vm.PositionSeconds, free: true);
+        _vm.EndDrag();
     }
 
     private void OnSplitHere(object sender, RoutedEventArgs e) => _vm.SplitAtPlayheadCommand.Execute(null);

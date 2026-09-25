@@ -111,9 +111,19 @@ public sealed class TimelineRuler : FrameworkElement
     }
 }
 
-/// <summary>A one-pixel playhead line drawn over the lanes.</summary>
+/// <summary>
+/// A one-pixel playhead line drawn over the lanes, the transport loop region, and — while a drag
+/// is holding a section against another's edge — a guide line at that edge, across every lane, so
+/// it is visible which section it is lining up with even when that one is on a different track.
+/// </summary>
 public sealed class PlayheadOverlay : FrameworkElement
 {
+    public static readonly DependencyProperty SnapLineSecondsProperty = DependencyProperty.Register(
+        nameof(SnapLineSeconds), typeof(double?), typeof(PlayheadOverlay),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public double? SnapLineSeconds { get => (double?)GetValue(SnapLineSecondsProperty); set => SetValue(SnapLineSecondsProperty, value); }
+
     public static readonly DependencyProperty PositionSecondsProperty = DependencyProperty.Register(
         nameof(PositionSeconds), typeof(double), typeof(PlayheadOverlay),
         new FrameworkPropertyMetadata(0.0, FrameworkPropertyMetadataOptions.AffectsRender));
@@ -166,6 +176,20 @@ public sealed class PlayheadOverlay : FrameworkElement
                 edge.Freeze();
                 var rect = new Rect(Math.Max(0, x0), 0, Math.Min(w, x1) - Math.Max(0, x0), h);
                 if (rect.Width > 0) dc.DrawRectangle(fill, edge, rect);
+            }
+        }
+
+        if (SnapLineSeconds is { } snap)
+        {
+            double sx = (snap - ScrollSeconds) * pps;
+            if (sx >= -1 && sx <= w + 1)
+            {
+                var guide = new Pen(new SolidColorBrush(Color.FromArgb(230, 120, 220, 255)), 1)
+                {
+                    DashStyle = new DashStyle(new double[] { 3, 3 }, 0),
+                };
+                guide.Freeze();
+                dc.DrawLine(guide, new Point(sx, 0), new Point(sx, h));
             }
         }
 

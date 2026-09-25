@@ -20,8 +20,18 @@ mistakes, not by describing the project.
   `SourceStart`. Do not "improve" it with a tolerance: that would start suppressing declicks
   between sections the user meant to be separate.
 - **Neither side of a butt join gets a declick.** Two abutting 5 ms ramps do not sum to unity —
-  they punch a hole at every loop repeat. The join is covered by a crossfade against the outgoing
-  section's handle, or on the vocoder path by the stretcher's own overlap-add.
+  they punch a hole at every loop repeat. The join is covered by a crossfade from the outgoing
+  section's handle, rendered through the real stretcher and EQ at the join (`CaptureHandle`), on
+  every path. Before 2026-09-24 it was not covered on any path and every loop repeat clicked
+  (`JoinTests`). Do not "simplify" it back to reading the handle raw from the file: that is what
+  landed the old fade 65 frames late.
+- **Positions are worked out in whole frames, then turned into seconds.** `TimelineEditor` and
+  the drag gestures never add seconds together to place a section: the engine rounds each position
+  separately, and a sum of seconds can land a frame off — which silently turns a seam or a butt join
+  into a gap with two declicks. Keep new placement code in frames.
+- **A track's origin (`TimelineOffsetSeconds`) moves.** Paste, drag or loop before it and it moves
+  back, with every section moving forward by the same whole frames. It is not a wall; do not clamp
+  to it.
 - **Build output goes to `%LOCALAPPDATA%\Benchmix.build\`** on purpose, to keep bin/obj out of
   OneDrive *and* because the native `SignalsmithStretch.dll` fails to load from a deep path
   (MAX_PATH). Do not "fix" it.
@@ -31,8 +41,10 @@ mistakes, not by describing the project.
 
 ## Two words that mean two different things
 
-- A **loop** is either hand-built (Ctrl+D repeating a section) or the transport loop region
-  (shift-drag the ruler, listening only). They share no code. "My loop does X" is ambiguous — ask.
+- A **loop** is either hand-built (Ctrl+D repeating a section, or LOOP MODE dragging a section's
+  end) or the transport loop region (shift-drag the ruler, listening only). Loop mode and Ctrl+D
+  make the same thing: ordinary sections. The transport loop shares no code with either. "My loop
+  does X" is ambiguous — ask.
 - A **repeat is not a seam.** The seam rule needs the source to continue; a repeat jumps the source
   backwards. Every seam test is about splitting and *not* moving. They do not cover loops.
 
@@ -56,8 +68,9 @@ Then, against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win-x6
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play and every section command, 27 checks |
+| `--gesturetest <song>` | pan, double-click-to-play, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode — 56 checks |
 | `--demosections --uiprobe <png>` | the lane really draws sections and selection |
+| `--demoediting --uiprobe <png>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent) |
@@ -70,6 +83,9 @@ These **exit 1 on failure** and also log a `verdict=` line to
 - **Never a constant tone for anything positional.** The first regression test for the clip-offset
   bug used one and passed against the very bug it was written for. Use a ramp (value == position)
   or a single marker sample.
+- **Never 440 Hz near the phase vocoder.** Its delay is 7200 frames — exactly 66 cycles of 440 Hz —
+  so audio misplaced by that much comes back in phase and passes. It hid a real defect in the first
+  join tests. `JoinTests` use 431 Hz.
 - **Measure a processed track against an unprocessed one**, never a number in isolation. The
   150 ms stretcher delay survived for months because every test checked *what note* came out and
   none checked *when*.
@@ -99,7 +115,9 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 
 - **Nobody has ever listened to Benchmix's output.** Every claim in this repo is a measurement.
   Measurements can be right about the wrong thing. Do not say something "sounds" any way.
-- The vocoder path's behaviour at a genuine (non-seam) join is reasoned about, not measured.
+- Joins between sections are measured on a sine (`JoinTests`), not on music and not by ear.
+- A section dragged onto another track at the same moment dips in level at both ends (each track
+  declicks its own cut). That is read off the envelope code, not measured.
 - Stem separation quality is proven only by a 39 dB control test, not by ear.
 
 ## Working with Daniel
@@ -111,4 +129,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-09-17.*
+*Revised 2026-09-24.*

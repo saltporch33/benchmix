@@ -74,6 +74,32 @@ The one deliberate exception is a **trimmed** clip edge, which gets a 5 ms decli
 a waveform lands on a non-zero sample, and that is a click. An untrimmed clip gets no ramp at all,
 which is what preserves the guarantee.
 
+## Joins between sections
+
+A track holds sections, and where two meet there are three cases:
+
+- **A seam** — a section split and neither half moved. The second continues the first in the same
+  file, so the engine plays straight through: no fade, no re-prime, not one sample changed.
+- **A butt join** — the next section starts on the very frame the last one ends but does not
+  continue it: every repeat of a loop. Neither side is declicked (two ramps back to back are a
+  hole). Instead, at the join the voice renders five milliseconds of what the outgoing section
+  *would have played next* — its handle, read past its cut, through the real stretcher and EQ —
+  and crossfades it, equal power, into the incoming section. The fade survives a render-block
+  boundary, so preview and export agree. Measured: the largest step at a phase-mismatched loop join
+  equals the signal's own largest step, on the untouched, linked and phase-vocoder paths alike.
+- **A gap** — each side gets its 5 ms declick where it was cut.
+
+**Every placement is in whole frames.** The seam test and the butt-join test both compare two
+frame numbers for exact equality, and the engine rounds each position separately. Summing
+positions in seconds and rounding the total can land a frame or two away — enough to turn a seam
+into a gap with a declick either side. So `TimelineEditor` and the drag gestures work out every
+position in frames, exactly as the engine will, and only then convert back to seconds.
+
+**A track's origin moves.** `TimelineOffsetSeconds` is where a song was first dropped, and it is
+bookkeeping rather than something anyone chose. When a section is pasted, dragged or looped to a
+point before it, the origin moves back and every section on the track moves forward by the same
+whole number of frames, so nothing is heard to move.
+
 ## Tempo and key: measure, then decide
 
 Daniel asked for detection of both. [Spike 03](SPIKE-03-analysis.md) calibrated against his own
@@ -129,6 +155,14 @@ would be right for a large model and would only add ways to be wrong here.
 
 - **Sections on one track never overlap.** A track is one read position, one stretcher and one EQ;
   two sections sounding at once is not representable in that. Two things at once is a second track.
+  A dropped section or a loop overwrites what it lands on; a trim stops at the next section.
+- **A join between two tracks is not seamless.** Drag a section onto another track without moving
+  it in time, and each track still renders on its own: the end left behind and the start of the
+  moved section each get the normal 5 ms declick, so the level dips at both ends of the moved
+  section. That follows from the envelope code; it has not been measured on music or listened to.
+  A seam, which is inaudible, only exists within one track.
+- **A loop is ordinary sections.** Loop mode lays down the same repeats Ctrl+D makes; there is no
+  "looped clip" object. Changing the original section afterwards does not change its repeats.
 - **No per-section EQ, volume or speed.** Those belong to the track, so every section on it gets
   the same treatment. A section that needs its own EQ wants its own track.
 - **No automation curves.** Knobs are static per track; fades are per clip.

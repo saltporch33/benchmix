@@ -114,13 +114,21 @@ public sealed class ClipTimeline
         _clips = list.ToArray();
         _seamBefore = new bool[_clips.Length];
         _seamAfter = new bool[_clips.Length];
+        _buttAfter = new bool[_clips.Length];
         for (int i = 0; i + 1 < _clips.Length; i++)
         {
-            bool seam = _clips[i].JoinsSeamlesslyTo(_clips[i + 1]);
+            var (a, b) = (_clips[i], _clips[i + 1]);
+            bool seam = a.JoinsSeamlesslyTo(b);
             _seamAfter[i] = seam;
             _seamBefore[i + 1] = seam;
+            _buttAfter[i] = !seam
+                         && a.TrackEndFrame == b.TrackStartFrame
+                         && a.FadeOutSeconds <= 0
+                         && b.FadeInSeconds <= 0;
         }
     }
+
+    private readonly bool[] _buttAfter;
 
     private static VoiceClip Truncate(VoiceClip c, long lengthFrames) => new()
     {
@@ -140,6 +148,14 @@ public sealed class ClipTimeline
 
     /// <summary>True when this section runs into the next one with no join at all.</summary>
     public bool SeamAfter(int i) => _seamAfter[i];
+
+    /// <summary>
+    /// True when the next section starts on the very frame this one ends, but does NOT continue it
+    /// — a loop repeat, or two different passages butted together — and neither side carries a
+    /// fade of its own. That join is crossfaded rather than declicked; see
+    /// <see cref="TrackVoice"/>.
+    /// </summary>
+    public bool ButtJoinAfter(int i) => _buttAfter[i];
 
     /// <summary>End of the last section, in the track's own unstretched frames.</summary>
     public long TrackEndFrame => _clips.Length == 0 ? 0 : _clips[^1].TrackEndFrame;
@@ -168,6 +184,27 @@ public sealed class ClipTimeline
         foreach (var c in _clips)
             if (c.TrackStartFrame >= trackFrame) return c.TrackStartFrame;
         return -1;
+    }
+
+    /// <summary>
+    /// The section in this timeline identical to <paramref name="clip"/> — same audio, same
+    /// place, same cut, same fades — or null if there is none. Lets a voice keep playing a section
+    /// across an edit that did not touch it.
+    /// </summary>
+    public VoiceClip? Equivalent(VoiceClip? clip)
+    {
+        if (clip is null) return null;
+        int i = IndexAt(clip.TrackStartFrame);
+        if (i < 0) return null;
+        var c = _clips[i];
+        return ReferenceEquals(c.Audio, clip.Audio)
+            && c.TrackStartFrame == clip.TrackStartFrame
+            && c.SourceStartFrame == clip.SourceStartFrame
+            && c.SourceEndFrame == clip.SourceEndFrame
+            && c.FadeInSeconds == clip.FadeInSeconds
+            && c.FadeOutSeconds == clip.FadeOutSeconds
+            ? c
+            : null;
     }
 
     /// <summary>Whether two timelines describe the same arrangement, field for field.</summary>

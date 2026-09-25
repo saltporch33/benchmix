@@ -45,8 +45,17 @@ public sealed class TrackVoice : IDisposable
     private Stretch? _stretch;
     private float[] _inScratch = Array.Empty<float>();
     private float[] _outScratch = Array.Empty<float>();
-    private float[] _handleScratch = Array.Empty<float>();
     private float[] _envScratch = Array.Empty<float>();
+    private float[] _primeScratch = Array.Empty<float>();
+
+    // The crossfade across a butt join: what the outgoing section would have played next, already
+    // through the stretcher and the EQ, and how far into it the incoming section has got. It can
+    // outlast the run it starts in — a join 30 frames before the end of a block finishes its fade
+    // in the next block — so it is state, not a local.
+    private float[] _xfade = Array.Empty<float>();
+    private int _xfadeLength;
+    private int _xfadeDone;
+    private VoiceClip? _xfadeInto;
 
     // Published by reference swap, like MixGraph's voice array: the render thread sees either the
     // whole old arrangement or the whole new one, never a half-applied edit.
@@ -87,10 +96,17 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     public void SetTimeline(ClipTimeline timeline)
     {
+        // The bound section is about to be a stale object from the old list. If the new list has
+        // the very same section — same audio, same place, same cut, same fades — the binding
+        // carries straight over, and playback continues as if nothing happened: an edit somewhere
+        // else on the track must not re-prime the section that is playing. Otherwise it is
+        // dropped, and the next block rebinds against the new list by position.
+        var bound = _bound;
+        var into = _xfadeInto;
         _timeline = timeline;
-        // The bound section is about to be a stale object from the old list. Dropping it forces
-        // the next block to rebind against the new one by position.
-        _bound = null;
+        _bound = timeline.Equivalent(bound);
+        _xfadeInto = timeline.Equivalent(into);
+        if (_xfadeInto is null) _xfadeLength = 0;
     }
 
     /// <summary>Where this track's origin sits on the timeline, in engine frames.</summary>
@@ -245,21 +261,26 @@ public sealed class TrackVoice : IDisposable
 
     // ---------------------------------------------------------------- positions
 
-    /// <summary>Repositions to a timeline frame. Cheap enough to call while scrubbing.</summary>
+    /// <summary>
+    /// Repositions to a timeline frame. Cheap enough to call while scrubbing, because it only
+    /// records where to go: the EQ and the stretcher are re-primed by the render thread at the
+    /// start of its next block (<see cref="Reposition"/>).
+    /// <para>
+    /// Priming here instead ran the phase vocoder on whichever thread asked — the UI thread, on
+    /// every pixel of a ruler scrub, about 1.75 ms per pitched track — and could reach the native
+    /// stretcher while the audio thread was still inside it.
+    /// </para>
+    /// </summary>
     public void Seek(long timelineFrame)
     {
-        EnsureStretchIfNeeded();
         long rel = timelineFrame - TimelineOffsetFrames;
-
         int idx = _timeline.IndexAt(TrackFrameAt(rel));
         _bound = idx >= 0 ? _timeline[idx] : null;
-        _sourcePos = _bound is null ? 0 : SourceReadFor(_bound, rel);
-
-        _inCarry = 0;
-        _needsPrime = true;
-        Eq.Reset();
-        PrimeEq();
+        _xfadeLength = 0;
+        _repositionPending = true;
     }
+
+    private bool _repositionPending = true;
 
     /// <summary>The track's own unstretched frame at a timeline frame relative to its origin.</summary>
     private long TrackFrameAt(long relTimelineFrame)
@@ -321,19 +342,60 @@ public sealed class TrackVoice : IDisposable
     }
 
     /// <summary>
-    /// Runs the EQ's own latency worth of audio through it and discards the result, so the first
-    /// block after a jump is steady state rather than the filters fading up from zero.
+    /// Puts the read position for <paramref name="clip"/> at <paramref name="wanted"/>, resets the
+    /// stretcher and the EQ, and fills the EQ's delay line with exactly what the chain would have
+    /// fed it just before — so the first block after a jump is steady state, not filters fading up
+    /// from zero, and not the wrong audio.
+    ///
+    /// <para>
+    /// The fill is rendered through the real path. The EQ sits after the stretcher, so on the
+    /// vocoder path what it holds must be stretcher output; it used to be the raw file from where
+    /// the read position stood, which is 150 ms ahead of what the stretcher emits next. For the
+    /// first 65 frames after every jump a pitched or stretched track played the wrong 1.4 ms of
+    /// audio, which at a loop join was a step of up to 0.15 — and the first join tests missed it
+    /// because 7200 frames is a whole number of cycles of 440 Hz. On the untouched path this reads
+    /// exactly the samples it always did, so bit-exact passthrough is unchanged.
+    /// </para>
     /// </summary>
-    private void PrimeEq()
+    private void Reposition(VoiceClip? clip, double wanted)
     {
-        int lat = Eq.LatencySamples;
-        if (lat <= 0 || _bound?.Audio is null) return;
+        _inCarry = 0;
+        _needsPrime = true;
+        Eq.Reset();
 
-        EnsureInScratch(lat);
-        var buf = _inScratch.AsSpan(0, lat * _channels);
-        long from = (long)Math.Round(_sourcePos) - lat;
-        CopySource(_bound, from, lat, buf, _bound.Audio.FrameCount);
-        Eq.Process(buf);
+        int lat = Eq.LatencySamples;
+        if (clip?.Audio is null || lat <= 0) { _sourcePos = wanted; return; }
+
+        // Back off by the EQ's share of the look-ahead and play that much into the EQ: the read
+        // position ends up at `wanted`, and the EQ holds what belongs just before it.
+        _sourcePos = wanted - lat * _speed;
+        int need = lat * _channels;
+        if (_primeScratch.Length < need) _primeScratch = new float[need];
+        var fill = _primeScratch.AsSpan(0, need);
+        fill.Clear();
+
+        long end = clip.Audio.FrameCount;
+        if (IsUnprocessed) RenderDirect(fill, lat, clip, end);
+        else if (_mode == StretchMode.Linked) RenderLinked(fill, lat, clip, end);
+        else RenderIndependent(fill, lat, clip, end);
+        Eq.Process(fill);
+    }
+
+    /// <summary>
+    /// The first frame, relative to the track's origin, whose track frame is at or past
+    /// <paramref name="trackFrame"/> — by the same floor the render loop looks sections up with.
+    /// <para>
+    /// ceil(T / speed) on its own disagrees with that floor by one in floating point for some
+    /// frames (about one join in forty at 0.7×). The outgoing section then ran one frame into the
+    /// next one's time, the join was not recognised, and it switched without a crossfade.
+    /// </para>
+    /// </summary>
+    private long FirstRelAt(long trackFrame)
+    {
+        long r = (long)Math.Ceiling(trackFrame / _speed);
+        while (TrackFrameAt(r) < trackFrame) r++;
+        while (TrackFrameAt(r - 1) >= trackFrame) r--;
+        return r;
     }
 
     // ---------------------------------------------------------------- render
@@ -358,6 +420,14 @@ public sealed class TrackVoice : IDisposable
         EnsureStretchIfNeeded();
         ApplyParametersIfDirty();
 
+        // A seek since the last block: re-prime here, on the render thread, from where this block
+        // really starts.
+        if (_repositionPending)
+        {
+            _repositionPending = false;
+            Reposition(_bound, _bound is null ? 0 : SourceReadFor(_bound, relStart));
+        }
+
         var work = _outScratch.AsSpan(0, frames * _channels);
         work.Clear();
         var env = _envScratch.AsSpan(0, frames);
@@ -378,7 +448,7 @@ public sealed class TrackVoice : IDisposable
                 long nextStart = timeline.NextStartAtOrAfter(trackFrame);
                 int gap = nextStart < 0
                     ? frames - f
-                    : (int)Math.Clamp((long)Math.Floor(nextStart / _speed) - rel, 1, frames - f);
+                    : (int)Math.Clamp(FirstRelAt(nextStart) - rel, 1, frames - f);
 
                 Eq.Process(work.Slice(f * _channels, gap * _channels));
                 f += gap;
@@ -386,7 +456,7 @@ public sealed class TrackVoice : IDisposable
             }
 
             var clip = timeline[idx];
-            long endRel = (long)Math.Ceiling(clip.TrackEndFrame / _speed);
+            long endRel = FirstRelAt(clip.TrackEndFrame);
             int run = (int)Math.Clamp(endRel - rel, 1, frames - f);
 
             RenderRun(work.Slice(f * _channels, run * _channels), env.Slice(f, run),
@@ -427,96 +497,114 @@ public sealed class TrackVoice : IDisposable
                            && idx > 0 && timeline.SeamBefore(idx)
                            && Math.Abs(wanted - _sourcePos) <= 2;
 
-            _bound = clip;
-            if (!continuous)
+            // Arriving at a butt join: before anything is reset, capture what the outgoing section
+            // would have played next. Normally the voice has just played it up to here and its
+            // state is exactly right. When it has not — the arrangement was swapped at this very
+            // block, which any edit during playback does — that state is rebuilt first. Skipping
+            // the capture instead left this join with neither a crossfade nor a declick: a step
+            // of 0.97 on a 0.5 sine.
+            _xfadeLength = 0;
+            if (!continuous && idx > 0 && timeline.ButtJoinAfter(idx - 1) && rel == FirstFrameOf(clip))
             {
-                _sourcePos = wanted;
-                _inCarry = 0;
-                _needsPrime = true;
-                // The EQ's delay line still holds whatever came before, and without re-priming it
-                // the first LatencySamples of the section come out as that instead of as the
-                // section. On a clip whose opening IS the transient, those samples are the point.
-                Eq.Reset();
-                PrimeEq();
+                var outgoing = timeline[idx - 1];
+                if (!ReferenceEquals(_bound, outgoing)) Reposition(outgoing, SourceReadFor(outgoing, rel));
+                CaptureHandle(outgoing, clip);
             }
+
+            _bound = clip;
+            // The EQ's delay line still holds whatever came before, and without re-priming it the
+            // first LatencySamples of the section come out as that instead of as the section. On
+            // a clip whose opening IS the transient, those samples are the point.
+            if (!continuous) Reposition(clip, wanted);
         }
 
         // How far this section is allowed to read. Normally its own end — but the read position
         // runs the EQ's and the stretcher's latency AHEAD of what is coming out, so stopping dead
         // at the end would feed those filters silence for the last few hundred frames of every
-        // section. After a non-seam join that silence is thrown away by the re-prime; across a
-        // SEAM there is no re-prime, and it would emerge as a notch at a join that is supposed to
-        // be inaudible. A seam continues in the same file, so the read simply carries on into it.
+        // section. Across a SEAM there is no re-prime, and that silence would emerge as a notch at
+        // a join that is supposed to be inaudible, so the read carries on into the next section.
+        // Into a BUTT join it carries on too — into the source's own continuation past the cut,
+        // its handle — so that the outgoing section is still at full level when it reaches the
+        // join and the crossfade has something real to fade out of.
         long sourceEnd = clip.SourceEnd;
-        for (int j = idx; j + 1 < timeline.Count && timeline.SeamAfter(j); j++)
-            sourceEnd = timeline[j + 1].SourceEnd;
+        int last = idx;
+        for (; last + 1 < timeline.Count && timeline.SeamAfter(last); last++)
+            sourceEnd = timeline[last + 1].SourceEnd;
+        if (last + 1 < timeline.Count && timeline.ButtJoinAfter(last) && clip.Audio is not null)
+            sourceEnd = clip.Audio.FrameCount;
 
         if (IsUnprocessed) RenderDirect(work, frames, clip, sourceEnd);
         else if (_mode == StretchMode.Linked) RenderLinked(work, frames, clip, sourceEnd);
         else RenderIndependent(work, frames, clip, sourceEnd);
 
-        // A genuine internal join would otherwise put this section's fade-in immediately after the
-        // previous one's fade-out: two ramps back to back, which is a hole rather than a join. On
-        // the paths where we can read the outgoing section's continuation, blend against it
-        // instead, so the two sum to unity. The vocoder path cannot — one stretcher cannot emit
-        // two sections — and relies on its own 120 ms overlap-add to smooth the switch.
-        if (idx > 0 && !timeline.SeamBefore(idx) && _mode != StretchMode.Independent
-            && clip.FadeInSeconds <= 0 && TrackFrameAt(rel) == clip.TrackStartFrame)
-        {
-            var prev = timeline[idx - 1];
-            if (prev.TrackEndFrame == clip.TrackStartFrame && prev.Audio is not null
-                && prev.FadeOutSeconds <= 0)
-                BlendAgainstHandle(work, frames, prev);
-        }
-
         Eq.Process(work);
+        ApplyCrossfade(work, clip, frames);
         FillEnvelope(env, timeline, idx, rel, frames);
     }
 
+    /// <summary>The first output frame, relative to the track's origin, that belongs to a section.</summary>
+    private long FirstFrameOf(VoiceClip clip) => FirstRelAt(clip.TrackStartFrame);
+
     /// <summary>
-    /// Crossfades the first <see cref="DeclickSeconds"/> of this run against what the previous
-    /// section would have played had it carried on — its "handle". Equal power, so the two sum to
-    /// unity through the join rather than dipping.
+    /// Renders <see cref="DeclickSeconds"/> of what <paramref name="outgoing"/> would have played
+    /// had it carried on past the join — its handle — through the real stretcher and EQ, which are
+    /// still in exactly the state it left them in.
+    ///
+    /// <para>
+    /// A butt join cannot be declicked on both sides: two 5 ms ramps back to back are a hole, and
+    /// one ramp is a click. It cannot be left alone either: a loop cut at two points whose waveforms
+    /// do not happen to match jumps between them, measured at up to 0.85 on a 0.5 sine against a
+    /// natural step of 0.03. Crossfading from this handle into the incoming section keeps both
+    /// sides continuous. It is rendered through the same chain rather than read raw from the file,
+    /// because on the vocoder path the raw file is not what was coming out — reading it raw was the
+    /// old approach, and it landed the fade 65 frames (the EQ's delay) after the join, turning one
+    /// discontinuity into two.
+    /// </para>
     /// </summary>
-    private void BlendAgainstHandle(Span<float> work, int frames, VoiceClip prev)
+    private void CaptureHandle(VoiceClip outgoing, VoiceClip incoming)
     {
-        int n = Math.Min(frames, (int)(DeclickSeconds * _sampleRate));
-        if (n <= 0 || prev.Audio is null) return;
+        int n = (int)(DeclickSeconds * _sampleRate);
+        if (n <= 0 || outgoing.Audio is null) return;
 
         int need = n * _channels;
-        if (_handleScratch.Length < need) _handleScratch = new float[need];
-        var handle = _handleScratch.AsSpan(0, need);
+        if (_xfade.Length < need) _xfade = new float[need];
+        var handle = _xfade.AsSpan(0, need);
         handle.Clear();
 
-        // The handle starts exactly where the previous section was cut off, and is read at the
-        // same rate the main path is running at so the two stay in step.
-        double pos = prev.SourceEnd + (Eq.LatencySamples + StretchLatencyFrames) * _speed;
-        if (_mode == StretchMode.Linked && _speed != 1.0)
-        {
-            var kernel = SincResampler.KernelFor(_speed);
-            var src = prev.Audio.Samples.AsSpan();
-            long count = prev.Audio.FrameCount;
-            for (int f = 0; f < n; f++, pos += _speed)
-                for (int c = 0; c < _channels; c++)
-                    handle[f * _channels + c] =
-                        (float)SincResampler.Sample(src, count, _channels, c, pos, kernel);
-        }
-        else
-        {
-            CopySource(prev, (long)Math.Round(pos), n, handle, prev.Audio.FrameCount);
-        }
+        long end = outgoing.Audio.FrameCount;
+        if (IsUnprocessed) RenderDirect(handle, n, outgoing, end);
+        else if (_mode == StretchMode.Linked) RenderLinked(handle, n, outgoing, end);
+        else RenderIndependent(handle, n, outgoing, end);
+        Eq.Process(handle);
 
-        for (int f = 0; f < n; f++)
+        _xfadeLength = n;
+        _xfadeDone = 0;
+        _xfadeInto = incoming;
+    }
+
+    /// <summary>
+    /// Fades the captured handle out under the incoming section, equal power, from the join's very
+    /// first frame. Carries on into later runs of the same section until the fade is complete.
+    /// </summary>
+    private void ApplyCrossfade(Span<float> work, VoiceClip clip, int frames)
+    {
+        if (_xfadeLength <= 0 || !ReferenceEquals(_xfadeInto, clip)) return;
+
+        int m = Math.Min(frames, _xfadeLength - _xfadeDone);
+        for (int f = 0; f < m; f++)
         {
-            double t = (f + 0.5) / n;
+            double t = (_xfadeDone + f + 0.5) / _xfadeLength;
             double rise = Math.Sin(Math.PI / 2 * t);
             double fall = Math.Cos(Math.PI / 2 * t);
             for (int c = 0; c < _channels; c++)
             {
                 int i = f * _channels + c;
-                work[i] = (float)(work[i] * rise + handle[i] * fall);
+                work[i] = (float)(work[i] * rise + _xfade[(_xfadeDone + f) * _channels + c] * fall);
             }
         }
+
+        _xfadeDone += m;
+        if (_xfadeDone >= _xfadeLength) _xfadeLength = 0;
     }
 
     /// <summary>
@@ -531,8 +619,15 @@ public sealed class TrackVoice : IDisposable
     /// Both sides of a butt join are left alone deliberately. Two abutting declicks do not sum to
     /// unity — one ramps down to nothing and the next ramps back up, so every loop repeat would
     /// punch a ten-millisecond hole in itself. The join is covered instead by the crossfade
-    /// against the outgoing section's handle, or, on the vocoder path where that is not possible,
-    /// by the stretcher's own overlap-add.
+    /// against the outgoing section's handle (<see cref="CaptureHandle"/>), on every path, the
+    /// vocoder included.
+    /// </para>
+    /// <para>
+    /// Only a join that really is covered — a seam, or a crossfaded butt join — goes without a
+    /// declick. When one side has a fade of its own there is no crossfade, and the other side
+    /// is just a cut edge again. It used to be left bare because the frames merely touched: a
+    /// section following a faded-out one started on whatever sample it was cut at, out of
+    /// silence, which is a click.
     /// </para>
     /// </summary>
     private void FillEnvelope(Span<float> env, ClipTimeline timeline, int idx, long rel, int frames)
@@ -541,9 +636,8 @@ public sealed class TrackVoice : IDisposable
         long lengthOut = (long)(clip.LengthFrames / _speed);
         long startRel = (long)(clip.TrackStartFrame / _speed);
 
-        bool joinedIn = idx > 0 && timeline[idx - 1].TrackEndFrame == clip.TrackStartFrame;
-        bool joinedOut = idx + 1 < timeline.Count
-                      && timeline[idx + 1].TrackStartFrame == clip.TrackEndFrame;
+        bool joinedIn = idx > 0 && (timeline.SeamBefore(idx) || timeline.ButtJoinAfter(idx - 1));
+        bool joinedOut = idx + 1 < timeline.Count && (timeline.SeamAfter(idx) || timeline.ButtJoinAfter(idx));
 
         int fadeIn = clip.FadeInSeconds > 0
             ? (int)(clip.FadeInSeconds * _sampleRate)

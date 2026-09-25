@@ -8,6 +8,12 @@ namespace Benchmix.App.Controls;
 /// <param name="Peaks">Envelope of the whole file this section is cut from.</param>
 /// <param name="TimelineStartSeconds">Where it begins on the timeline, after the track's tempo.</param>
 /// <param name="IsForeign">True when it came from a different song than the rest of the track.</param>
+/// <param name="LoopHandleLeft">
+/// True when this section's left end is the outer left end of the loop the selected section
+/// belongs to — where, in loop mode, a drag repeats it. Usually the selected section itself; for a
+/// loop built earlier, the first of its repeats.
+/// </param>
+/// <param name="LoopHandleRight">The same for the loop's outer right end.</param>
 public sealed record ClipVisual(
     PeakData? Peaks,
     int SampleRate,
@@ -16,7 +22,9 @@ public sealed record ClipVisual(
     double SourceEndSeconds,
     double Speed,
     bool IsSelected,
-    bool IsForeign);
+    bool IsForeign,
+    bool LoopHandleLeft = false,
+    bool LoopHandleRight = false);
 
 /// <summary>
 /// Draws one track's sections on the timeline.
@@ -62,6 +70,11 @@ public sealed class WaveformView : FrameworkElement
         nameof(IsMuted), typeof(bool), typeof(WaveformView),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    /// <summary>When on, the selected section's two ends are drawn as grab handles: dragging them repeats it.</summary>
+    public static readonly DependencyProperty LoopModeProperty = DependencyProperty.Register(
+        nameof(LoopMode), typeof(bool), typeof(WaveformView),
+        new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
     public IReadOnlyList<ClipVisual>? Clips
     {
         get => (IReadOnlyList<ClipVisual>?)GetValue(ClipsProperty);
@@ -73,6 +86,7 @@ public sealed class WaveformView : FrameworkElement
     public Brush WaveBrush { get => (Brush)GetValue(WaveBrushProperty); set => SetValue(WaveBrushProperty, value); }
     public Brush? ClipBackground { get => (Brush?)GetValue(ClipBackgroundProperty); set => SetValue(ClipBackgroundProperty, value); }
     public bool IsMuted { get => (bool)GetValue(IsMutedProperty); set => SetValue(IsMutedProperty, value); }
+    public bool LoopMode { get => (bool)GetValue(LoopModeProperty); set => SetValue(LoopModeProperty, value); }
 
     protected override void OnRender(DrawingContext dc)
     {
@@ -84,7 +98,16 @@ public sealed class WaveformView : FrameworkElement
 
         var clips = Clips;
         if (clips is null) return;
-        foreach (var clip in clips) DrawClip(dc, clip, w, h);
+
+        // The selected section last, so while it is dragged over another it is the one on top.
+        foreach (var clip in clips) if (!clip.IsSelected) DrawClip(dc, clip, w, h);
+        foreach (var clip in clips) if (clip.IsSelected) DrawClip(dc, clip, w, h);
+
+        // Loop handles on top of everything, at the loop's outer ends — not at the selected
+        // section's own ends, which inside a loop are the joins between repeats.
+        if (LoopMode)
+            foreach (var clip in clips)
+                if (clip.LoopHandleLeft || clip.LoopHandleRight) DrawLoopHandles(dc, clip, w, h);
     }
 
     private void DrawClip(DrawingContext dc, ClipVisual clip, double w, double h)
@@ -185,11 +208,42 @@ public sealed class WaveformView : FrameworkElement
             dc.DrawRoundedRectangle(null, foreign, new Rect(xFrom, 1, Math.Max(1, xTo - xFrom), h - 2), 3, 3);
         }
 
+        // A faint line where each section begins, so two butted together — every repeat of a
+        // loop — read as separate pieces rather than one long block.
+        double startX = (clipStart - viewStart) * pps;
+        if (startX >= 0 && startX <= w)
+        {
+            var divider = new Pen(new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)), 1);
+            divider.Freeze();
+            dc.DrawLine(divider, new Point(Math.Round(startX) + 0.5, 0), new Point(Math.Round(startX) + 0.5, h));
+        }
+
         if (clip.IsSelected)
         {
             var outline = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1.5);
             outline.Freeze();
             dc.DrawRoundedRectangle(null, outline, new Rect(xFrom, 0.75, Math.Max(1, xTo - xFrom), h - 1.5), 3, 3);
         }
+    }
+
+    /// <summary>Bright bars at a loop's outer ends: the places to grab to repeat it.</summary>
+    private void DrawLoopHandles(DrawingContext dc, ClipVisual clip, double w, double h)
+    {
+        if (clip.Peaks is null || clip.SampleRate <= 0) return;
+        double pps = Math.Max(0.01, PixelsPerSecond);
+        double srcTotal = clip.Peaks.FrameCount / (double)clip.SampleRate;
+        double srcEnd = clip.SourceEndSeconds < 0 ? srcTotal : Math.Min(clip.SourceEndSeconds, srcTotal);
+        double length = Math.Max(0, srcEnd - Math.Max(0, clip.SourceStartSeconds)) / Math.Max(0.01, clip.Speed);
+
+        double left = (clip.TimelineStartSeconds - ScrollSeconds) * pps;
+        double right = (clip.TimelineStartSeconds + length - ScrollSeconds) * pps;
+
+        var fill = new SolidColorBrush(Color.FromArgb(235, 120, 220, 255));
+        fill.Freeze();
+        double top = h * 0.25, height = h * 0.5;
+        if (clip.LoopHandleLeft && left >= -4 && left <= w)
+            dc.DrawRoundedRectangle(fill, null, new Rect(left, top, 4, height), 2, 2);
+        if (clip.LoopHandleRight && right >= 0 && right <= w + 4)
+            dc.DrawRoundedRectangle(fill, null, new Rect(right - 4, top, 4, height), 2, 2);
     }
 }

@@ -4,7 +4,8 @@
 
 ## The test suite
 
-**118 tests, 0 failures, 0 skipped.** `dotnet test` — about 80 seconds (the stem tests dominate).
+**190 tests, 0 failures, 0 skipped** (2026-09-24). `dotnet test` — about 90 seconds (the stem
+tests dominate).
 
 The ones that matter most:
 
@@ -20,6 +21,79 @@ The ones that matter most:
 | `TurningAKnobDuringPlayback_DoesNotClick` | Sweeping the low knob from unity to kill and back mid-playback: worst sample-to-sample jump 0.0366 against a clean-signal step of 0.0288. |
 | `ACorruptProjectFallsBackToTheBackup` | A truncated project file loads the previous save and says so. |
 | `UndoIsDeepSoLaterEditsDoNotLeakBackwards` | Undo restores a value mutated on the live object. |
+
+## 2026-09-24 — editing: empty tracks, paste target, drag between tracks, loop mode, snapping
+
+**Joins between sections, measured.** A 431 Hz sine at 0.5, looped at two points half a cycle
+apart; the largest sample-to-sample step within 10 ms of the join, against the same render's
+largest step anywhere else — the sine's own. 431 Hz and not 440: the stretcher's 7200-frame delay
+is a whole number of cycles of 440 Hz, which hid a defect from the first version of these tests.
+`JoinTests`:
+
+| Path | Before | After | Elsewhere in the same render |
+| --- | --- | --- | --- |
+| untouched track | 0.85 | 0.028 | 0.028 |
+| LINK on | 0.99, 65 frames after the join | 0.028 | 0.028 |
+| LINK at +5% | 0.95 | 0.030 | 0.030 |
+| LINK at 0.7× | a hard switch at ~1 join in 40 (0.40) | 0.020 | 0.020 |
+| pitched +2 st | 0.76 (440 Hz); 0.10 with only the EQ prime wrong | 0.031 | 0.028 |
+| pitched +0.5 st | 0.079 with only the EQ prime wrong | 0.039 | 0.028 |
+| stretched to 0.93× | 0.14 (reviewer's measurement) | 0.039 | 0.028 |
+| stretched to 1.25× | 0.10 with only the EQ prime wrong | 0.037 | 0.028 |
+
+The phase-vocoder rows are not quite at the signal's own step — within 1.4× of it, against up to
+5× before. That is small next to what it was, but it is not nothing, and nobody has listened.
+
+Also pinned: after the 5 ms fade the incoming repeat is **bit-identical** to the same repeat played
+on its own, on all four paths (the fade smooths the edge and moves nothing), and a join 30 frames
+before a block boundary renders bit-identically to one mid-block (preview and export agree). A
+fade on one side of a join no longer leaves the other side bare: 0.42–0.43 steps before, 0.029
+after.
+
+**Placement, to the frame.** `SectionEditingTests` (26) and `SectionRegressionTests` (12), each on a
+ramp so a sample's value is its position, most by rendering the edited project against the
+original:
+
+- A section pasted or dragged onto an empty track at the same moment renders **identical** to how
+  it played on its own track, everywhere but the 5 ms declicks at its two cut edges.
+- Snapping onto a neighbour's end lands on **exactly** that frame, and the engine sees a butt join.
+- A loop's repeats are each **bit-identical** to the first pass once past their crossfade; a
+  part-repeat keeps the loop in phase on either side; pulling a loop back during the drag restores
+  what it ran over.
+- Moving a track's origin back changes **no samples** and breaks no seam.
+- The four regressions: a split of a moved section is now a true seam (0 samples change), Ctrl+D
+  on a moved section leaves no gap, an emptied track reopens empty, and paste lands at the playhead
+  even before where the track's song began. Each failed against the code before the fix.
+
+**Hundreds of edits in a row.** `SectionFuzzTests` runs four seeded sequences of 250 random moves
+(across tracks, with and without snapping), trims, loops, pastes, splits, deletes and repeats on
+four tracks at three tempos, and after every one checks that no track has overlapping sections,
+nothing sits before its track's timebase, and the engine holds exactly the sections the model
+says — nothing silently truncated.
+
+**Two adversarial reviews**, told to assume the change was wrong and to reproduce anything they
+reported. The first found seven defects, and fixing them turned up two more; the second, of just
+those fixes, found four in them. All thirteen are fixed, and each fix was taken out again to
+confirm its test then fails — see `DECISIONS.md`, 2026-09-24.
+
+**In the published exe** (the single file, 78 MB): `--latencycheck` drift 0 frames between a
+pitched and an untouched track; `--gesturetest` 57/57; `--loadcheck` pass; `--playtest 6` ratio
+0.999 (silent); `--stemtest` pass on DirectML in 4.1 s; both `--uiprobe` demos drawn and looked at.
+
+**In the real window.** `--gesturetest` grew from 27 to **57 checks**, 30 of them new, driving the
+real lane handlers with a scripted pointer whose positions come from where the lanes actually are
+in the laid-out window: Ctrl+T and Ctrl+L are bound; an empty track is added, selected and not
+reported missing; paste lands on the selected track at the playhead; undo keeps the selection; a
+right-click selects its lane; a section dragged down one track lands there at the dropped time; a
+drop 6 px from an edge snaps onto it and shows the guide line; Ctrl frees it; loop mode builds four
+exactly-butted repeats and one undo takes them back; a song file lands on an empty track where it
+was aimed; the menu's *Move section to playhead* lands exactly. Pasting a file copied in Explorer
+is **not** driven — setting that up would overwrite the clipboard of whoever is using the machine —
+but the Windows clipboard counter it relies on is checked to resolve in the published exe.
+
+`--demoediting --uiprobe` renders a moved, looped section with its loop handles at the loop's outer
+ends, the snap guide line, the selected track's bar and an empty track's hint — looked at, and
+correct.
 
 ## The stretch engine
 
@@ -128,13 +202,20 @@ fine, and undo reverting an older action than the one just performed.
 
 Stated plainly so nobody assumes otherwise:
 
+- **Nobody has listened to a loop join, or to a section moved between tracks.** The join numbers
+  above are a sine, not music. A section dragged onto another track at the same moment gets a 5 ms
+  declick at each end on both tracks, so the level dips there; that is read off the envelope code,
+  not measured, and not heard.
+- **Drag feel is untested.** The gestures are driven with a scripted pointer; how they feel under
+  a real mouse, and whether 10 px is the right snap distance, needs a person.
 - **Nobody has listened to live playback through the speakers.** The pipeline is proven to run at
   realtime and the rendered files are proven correct; the final "does sound come out" step needs a
   human to press play. Thirty seconds of Daniel's time.
-- **Pointer gestures are exercised by `--gesturetest`** (27 checks, including the section commands).
-  Buttons are also driven and checked by
-  `ui-verify.ps1`, but knob dragging, clip dragging, edge-trimming and shift-drag loop selection
-  are mouse gestures UI Automation cannot invoke. Their maths is unit-tested; the feel is not.
+- **Pointer gestures are exercised by `--gesturetest`** (57 checks, including the section commands
+  and, since 2026-09-24, section drags, trims, snapping and loop mode through the lane handlers).
+  Buttons are also driven and checked by `ui-verify.ps1`. Knob dragging and shift-drag loop
+  selection are not driven by either. The feel of all of them is untested.
 - **Long-session behaviour.** No soak test. Memory should be flat once clips are loaded, but that
   is reasoning, not measurement.
-- **Stem separation** is not in the app — see `DECISIONS.md`.
+- **Stem separation quality** is proven only by a 39 dB control test, not by ear — see
+  `DECISIONS.md`. (It is in the app; this line used to say it was not.)

@@ -31,6 +31,8 @@
         <KeyBinding Key="C" Modifiers="Ctrl" Command="{Binding CopyClipCommand}"/>
         <KeyBinding Key="V" Modifiers="Ctrl" Command="{Binding PasteClipCommand}"/>
         <KeyBinding Key="D" Modifiers="Ctrl" Command="{Binding DuplicateClipCommand}"/>
+        <KeyBinding Key="T" Modifiers="Ctrl" Command="{Binding AddEmptyTrackCommand}"/>
+        <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding ToggleLoopModeCommand}"/>
     </Window.InputBindings>
 
     <Grid>
@@ -53,7 +55,13 @@
                 <Button Content="Save" Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}"/>
                 <Separator Width="10" Background="Transparent"/>
                 <Button Content="+ Add tracks" Style="{StaticResource PrimaryButton}" Command="{Binding AddTracksCommand}"/>
+                <Button Content="+ Empty track" Style="{StaticResource ToolButton}" Command="{Binding AddEmptyTrackCommand}"
+                        ToolTip="Add a track with nothing on it, to paste or drag sections onto (Ctrl+T)."/>
                 <Button Content="Render to file" Style="{StaticResource ToolButton}" Command="{Binding RenderCommand}"/>
+                <ToggleButton Content="LOOP MODE" Style="{StaticResource PillToggle}" Margin="10,0,0,0" Padding="0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding LoopMode, Mode=TwoWay}"
+                              ToolTip="While on, dragging either end of a section repeats it instead of trimming it (Ctrl+L). It moves in whole repeats; hold Ctrl for part of one. This builds repeats on the track — it is not the Shift-drag listening loop."/>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"/>
                     <Button Content="&#x2212;" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"/>
@@ -142,7 +150,7 @@
                           x:Name="TrackScroller"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           PreviewMouseWheel="OnTimelineWheel">
-                <ItemsControl ItemsSource="{Binding Tracks}">
+                <ItemsControl x:Name="TrackList" ItemsSource="{Binding Tracks}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:TrackViewModel}">
                             <Grid Height="152" Background="{StaticResource Bg0Brush}">
@@ -152,9 +160,22 @@
                                 </Grid.ColumnDefinitions>
 
                                 <!-- ────────── channel strip ────────── -->
-                                <Border Grid.Column="0" Background="{StaticResource Bg1Brush}"
+                                <!-- Preview, so a press on a knob or a button selects the track too:
+                                     those controls handle the press themselves, and the selected
+                                     track is where Ctrl+V pastes. -->
+                                <Border Grid.Column="0"
                                         BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,1"
-                                        MouseLeftButtonDown="OnTrackHeaderClicked">
+                                        PreviewMouseLeftButtonDown="OnTrackHeaderClicked">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource Bg1Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Background" Value="{StaticResource Bg2Brush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <Grid Margin="10,7,10,6">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
@@ -257,12 +278,30 @@
                                     </Grid>
                                 </Border>
 
+                                <!-- the selected track: where Ctrl+V pastes -->
+                                <Border Grid.Column="0" Width="3" HorizontalAlignment="Left"
+                                        Background="{StaticResource AccentBrush}" IsHitTestVisible="False"
+                                        Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}"/>
+
                                 <!-- ────────── lane ────────── -->
-                                <Border Grid.Column="1" Background="{StaticResource Bg0Brush}"
+                                <Border Grid.Column="1" x:Name="Lane"
                                         BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
                                         ClipToBounds="True"
                                         MouseLeftButtonDown="OnLaneMouseDown" MouseMove="OnLaneMouseMove"
-                                        MouseLeftButtonUp="OnLaneMouseUp">
+                                        MouseLeftButtonUp="OnLaneMouseUp"
+                                        PreviewMouseRightButtonDown="OnLaneRightButtonDown"
+                                        LostMouseCapture="OnLaneLostCapture"
+                                        ContextMenuOpening="OnLaneContextMenuOpening">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{StaticResource Bg0Brush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Background" Value="#13161B"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <Border.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem Header="Fade in" >
@@ -295,6 +334,9 @@
                                             <MenuItem Header="Delete section"         Click="OnDeleteSection"/>
                                             <Separator/>
                                             <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
+                                            <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
+                                                      Click="OnLoopModeMenu" InputGestureText="Ctrl+L"/>
+                                            <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
                                             <Separator/>
                                             <MenuItem Header="Split into vocals + instrumental"
                                                       Command="{Binding DataContext.SplitStemsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -307,12 +349,17 @@
                                             Clips="{Binding ClipVisuals}"
                                             PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
                                             ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
+                                            LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
                                             IsMuted="{Binding Muted}"
                                             WaveBrush="{Binding ColorBrush}"
                                             ClipBackground="{Binding ClipBackground}"/>
                                         <TextBlock Text="{Binding LoadError}" Foreground="{StaticResource BadBrush}"
                                                    FontSize="11.5" Margin="10" VerticalAlignment="Center"
                                                    TextWrapping="Wrap"/>
+                                        <TextBlock Text="Empty track — click here, then Ctrl+V pastes at the playhead. Or drag a section onto it, or drop a song file on it."
+                                                   Style="{StaticResource Caption}" Margin="14,0" VerticalAlignment="Center"
+                                                   IsHitTestVisible="False" TextWrapping="Wrap"
+                                                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolVis}}"/>
                                     </Grid>
                                 </Border>
                             </Grid>
@@ -327,6 +374,7 @@
                                PixelsPerSecond="{Binding PixelsPerSecond}"
                                ScrollSeconds="{Binding ScrollSeconds}"
                                LoopStart="{Binding LoopStart}" LoopEnd="{Binding LoopEnd}"
+                               SnapLineSeconds="{Binding SnapLineSeconds}"
                                LineBrush="{StaticResource PlayheadBrush}"/>
 
             <!-- empty state -->
@@ -334,7 +382,7 @@
                         Visibility="{Binding Tracks.Count, Converter={StaticResource ZeroVis}}">
                 <TextBlock Text="Drop songs here" FontSize="17" Foreground="{StaticResource Text2Brush}"
                            HorizontalAlignment="Center"/>
-                <TextBlock Text="or use + Add tracks. Two songs, Match BPM, and you have a mashup."
+                <TextBlock Text="or use + Add tracks. Two songs, Match BPM, and you have a mashup. + Empty track makes a blank one."
                            Style="{StaticResource Caption}" Margin="0,7,0,0" HorizontalAlignment="Center"/>
             </StackPanel>
         </Grid>

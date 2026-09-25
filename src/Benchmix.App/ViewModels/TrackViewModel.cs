@@ -86,24 +86,40 @@ public sealed partial class TrackViewModel : ObservableObject
     /// <summary>Republishes what the lane draws. Called after anything structural.</summary>
     public void NotifyClipsChanged()
     {
+        // The loop the selected section belongs to, so loop mode can mark its two outer ends.
+        var selected = Clips.FirstOrDefault(c => c.IsSelected);
+        var run = selected is null ? null : LoopRun.Of(Model, selected.Model, _session);
+
         ClipVisuals = Clips.Select(c => new Controls.ClipVisual(
             c.Peaks, c.SampleRate, c.TimelineStartSeconds, c.SourceStartSeconds,
             c.SourceEndSeconds < 0 ? c.SourceDurationSeconds : c.SourceEndSeconds,
-            Speed, c.IsSelected, c.IsForeign)).ToArray();
+            Speed, c.IsSelected, c.IsForeign,
+            LoopHandleLeft: run is not null && run.IsOuterEdge(c.Model, left: true),
+            LoopHandleRight: run is not null && run.IsOuterEdge(c.Model, left: false))).ToArray();
 
         OnPropertyChanged(nameof(ClipVisuals));
         OnPropertyChanged(nameof(TimelineDurationSeconds));
+        OnPropertyChanged(nameof(TimelineEndSeconds));
         OnPropertyChanged(nameof(TrimText));
+        OnPropertyChanged(nameof(IsEmpty));
     }
+
+    /// <summary>Nothing on this track yet — the lane says how to put something there.</summary>
+    public bool IsEmpty => Model.Clips.Count == 0;
 
     /// <summary>The whole song this track is about, for the strip's readouts.</summary>
     public double SourceDurationSeconds => _session.ClipFor(Model)?.DurationSeconds ?? 0;
 
     /// <summary>How far this track reaches on the timeline, sections and gaps included.</summary>
     public double TimelineDurationSeconds
-        => Model.Clips.Count == 0 ? 0
-         : Clips.Count == 0 ? 0
-         : Clips.Max(c => c.TimelineEndSeconds) - TimelineOffsetSeconds;
+        => Model.Clips.Count == 0 || Clips.Count == 0 ? 0 : TimelineEndSeconds - Model.TimelineOffsetSeconds;
+
+    /// <summary>
+    /// Where this track's last section ends on the timeline. Read from the model rather than from
+    /// <see cref="TimelineOffsetSeconds"/>: the track's origin moves back when a section is put
+    /// before it, and the length of the mix must not depend on whether this view has caught up.
+    /// </summary>
+    public double TimelineEndSeconds => Clips.Count == 0 ? 0 : Clips.Max(c => c.TimelineEndSeconds);
 
     public bool IsTrimmed => Model.Clips.Count != 1
         || Model.Clips[0].SourceStartSeconds > 0.0001

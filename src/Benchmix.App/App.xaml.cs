@@ -68,6 +68,13 @@ public partial class App : Application
     /// </summary>
     public static bool DemoSections { get; private set; }
 
+    /// <summary>
+    /// Sets up the 2026-09-24 editing features before a --uiprobe shot: an empty track, a section
+    /// dragged onto it and looped, loop mode on. Like --demosections, a picture is the only
+    /// evidence that the lanes draw these — none of the drawing is reachable from the tests.
+    /// </summary>
+    public static bool DemoEditing { get; private set; }
+
     /// <summary>Where crashes and startup breadcrumbs go — written even when no window ever appears.</summary>
     public static string LogPath { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Benchmix", "benchmix.log");
@@ -114,6 +121,9 @@ public partial class App : Application
                     break;
                 case "--demosections":
                     DemoSections = true;
+                    break;
+                case "--demoediting":
+                    DemoEditing = true;
                     break;
                 case "--stemtest":
                     if (i + 1 < e.Args.Length) StemTestFile = e.Args[++i];

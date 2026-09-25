@@ -138,7 +138,13 @@ public static class ProjectStore
             // Version 1 had one section per track, described by fields on the track itself. It
             // becomes one clip starting at the track's own origin, which places and trims it
             // exactly where it was, then the old fields are dropped so they are not written again.
-            if (t.Clips.Count == 0)
+            //
+            // Only for a version 1 file. A newer track with no sections is not an old one waiting
+            // to be migrated: it is a track whose every section was deleted, or an empty track
+            // someone made on purpose. Treating it as version 1 put the whole song back into the
+            // mix every time the project was reopened.
+            bool versionOne = p.SchemaVersion < 2 || t.SourceStartSeconds is not null || t.SourceEndSeconds is not null;
+            if (t.Clips.Count == 0 && versionOne && !string.IsNullOrEmpty(t.SourcePath))
             {
                 t.Clips.Add(new ClipModel
                 {

@@ -277,7 +277,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 // The session raises TrackLoaded/TrackFailed while AddTrackAsync is still running —
                 // before this row exists — so those handlers cannot find it and their state is lost.
                 // Settle the row here instead, from what the session actually ended up holding.
-                if (Session.ClipFor(model) is not null) vm.NotifyAudioLoaded();
+                if (Session.HasAllAudio(model)) vm.NotifyAudioLoaded();
                 else vm.LoadError = $"Could not load {Path.GetFileName(path)}.";
 
                 Tracks.Add(vm);
@@ -385,6 +385,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         track ??= SelectedTrack;
         if (track is null || _session is null) return;
+        if (track.Model.Clips.Count == 0 || Session.ClipFor(track.Model) is null)
+        {
+            Status = "There is no song on this track to split.";
+            return;
+        }
         if (!track.IsLoaded) { Status = "That track's audio has not finished loading."; return; }
         if (_splitting) { Status = "Already separating a track — one at a time."; return; }
 
@@ -501,12 +506,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             foreach (var m in result.Project.Tracks)
             {
                 var vm = NewTrackViewModel(m);
-                if (Session.ClipFor(m) is not null) vm.NotifyAudioLoaded();
+                if (Session.HasAllAudio(m)) vm.NotifyAudioLoaded();
                 else
                 {
                     // The file moved or was deleted. Say so on the track rather than presenting an
                     // empty lane as if the project opened cleanly.
-                    vm.LoadError = $"Missing: {m.SourcePath}";
+                    vm.LoadError = $"Missing: {MissingFileOf(m)}";
                     missing++;
                 }
                 Tracks.Add(vm);
@@ -656,8 +661,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _ = ReloadFromProjectAsync(restored, "Redone.");
     }
 
+    /// <summary>
+    /// Rebuilds the view after undo or redo.
+    ///
+    /// <para>
+    /// The selected track and section are carried across by id. Dropping back to the first track
+    /// made every undo quietly move the paste target: undo a paste on track three, press Ctrl+V
+    /// again, and it landed on track one.
+    /// </para>
+    /// </summary>
     private async Task ReloadFromProjectAsync(BenchmixProject project, string message)
     {
+        var keepTrack = SelectedTrack?.Id;
+        var keepClip = SelectedClip?.Id;
+
         IsBusy = true;
         try
         {
@@ -666,11 +683,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             foreach (var m in project.Tracks)
             {
                 var vm = NewTrackViewModel(m);
-                if (Session.ClipFor(m) is not null) vm.NotifyAudioLoaded();
-                else vm.LoadError = $"Missing: {m.SourcePath}";
+                if (Session.HasAllAudio(m)) vm.NotifyAudioLoaded();
+                else vm.LoadError = $"Missing: {MissingFileOf(m)}";
                 Tracks.Add(vm);
             }
-            SelectedTrack = Tracks.FirstOrDefault();
+            SelectedTrack = Tracks.FirstOrDefault(t => t.Id == keepTrack) ?? Tracks.FirstOrDefault();
+            SelectClip(Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == keepClip));
             ProjectBpm = project.ProjectBpm;
             MasterGain = project.MasterGain;
             RecomputeLength();
@@ -696,8 +714,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private ClipModel? _clipboard;
 
+    /// <summary>
+    /// The track the clipboard's section was copied off, as it was then. Pasted onto an empty
+    /// track, the section takes this track's tempo and pitch, so it plays exactly as it did.
+    /// </summary>
+    private TrackModel? _clipboardFrom;
+
+    /// <summary>
+    /// Windows' clipboard counter at the moment of the last copy. If it has moved on and Windows
+    /// now holds audio files, those were copied more recently than our section, so Ctrl+V pastes
+    /// them — the most recent copy wins, wherever it was made.
+    /// </summary>
+    private uint _clipboardSequenceAtCopy;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
+
+    /// <summary>Windows' clipboard counter, exposed so the gesture test can prove it resolves in the published exe.</summary>
+    public static uint ClipboardSequence() => GetClipboardSequenceNumber();
+
     /// <summary>True when something has been copied and can be pasted.</summary>
     public bool HasClipboard => _clipboard is not null;
+
+    private void Remember(ClipViewModel clip)
+    {
+        _clipboard = TimelineEditor.Copy(clip.Model);
+        _clipboardFrom = clip.Track.Model.Clone();
+        try { _clipboardSequenceAtCopy = GetClipboardSequenceNumber(); } catch { _clipboardSequenceAtCopy = 0; }
+        OnPropertyChanged(nameof(HasClipboard));
+    }
 
     /// <summary>Selects one section, clearing any other. Null clears the selection entirely.</summary>
     public void SelectClip(ClipViewModel? clip)
@@ -726,6 +771,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!result.Changed) { Status = result.Message; return; }
 
         Session.Apply(track.Model);
+        track.RefreshFromModel();
         track.RebuildClips();
         RecomputeLength();
         MarkDirty();
@@ -749,9 +795,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void CopyClip()
     {
         if (TargetClip() is not { } clip) { Status = "Click a section to copy it."; return; }
-        _clipboard = TimelineEditor.Copy(clip.Model);
-        OnPropertyChanged(nameof(HasClipboard));
-        Status = $"Copied {clip.LengthSeconds:0.0}s. Ctrl+V drops it at the playhead.";
+        Remember(clip);
+        Status = $"Copied {clip.LengthSeconds:0.0}s. Click a track, then Ctrl+V drops it there at the playhead.";
     }
 
     [RelayCommand]
@@ -759,8 +804,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
 
-        _clipboard = TimelineEditor.Copy(clip.Model);
-        OnPropertyChanged(nameof(HasClipboard));
+        Remember(clip);
 
         var track = clip.Track;
         PushUndo($"{track.Name}: cut section");
@@ -778,16 +822,130 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         AfterClipEdit(track, TimelineEditor.Delete(track.Model, clip.Model));
     }
 
+    /// <summary>
+    /// Pastes onto the <b>selected track</b> at the <b>playhead</b> — always both, whatever section
+    /// happens to be selected and wherever it came from.
+    ///
+    /// <para>
+    /// If audio files were copied in Explorer more recently than anything was copied here, those
+    /// are what gets pasted, each whole file end to end from the playhead.
+    /// </para>
+    /// </summary>
     [RelayCommand]
-    private void PasteClip()
+    private async Task PasteClipAsync()
     {
         if (_session is null) return;
+
+        var files = NewerAudioFilesOnClipboard();
+        var track = SelectedTrack;
+        if (track is null && Tracks.Count == 0 && (_clipboard is not null || files.Count > 0))
+        {
+            AddEmptyTrack();
+            track = SelectedTrack;
+        }
+        if (track is null) { Status = "Click a track to paste onto."; return; }
+
+        if (files.Count > 0) { await PlaceFilesAsync(track, files, PositionSeconds); return; }
+
         if (_clipboard is null) { Status = "Nothing has been copied yet."; return; }
-        if (SelectedTrack is not { } track) { Status = "Select a track to paste onto."; return; }
 
         PushUndo($"{track.Name}: paste section");
-        var result = TimelineEditor.Paste(track.Model, _clipboard, PositionSeconds, Session);
-        AfterClipEdit(track, result, result.Clip);
+        var result = TimelineEditor.Paste(track.Model, _clipboard, PositionSeconds, Session, _clipboardFrom);
+        AfterClipEdit(track, result with { Message = $"{track.Name}: {result.Message}" }, result.Clip);
+    }
+
+    private static readonly string[] AudioExtensions =
+        { ".mp3", ".m4a", ".aac", ".wav", ".flac", ".wma", ".ogg", ".opus", ".aif", ".aiff", ".mp4", ".m4b" };
+
+    public static bool IsAudioFile(string path)
+        => AudioExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Audio files on Windows' clipboard that were put there after our last copy.</summary>
+    private List<string> NewerAudioFilesOnClipboard()
+    {
+        try
+        {
+            if (_clipboard is not null && GetClipboardSequenceNumber() == _clipboardSequenceAtCopy) return new();
+            if (!Clipboard.ContainsFileDropList()) return new();
+            return Clipboard.GetFileDropList().Cast<string>().Where(IsAudioFile).Where(File.Exists).ToList();
+        }
+        catch
+        {
+            // Another program can hold the clipboard open for a moment. That is not worth an error;
+            // the section copied here is still there to paste.
+            return new();
+        }
+    }
+
+    /// <summary>
+    /// Puts whole audio files on one existing track, end to end from <paramref name="at"/> — a
+    /// paste of files copied in Explorer, or files dropped onto an empty track's lane.
+    /// </summary>
+    public async Task PlaceFilesAsync(TrackViewModel track, IReadOnlyList<string> files, double at)
+    {
+        if (files.Count == 0) return;
+        double from = at;
+        IsBusy = true;
+        try
+        {
+            // Decode everything before changing anything, so a file that will not open fails
+            // cleanly: nothing half-placed, and no undo step that undoes nothing.
+            foreach (var path in files)
+            {
+                Status = $"Loading {Path.GetFileName(path)}...";
+                await Session.EnsureAudioAsync(path);
+            }
+        }
+        catch (Exception ex)
+        {
+            Status = $"Could not open that file: {ex.Message}";
+            IsBusy = false;
+            return;
+        }
+
+        // A file too short to place is left out here, before anything is recorded for undo.
+        files = files.Where(p => (Session.AudioFor(new ClipModel { SourcePath = p })?.DurationSeconds ?? 0)
+                                 >= TimelineEditor.MinimumSectionSeconds).ToList();
+        if (files.Count == 0)
+        {
+            Status = "That file is too short to place.";
+            IsBusy = false;
+            return;
+        }
+
+        PushUndo($"{track.Name}: add {files.Count} file{(files.Count == 1 ? "" : "s")}");
+        EditResult? last = null;
+        int placedCount = 0;
+        try
+        {
+            foreach (var path in files)
+            {
+                last = await Session.PlaceFileAsync(track.Model, path, at);
+                if (!last.Changed) break;
+                placedCount++;
+                if (last.Clip is { } placed)
+                    at = TimelineEditor.TimelineSecondsOfFrame(track.Model, TimelineEditor.EndFrameOf(placed, Session), Session);
+            }
+        }
+        catch (Exception ex)
+        {
+            last = EditResult.No($"Could not place that file: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        if (!Tracks.Contains(track)) { Status = last?.Message ?? "That track went away while the file was loading."; return; }
+        if (ProjectBpm <= 0 && track.Model.Bpm > 0) ProjectBpm = track.Model.Bpm;
+
+        // Whatever did land is drawn and counted as a change, even if a later file failed.
+        string what = files.Count == 1 ? Path.GetFileName(files[0]) : $"{placedCount} of {files.Count} files";
+        var message = placedCount == files.Count
+            ? $"{track.Name}: put {what} at {from:0.00}s."
+            : $"{track.Name}: put {what} at {from:0.00}s — {last?.Message}";
+        if (placedCount > 0) AfterClipEdit(track, new EditResult(true, message, last?.Clip), last?.Clip);
+        else Status = last?.Message ?? "Nothing was placed.";
     }
 
     [RelayCommand]
@@ -804,6 +962,187 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // instead of stacking every repeat on the same spot.
         AfterClipEdit(track, result, result.Clip);
     }
+
+    // ---------------- empty tracks and loop mode ----------------
+
+    /// <summary>Adds a track with nothing on it, selects it, and says what to do with it.</summary>
+    [RelayCommand]
+    private void AddEmptyTrack()
+    {
+        PushUndo("add empty track");
+        var model = Session.AddEmptyTrack();
+        var vm = NewTrackViewModel(model);
+        vm.NotifyAudioLoaded();
+        Tracks.Add(vm);
+        SelectedTrack = vm;
+        SelectClip(null);
+        RecomputeLength();
+        MarkDirty();
+        Status = $"Added {model.Name}. Ctrl+V pastes onto it at the playhead, or drag a section onto it.";
+    }
+
+    /// <summary>
+    /// While on, dragging either end of a section repeats it rather than trimming it. These are
+    /// the same repeats Ctrl+D makes — sections on the track — not the Shift-drag listening loop.
+    /// </summary>
+    [ObservableProperty] private bool _loopMode;
+
+    [RelayCommand]
+    private void ToggleLoopMode() => LoopMode = !LoopMode;
+
+    partial void OnLoopModeChanged(bool value)
+        => Status = value
+            ? "Loop mode on: drag either end of a section to repeat it. Hold Ctrl for part of a repeat."
+            : "Loop mode off: dragging the end of a section trims it again.";
+
+    // ---------------- dragging sections ----------------
+    //
+    // The window turns the pointer into timeline positions and target tracks; everything about
+    // what that does to the project lives in Core (SectionMove, SectionTrim, LoopDrag), where the
+    // test project can reach it. This is the glue: one undo step per gesture, and keeping the
+    // lanes drawn from the model as it changes underneath them.
+
+    private SectionMove? _move;
+    private SectionTrim? _trim;
+    private LoopDrag? _loopDrag;
+    private TrackViewModel? _dragHome;
+    private Guid _dragClipId;
+
+    /// <summary>Where a drag is lined up against another section's edge, for the guide line.</summary>
+    [ObservableProperty] private double? _snapLineSeconds;
+
+    private SnapSettings SnapFor(bool free) => new(!free, PixelsPerSecond, ProjectBpm);
+
+    /// <summary>The track a section is currently on during a move.</summary>
+    public TrackViewModel? MovingOn => _move is null ? null : Tracks.FirstOrDefault(t => ReferenceEquals(t.Model, _move.Current));
+
+    public void BeginMove(ClipViewModel clip)
+    {
+        EndDrag();
+        PushUndo($"{clip.Track.Name}: move section");
+        _move = new SectionMove(Session, clip.Track.Model, clip.Model);
+        _dragClipId = clip.Id;
+    }
+
+    /// <summary>Moves the section being dragged. A null target keeps it on the track it is on.</summary>
+    public void DragMoveTo(TrackViewModel? target, double proposedStart, bool free)
+    {
+        if (_move is null) return;
+        var from = MovingOn;
+        var to = target ?? from;
+        if (from is null || to is null) return;
+
+        _move.DragTo(to.Model, proposedStart, SnapFor(free));
+        Redraw(from);
+        if (!ReferenceEquals(from, to)) Redraw(to);
+        SelectById(_dragClipId);
+        SnapLineSeconds = _move.SnapLineSeconds;
+
+        double at = TimelineEditor.TimelineSecondsAt(to.Model, _move.Clip.TrackStartSeconds);
+        Status = $"{to.Name}: section at {at:0.00}s{(_move.SnappedTo is { } s ? $" — on {s}" : "")}";
+    }
+
+    public void BeginTrim(ClipViewModel clip, bool start)
+    {
+        EndDrag();
+        PushUndo($"{clip.Track.Name}: trim section");
+        _trim = new SectionTrim(Session, clip.Track.Model, clip.Model, start);
+        _dragHome = clip.Track;
+        _dragClipId = clip.Id;
+    }
+
+    public void DragTrimTo(double proposedEdge, bool free)
+    {
+        if (_trim is null || _dragHome is null) return;
+        _trim.DragTo(proposedEdge, SnapFor(free));
+        Redraw(_dragHome);
+        SelectById(_dragClipId);
+        SnapLineSeconds = _trim.SnapLineSeconds;
+        Status = $"{_dragHome.Name}: section {SelectedClip?.LengthSeconds ?? 0:0.0}s{(_trim.SnappedTo is null ? "" : " — on a section edge")}";
+    }
+
+    /// <summary>
+    /// Whether dragging this end of this section in loop mode repeats it. The edge between two
+    /// repeats of an existing loop does not — it is inside the loop — so that is a plain move.
+    /// </summary>
+    public bool CanLoopFrom(ClipViewModel clip, bool left)
+        => LoopRun.Of(clip.Track.Model, clip.Model, Session).IsOuterEdge(clip.Model, left);
+
+    public void BeginLoop(ClipViewModel clip, bool left)
+    {
+        EndDrag();
+        PushUndo($"{clip.Track.Name}: loop section");
+        _loopDrag = new LoopDrag(Session, clip.Track.Model, clip.Model, left);
+        _dragHome = clip.Track;
+        _dragClipId = _loopDrag.Base.Id;
+    }
+
+    public void DragLoopTo(double proposedEdge, bool free)
+    {
+        if (_loopDrag is null || _dragHome is null) return;
+        var result = _loopDrag.DragTo(proposedEdge, wholeRepeats: !free);
+        Redraw(_dragHome);
+        SelectById(_dragClipId);
+        Status = $"{_dragHome.Name}: {result.Message}";
+    }
+
+    /// <summary>Ends whichever drag is running and settles it.</summary>
+    public void EndDrag()
+    {
+        if (_move is not null)
+        {
+            var origin = Tracks.FirstOrDefault(t => ReferenceEquals(t.Model, _move.Origin));
+            var result = _move.Commit();
+            var home = MovingOn;
+            if (origin is not null) Redraw(origin);
+            if (home is not null)
+            {
+                Redraw(home);
+                SelectedTrack = home;
+            }
+            SelectById(_dragClipId);
+            Status = result.Message;
+        }
+        else if (_trim is not null && _dragHome is not null)
+        {
+            Status = $"{_dragHome.Name}: section is {SelectedClip?.LengthSeconds ?? 0:0.0}s.";
+        }
+        else if (_loopDrag is not null && _dragHome is not null)
+        {
+            Status = _loopDrag.Repeats == 0 && !_loopDrag.Partial
+                ? $"{_dragHome.Name}: loop left as the one section."
+                : $"{_dragHome.Name}: looped {_loopDrag.Repeats + 1}×{(_loopDrag.Partial ? " and a part" : "")}. Each repeat is its own section now.";
+        }
+
+        bool changed = _move is not null || _trim is not null || _loopDrag is not null;
+        _move = null;
+        _trim = null;
+        _loopDrag = null;
+        _dragHome = null;
+        SnapLineSeconds = null;
+        EndGesture();
+        if (changed)
+        {
+            RecomputeLength();
+            MarkDirty();
+        }
+    }
+
+    /// <summary>Pushes a track to the engine and redraws it from the model.</summary>
+    private void Redraw(TrackViewModel track)
+    {
+        Session.Apply(track.Model);
+        track.RefreshFromModel();
+        track.RebuildClips();
+    }
+
+    private void SelectById(Guid id)
+        => SelectClip(Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id));
+
+    /// <summary>The first file a track needs that is not loaded, for the "missing" message.</summary>
+    private string MissingFileOf(TrackModel track)
+        => ProjectSession.SourcePathsOf(track).FirstOrDefault(p => Session.AudioFor(new ClipModel { SourcePath = p }) is null)
+           ?? track.SourcePath;
 
     /// <summary>
     /// Records the project state before a gesture. Continuous gestures — a knob drag, a clip drag —
@@ -884,7 +1223,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         double max = 0;
         foreach (var t in Tracks)
-            max = Math.Max(max, t.TimelineOffsetSeconds + t.TimelineDurationSeconds);
+            max = Math.Max(max, t.TimelineEndSeconds);
         TotalSeconds = max;
     }
 

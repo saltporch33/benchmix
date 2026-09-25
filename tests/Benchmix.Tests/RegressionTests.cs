@@ -140,6 +140,32 @@ public class RegressionTests
     // ---------------------------------------------------------------- removing a track while rendering
 
     [Fact]
+    public void SeekingAPitchedTrackDoesNoAudioWorkOnTheCallersThread()
+    {
+        // A seek comes from the UI thread — every pixel of a ruler scrub while paused. It used to
+        // re-prime the phase vocoder right there: about 1.75 ms per pitched track per call, and a
+        // way for the UI thread to be inside the native stretcher while the audio thread was too.
+        // Now it only records where to go, and the render thread does the work.
+        using var graph = new MixGraph(Rate);
+        var t = graph.AddTrack();
+        t.SetClip(Tone(330, 4));
+        t.Mode = StretchMode.Independent;
+        t.Semitones = 3;
+        t.Speed = 1.07;
+        RenderAll(graph, Rate / 2);                       // the stretcher exists and has run
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        const int Seeks = 200;
+        for (int i = 0; i < Seeks; i++) t.Seek(Rate + i * 97);
+        sw.Stop();
+        double perSeekMs = sw.Elapsed.TotalMilliseconds / Seeks;
+
+        Assert.True(perSeekMs < 0.25,
+            $"a seek on a pitched track took {perSeekMs:F3} ms on the calling thread — it is running the "
+          + "stretcher there instead of leaving that to the render thread");
+    }
+
+    [Fact]
     public void RemovingATrackWhileTheGraphIsBeingRenderedDoesNotThrow()
     {
         // The removed voice used to be disposed immediately, freeing its native stretcher while the

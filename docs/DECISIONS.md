@@ -135,3 +135,113 @@ instrumental keeps all the HF), and separation holds the whole song in memory.
 2. **"Bit-identical passthrough" was overstated.** It holds for the signal path with the limiter
    off. The limiter is on by default and does attenuate a loud untouched track. Both statements
    now have a test, and the README says so.
+
+## 2026-09-24 — empty tracks, paste target, dragging between tracks, loop mode, snapping
+
+Daniel, 2026-09-24, verbatim:
+
+> "1. allow me to add empty tracks.
+> 2. pasting audio should land on the selected track and at the current playhead
+> 3. allow selected audio to be dragged to another track
+> 4. select a piece of audio, toggle a "loop" mode, then dragging the left and right terminus' of
+> the audio automatically duplicates the audio to allow for looping
+> 5. snapping audio clips to each other when dragged close (hold ctrl for manual granular control)"
+
+He was away and asked for no questions, so everything below was decided on a stated default and
+is recorded here to be reversible.
+
+| Decision | Why |
+| --- | --- |
+| **An empty track takes on the tempo and pitch** a section was playing at, when the first section is pasted or dragged onto it. Not its EQ, volume or name. | The section must land and sound exactly as it did. A fresh deck starts flat because a separate EQ is usually why a section gets its own track. The name stays "Track N": two tracks both called after the song would make every status message ambiguous. |
+| Dragged *past* an empty track and on to another, the empty track is put back exactly as it was. | Passing over a track must not change it. |
+| **A song file put on an empty track** (dropped on its lane, or copied in Explorer and pasted) makes the track that song, named after it, with its own tempo and key. | That is the same as adding the song as a track, but in the lane you chose. On a track that already has a song, a pasted file is a section from another song and takes that track's tempo, pitch and EQ, like any cross-song paste. |
+| **Paste is always the selected track at the playhead.** It already was in code; what made it land elsewhere was that the selected track was invisible, a press on a knob or button did not select its track, a right-click did not select anything (so the menu's *Paste* went to whatever was selected before), and undo reset the selection to track 1. All four are fixed; the selected track has a blue bar. | Those were the ways "the selected track" could be something other than the one he was looking at. |
+| **Ctrl+V pastes files copied in Explorer** if they were copied more recently than anything copied in Benchmix, judged by Windows' own clipboard counter. | "Pasting audio" read literally. Most recent copy wins, wherever it was made. The clipboard is only ever read. |
+| **A track's origin is not a wall.** Pasting, dragging or looping before where a track's song was first dropped moves the origin back and every section forward by the same whole number of frames. | Exact to the frame at the track's original tempo; within one frame (about 20 µs) at any other, because an origin cannot sit on a whole output frame and a whole track frame at once. Joins are untouched either way. |
+| **A dropped section overwrites** what is under it, like paste. **A trim stops at the next section.** | Moving or pasting puts something somewhere new; trimming adjusts one section and must never change another. Both are one undo step. |
+| **Snapping priority:** another section's edge, on any track, within 10 px; otherwise bar lines, as before; Ctrl turns both off. Either end of the dragged section can be the one that snaps. Trims snap to section edges only, as trims never snapped to bars. | Bars were already the default ("Snap clips to bars by default, Ctrl to override", 2026-09-16). Section edges take priority because when one is that close, it is what is being aimed at. Across tracks this lines a vocal up against a beat on another deck. |
+| **Loop mode builds ordinary sections** — the same repeats Ctrl+D makes — not a new "looped clip" object. | It reuses the hand-built loop path the engine already plays, needs no file-format change, and every repeat can still be edited on its own. |
+| In loop mode the edge moves in **whole repeats**; **Ctrl** gives part of a repeat. A part-repeat on the right is the section's head, on the left its tail, so the loop stays in phase. | Whole repeats is the loop equivalent of snapping; Ctrl is "manual granular control" everywhere else. |
+| **A run of repeats is one loop.** Grabbing the outer end of an existing loop lengthens or shortens all of it. The edge *between* two repeats is not a loop handle — pressing there moves that repeat. | Otherwise grabbing the end of a four-repeat loop and dragging back would start a new loop of the last repeat and never shrink the old one; and grabbing an inner edge would collapse every repeat beyond it the moment the drag began. |
+| Loop repeats overwrite what they run over, but only when the drag ends there: pulling the edge back during the same drag gives it back. | Same rule as Ctrl+D, without punishing a drag that overshoots. |
+| Labelled **LOOP MODE**, with a tooltip saying it is not the Shift-drag listening loop. | Daniel called it "loop" mode. CLAUDE.md already warns that "loop" means two things; this is the hand-built kind. |
+| Every drag (move, trim, loop) is now **one undo step**. | Clip drags were not undoable at all before — the drag code never recorded an undo point. |
+
+## 2026-09-24 — defects found while building it
+
+All fixed, each with a regression test named for what was wrong.
+
+1. **Every loop repeat clicked, on every playback path.** A butt join — two sections back to back
+   that do not continue each other, which is every repeat of every hand-built loop — was meant to be
+   crossfaded against the outgoing section's continuation. Measured on a 440 Hz sine looped at two
+   points half a cycle apart, the largest sample-to-sample jump at the join against a natural 0.03:
+
+   | Path | Before | After |
+   | --- | --- | --- |
+   | untouched track | 0.85 — no crossfade at all; the condition excluded the default mode even when the stretcher is bypassed | 0.028 (steady 0.028) |
+   | LINK on | 0.99, 65 frames *after* the join — the fade was read from the raw file, ignoring the EQ's delay, so it added a second discontinuity | 0.028 (0.028) |
+   | LINK at +5% | 0.95 | 0.030 (0.030) |
+   | pitched (phase vocoder) | 0.76 — no crossfade; "the stretcher's own overlap-add" did not cover it | 0.031 (0.028) |
+
+   The fix renders five milliseconds of the outgoing section's continuation through the real
+   stretcher and EQ at the join, before re-priming for the incoming one, and crossfades the two —
+   carrying the fade across render blocks so preview and export agree. `JoinTests`. (Measured
+   first at 440 Hz; the "After" column is the final 431 Hz run — see item 6 for why that matters.)
+2. **Splitting a section that had been moved or trimmed could leave a one-frame gap** instead of a
+   seam, so the split point got two declicks — an audible split. Positions were summed in seconds
+   and then rounded; the engine rounds each part. All placement is now whole frames.
+3. **Ctrl+D on a moved section could start the repeat a frame or two late**, the same way — a hole
+   at every repeat.
+4. **A track with every section deleted came back holding the whole song** when the project was
+   reopened: the version 1 migration treated any track with no sections as a version 1 track.
+5. **Pasting before where a track's song began landed at the track's start**, not at the playhead.
+
+Then an independent adversarial review of the change, told to reproduce anything it reported,
+found seven more; two further were found while fixing those. All fixed, all with tests that fail
+when the fix is taken out:
+
+6. **On a pitched or stretched track, the first 65 frames after every jump were the wrong audio**
+   — older than today. The EQ, which sits after the stretcher, was primed with the raw file from
+   where the read position stood, 150 ms ahead of what the stretcher emits next. At a loop join
+   that was a step of 0.08–0.15 against 0.03; it also hit the first moment after any seek,
+   including the very start of a render. The first join tests missed it because they used 440 Hz,
+   and the stretcher's 7200-frame delay is exactly 66 cycles of 440 Hz. The prime is now rendered
+   through the real chain (`TrackVoice.Reposition`); the untouched path reads exactly the samples
+   it always did. `JoinTests` now use 431 Hz and eight paths.
+7. **Snapping a section's end near 0:00 pushed the whole track later.** The section would have had
+   to start before 0:00; the origin could not move back that far, and every section moved instead.
+   Such a snap is now not offered, and moving a track's origin never goes past 0:00.
+8. **Grabbing an existing loop again dropped its fade** — the repeat holding the loop's outer fade
+   is rebuilt by the drag, and the copies took the section's own fade, which inside a loop is zero.
+9. **Removing a track, or pressing undo, while a song file was loading onto it** left a voice in
+   the mix with no track on screen: audio in every render that could not be muted.
+10. **At some tempos a join got no crossfade** — about one join in forty at 0.7×, where
+    `ceil(T / speed)` and the render loop's `floor` disagree by a frame in floating point.
+11. **Losing the mouse mid-drag** (Alt+Tab, a dialog) skipped the drop, which is where overlap is
+    resolved, so a dragged section could be left sounding on top of another.
+12. **Pasting several files where one failed** left the ones that worked undrawn and unsaved.
+13. **A fade on one side of a join left the other side with no declick** — it started or stopped
+    dead on the sample it was cut at, a step of 0.42–0.43 on the test signal.
+14. **Trimming the end of a section shorter than 50 ms** could push it into the section after it.
+
+A second review, of just those fixes, found four problems in them. Fixed, each with a test that
+fails when the fix is taken out:
+
+15. **The same trim problem at a section's start** — the mirror case was missed, and the start could
+    be pushed into the section before it or before the start of its file. A trim now never makes a
+    section shorter than it already is if that is under 50 ms, and never forces it to change.
+16. **Seeking primed the phase vocoder on the calling thread** — the UI thread, on every pixel of a
+    ruler scrub: about 1.75 ms per pitched track per move, and a way to be inside the native
+    stretcher while the audio thread was too. A seek now only records where to go; the audio
+    thread does the work at the start of its next block.
+17. **An edit landing on the very block that starts a join** dropped the voice's binding, and that
+    join got neither the crossfade nor a declick (0.97). The binding now carries across any edit
+    that did not change the section being played — which also stops every edit made during
+    playback re-priming it — and when the outgoing section *did* change, its state is rebuilt so the
+    join is still crossfaded (0.045 against 0.028 on the phase vocoder; exact elsewhere).
+18. **A song file too short to place still took over the empty track** it was aimed at.
+
+One thing the review found is older and not part of this change, so it is recorded rather than
+fixed: on the phase-vocoder path the output differs slightly with the size of the blocks it is
+pulled in, even with no joins, so live preview and the rendered file are not bit-identical there.
+It is flagged as its own task.

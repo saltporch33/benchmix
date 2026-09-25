@@ -36,7 +36,8 @@ control on screen is one you asked for.
    on the timeline the clip lands.
 2. **Set the project tempo** — it seeds from the first track you add. Everything matches to this.
 3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did.
-4. **Line them up** — drag a clip sideways. It snaps to bars; hold <kbd>Ctrl</kbd> for free
+4. **Line them up** — drag a section sideways, or up and down onto another track. It snaps to the
+   edges of other sections when it gets close, and to bars otherwise; hold <kbd>Ctrl</kbd> for free
    movement.
 5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
 6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak.
@@ -54,9 +55,33 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+scroll | zoom about the pointer |
 | <kbd>Shift</kbd>+scroll | scroll sideways |
 | click the ruler | move the playhead |
-| <kbd>Shift</kbd>+drag the ruler | set a loop |
-| drag a clip | move it (snaps to bars; <kbd>Ctrl</kbd> to free it) |
+| <kbd>Shift</kbd>+drag the ruler | set a listening loop |
+| <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
+| <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
+| <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section |
+| <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
+| <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
+| drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges, then to bars; <kbd>Ctrl</kbd> frees it |
+| drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
 | <kbd>Alt</kbd>+click a lane | move the playhead without moving the clip |
+
+The selected track has a blue bar down its left edge. Clicking anywhere on a track — its lane, its
+name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes.
+
+**Loop mode.** Click a section, press *LOOP MODE* (or <kbd>Ctrl</kbd>+<kbd>L</kbd>), then drag
+either of its ends: instead of trimming, the section repeats to fill the space, in whole repeats.
+Hold <kbd>Ctrl</kbd> to end on part of a repeat. The repeats are ordinary sections — the same thing
+<kbd>Ctrl</kbd>+<kbd>D</kbd> makes — and a run of them is treated as one loop, so grabbing the end of
+it again lengthens or shortens the whole thing. It overwrites whatever it runs over on that track, as
+a paste does, and one <kbd>Ctrl</kbd>+<kbd>Z</kbd> takes the whole drag back. This is not the
+Shift-drag listening loop on the ruler, which only changes what plays.
+
+**Empty tracks.** *+ Empty track* makes a track with nothing on it. Paste or drag a section onto it
+and it takes on the tempo and pitch that section was playing at, so it sounds and lands exactly as
+it did — but with its own EQ and volume, which is usually why you moved it. Drop a song file on an
+empty track's lane (or copy one in Explorer and press <kbd>Ctrl</kbd>+<kbd>V</kbd>) and the track
+becomes that song.
 
 Knobs: drag up and down, <kbd>Shift</kbd> for fine, double-click to reset, wheel to nudge.
 
@@ -127,7 +152,7 @@ benchmix mashup <bed> <topper> <out.wav> [opts]  tempo-match and render
 | `Benchmix.Engine` | audio and analysis. No UI types. Clips, stretch, EQ, mixer, render, tempo/key detection. |
 | `Benchmix.Core` | the project model, its file format, undo, and the bridge that keeps the live graph matching the model. |
 | `Benchmix.App` | WPF shell — timeline, waveforms, knobs, transport. |
-| `Benchmix.Tests` | 91 tests, engine-level and model-level, plus end-to-end on real files. |
+| `Benchmix.Tests` | 190 tests, engine-level and model-level, plus end-to-end on real files. |
 
 The signal chain per track is `clip → stretch → EQ → clip envelope → gain/pan → mix`, and **live preview and the
 final render are the same chain** — the renderer just pulls blocks as fast as the CPU allows

@@ -70,6 +70,13 @@ public sealed class ProjectSession : IDisposable
     public AudioClip? AudioFor(ClipModel clip)
         => _clips.TryGetValue(clip.SourcePath, out var c) ? c : null;
 
+    /// <summary>
+    /// True when every file this track's sections read from is decoded and ready. An empty track
+    /// reads from nothing, so it is ready — asking only after its own song would report every empty
+    /// track as a missing file.
+    /// </summary>
+    public bool HasAllAudio(TrackModel track) => SourcePathsOf(track).All(_clips.ContainsKey);
+
     /// <summary>Every distinct file a track's sections read from.</summary>
     public static IEnumerable<string> SourcePathsOf(TrackModel track)
         => track.Clips.Select(c => c.SourcePath)
@@ -160,6 +167,90 @@ public sealed class ProjectSession : IDisposable
 
         await LoadAudioAsync(model, cancel);
         return model;
+    }
+
+    /// <summary>
+    /// Adds a track with nothing on it: somewhere to paste or drag sections so that two can sound
+    /// at once, or so one can get its own EQ. It has a voice from the start, so the first section
+    /// put on it plays without anything else having to happen.
+    /// </summary>
+    public TrackModel AddEmptyTrack()
+    {
+        var model = new TrackModel { Name = NextTrackName(), ColorHex = NextColour() };
+        Project.Tracks.Add(model);
+        EnsureVoice(model);
+        ApplyAll();
+        return model;
+    }
+
+    private string NextTrackName()
+    {
+        var taken = Project.Tracks.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (int n = Project.Tracks.Count + 1; ; n++)
+            if (!taken.Contains($"Track {n}")) return $"Track {n}";
+    }
+
+    /// <summary>Decodes a file into the shared cache if it is not there already.</summary>
+    public async Task<AudioClip> EnsureAudioAsync(string path, CancellationToken cancel = default)
+    {
+        if (_clips.TryGetValue(path, out var cached)) return cached;
+        var loaded = await Task.Run(() =>
+        {
+            var c = AudioClip.Load(path, SampleRate, null, cancel);
+            c.EnsurePeaks();
+            return c;
+        }, cancel);
+        _clips[path] = loaded;
+        return loaded;
+    }
+
+    /// <summary>
+    /// Puts a whole audio file on an existing track at a timeline position, overwriting what is
+    /// under it — pasting a file rather than a section. On an empty track the file becomes the
+    /// track's song, with its own tempo and key; on any other it is a section from another song and
+    /// takes that track's tempo, pitch and EQ, like any cross-song paste.
+    /// </summary>
+    public async Task<EditResult> PlaceFileAsync(TrackModel track, string path, double timelineSeconds,
+                                                 CancellationToken cancel = default)
+    {
+        // Loading takes a moment, and in that moment the track can be removed, or an undo can swap
+        // the whole project for an earlier copy. Carrying on regardless gave the removed track a
+        // voice again — audio in every render with no track on screen to mute it.
+        await EnsureAudioAsync(path, cancel);
+        if (!Project.Tracks.Contains(track)) return EditResult.No("That track went away while the file was loading.");
+
+        // Refuse before changing anything: a file too short to place must not rename the empty
+        // track and take it over, or later pastes onto it would no longer adopt their song.
+        var whole = new ClipModel { SourcePath = path };
+        if (TimelineEditor.LengthOf(whole, this) < TimelineEditor.MinimumSectionSeconds)
+            return EditResult.No($"{Path.GetFileName(path)} is too short to place.");
+
+        TrackAnalysis? analysis = null;
+        if (TimelineEditor.IsEmptyDeck(track))
+        {
+            analysis = await Task.Run(() => Analyzer.Analyze(path, cancel), cancel);
+            if (!Project.Tracks.Contains(track)) return EditResult.No("That track went away while the file was loading.");
+        }
+
+        // Checked again after the analysis: something may have been put on it meanwhile, and then
+        // it is not an empty track any more — the file is a section from another song on it.
+        if (analysis is not null && TimelineEditor.IsEmptyDeck(track))
+        {
+            track.SourcePath = path;
+            track.Bpm = analysis.Bpm;
+            track.BpmSource = analysis.BpmSource.ToString();
+            track.Key = analysis.Key;
+            track.Camelot = analysis.Camelot;
+            track.KeySource = analysis.KeySource.ToString();
+            if (TimelineEditor.IsAutoName(track.Name))
+                track.Name = analysis.Title ?? Path.GetFileNameWithoutExtension(path);
+            if (Project.ProjectBpm <= 0 && analysis.Bpm > 0) Project.ProjectBpm = analysis.Bpm;
+        }
+
+        var result = TimelineEditor.Paste(track, new ClipModel { SourcePath = path }, timelineSeconds, this);
+        EnsureVoice(track);
+        Apply(track);
+        return result;
     }
 
     /// <summary>Where separated stems are written, so they behave like any other source file.</summary>
