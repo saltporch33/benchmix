@@ -39,7 +39,18 @@ public sealed partial class TrackViewModel : ObservableObject
     public TrackModel Model { get; }
     public Guid Id => Model.Id;
 
-    [ObservableProperty] private string _name = "";
+    [ObservableProperty, NotifyPropertyChangedFor(nameof(NameTip))] private string _name = "";
+
+    /// <summary>
+    /// True while the name is open for typing. What is typed goes to <see cref="RenameDraft"/>, never
+    /// straight to <see cref="Name"/>: any edit elsewhere refreshes this row from the model, and a
+    /// box bound to the name itself would be wiped mid-word.
+    /// </summary>
+    [ObservableProperty] private bool _isRenaming;
+    [ObservableProperty] private string _renameDraft = "";
+
+    /// <summary>The name's tooltip. A view-model string, because StringFormat does nothing on a ToolTip.</summary>
+    public string NameTip => $"{Name} — double-click to rename";
     [ObservableProperty] private bool _isSelected;
     [ObservableProperty] private bool _isLoaded;
     [ObservableProperty] private string? _loadError;

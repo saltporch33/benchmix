@@ -47,7 +47,7 @@ control on screen is one you asked for.
 
 | | |
 | --- | --- |
-| <kbd>Space</kbd> | play / pause |
+| <kbd>Space</kbd> | play / pause (not while typing a name or a tempo) |
 | double-click a lane, the ruler, or the empty room under the tracks | play from there; if already playing, jump there and keep playing |
 | click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again. (The ■ button goes back to 0:00.) |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
@@ -70,6 +70,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |
 | <kbd>Shift</kbd>+click a section | select every section between the section you clicked before and this one |
 | <kbd>Delete</kbd> | delete the selected sections, leaving the gaps (not while typing in a text box) |
+| double-click a track's name, or right-click its strip → *Rename track* | rename it: type, then <kbd>Enter</kbd> keeps it (so does clicking anywhere else), <kbd>Esc</kbd> keeps the old name |
 
 The selected track has a blue bar down its left edge. Clicking anywhere on a track — its lane, its
 name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes.

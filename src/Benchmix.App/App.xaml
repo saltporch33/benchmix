@@ -13,6 +13,7 @@
             <local:TimeSlashConverter x:Key="TimeSlash"/>
             <local:PlayGlyphConverter x:Key="PlayGlyph"/>
             <local:BoolToVisibilityConverter x:Key="BoolVis"/>
+            <local:InverseBoolToVisibilityConverter x:Key="NotBoolVis"/>
             <local:ZeroToVisibilityConverter x:Key="ZeroVis"/>
 
             <Style TargetType="ToolTip">

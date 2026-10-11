@@ -596,6 +596,15 @@ public partial class MainWindow : Window
             _scriptedFocus = null;
         }
 
+        // --- renaming a track, and Space as a bare key that leaves text boxes alone ---
+        try { RunRenameGestures(Check, notes); }
+        finally
+        {
+            _scriptedFocus = null;
+            _vm.CommitOpenRenames();
+            _vm.StopCommand.Execute(null);
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -779,9 +788,9 @@ public partial class MainWindow : Window
         bool acted = PressDelete();
         Check("Delete with nothing selected deletes nothing, even with the playhead on a section",
               !acted && track?.Clips.Count == untouched);
-        Check("Delete inside a text box is left to the text box", !DeleteKeyAppliesTo(new TextBox()));
-        Check("Delete inside a menu is left to the menu", !DeleteKeyAppliesTo(new ContextMenu()) && !DeleteKeyAppliesTo(new MenuItem()));
-        Check("Delete anywhere else is the timeline's", DeleteKeyAppliesTo(lane) && DeleteKeyAppliesTo(this) && DeleteKeyAppliesTo(null));
+        Check("Delete inside a text box is left to the text box", !BareKeyAppliesTo(new TextBox()));
+        Check("Delete inside a menu is left to the menu", !BareKeyAppliesTo(new ContextMenu()) && !BareKeyAppliesTo(new MenuItem()));
+        Check("Delete anywhere else is the timeline's", BareKeyAppliesTo(lane) && BareKeyAppliesTo(this) && BareKeyAppliesTo(null));
         Check("Delete is not a bare KeyBinding, so it cannot fire inside the PROJECT BPM box",
               !InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Delete));
     }
@@ -998,6 +1007,127 @@ public partial class MainWindow : Window
         _vm.SelectClip(Find(id));
         BelowDown(BelowTracks, below, 1);
         Check("a plain click under the last track lets go of the selected sections", _vm.SelectedClips.Count == 0);
+    }
+
+    /// <summary>
+    /// Renaming a track (Daniel, 2026-10-11) and the bare Space key, through the window's own
+    /// handlers. A scripted run never holds the real keyboard, so the name box is never actually
+    /// focused: keys go to the handlers directly, with a scripted focused element.
+    /// </summary>
+    private void RunRenameGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (_vm.Tracks.FirstOrDefault() is not { } track || NameAreaOf(track) is not { } area || RenameBoxOf(track) is not { } box)
+        {
+            notes.Add("no track laid out, so renaming is untested - pass a file to cover it");
+            return;
+        }
+        var source = PresentationSource.FromVisual(this);
+        if (source is null) { notes.Add("no presentation source, so the rename keys were not driven"); return; }
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+        KeyboardFocusChangedEventArgs FocusTo(IInputElement? to) => new(Keyboard.PrimaryDevice, 0, box, to) { RoutedEvent = LostKeyboardFocusEvent };
+
+        var id = track.Id;
+        string original = track.Name;
+        // Undo rebuilds every row, so the track and its parts are found again after each one.
+        void Refetch()
+        {
+            UpdateLayout();
+            track = _vm.Tracks.First(t => t.Id == id);
+            area = NameAreaOf(track) ?? area;
+            box = RenameBoxOf(track) ?? box;
+        }
+        void UndoAndWait() { _vm.UndoCommand.Execute(null); PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == id)?.Name == original); Refetch(); }
+
+        NameDown(area, null, 1);
+        Check("a single click on a track's name does not open it for typing", !track.IsRenaming);
+        NameDown(area, null, 2);
+        UpdateLayout();
+        Check("double-clicking a track's name opens it for typing", track.IsRenaming && box.Visibility == Visibility.Visible);
+        Check($"the box starts with the current name ('{box.Text}')", box.Text == original);
+        Check("the box is never given the keyboard in a scripted run", !box.IsKeyboardFocusWithin);
+
+        box.Text = original + " (renamed)";
+        OnRenameKeyDown(box, Press(Key.Enter));
+        Check($"Enter keeps the new name, on screen and in the project ('{track.Name}')",
+              !track.IsRenaming && track.Name == original + " (renamed)" && track.Model.Name == track.Name);
+        UndoAndWait();
+        Check($"one undo puts the old name back ('{track.Name}')", track.Name == original);
+
+        _vm.BeginRename(track);
+        box.Text = "Not this one";
+        OnRenameKeyDown(box, Press(Key.Escape));
+        Check("Esc leaves the name as it was", !track.IsRenaming && track.Name == original);
+
+        _vm.BeginRename(track);
+        box.Text = "   ";
+        OnRenameKeyDown(box, Press(Key.Enter));
+        Check($"a blank name is refused and the old one kept (\"{_vm.Status}\")", track.Name == original && _vm.Status.Contains("needs a name"));
+
+        _vm.BeginRename(track);
+        WindowPress(MouseButton.Left, box);
+        Check("a press inside the name box does not end the renaming", track.IsRenaming);
+        OnRenameLostFocus(box, FocusTo(new ContextMenu()));
+        Check("the box's own right-click menu taking the keyboard does not end the renaming", track.IsRenaming);
+        OnRenameLostFocus(box, FocusTo(null));
+        Check("switching to another program does not end the renaming", track.IsRenaming);
+        box.Text = "Clicked away";
+        WindowPress(MouseButton.Left, LaneOf(track));
+        Check($"clicking elsewhere keeps what was typed ('{track.Name}')", !track.IsRenaming && track.Name == "Clicked away");
+
+        // A name still open when an undo rebuilds the rows must not be written in afterwards.
+        _vm.BeginRename(track);
+        UndoAndWait();
+        bool late = _vm.CommitRename(id, "Too late");
+        Check("a name still being typed when an undo rebuilds the tracks is dropped, not written in afterwards",
+              !late && track.Name == original && !track.IsRenaming && _vm.Tracks.All(t => t.Name != "Too late"));
+
+        Check("the name says how to rename it on hover", NameTextOf(track)?.ToolTip is string tip && tip.Contains("double-click to rename"));
+        Check("the control map labels the name box textbox:rename and PROJECT BPM textbox:projectBpm",
+              LabelFor(box) == "textbox:rename" && LabelFor(BpmBox) == "textbox:projectBpm");
+
+        // --- Space ---
+        var engine = _vm.Session.Engine;
+        Check("Space is not a bare KeyBinding, so it cannot fire inside a text box",
+              !InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Space));
+        _vm.StopCommand.Execute(null);
+        _scriptedFocus = this;
+        var space = Press(Key.Space);
+        OnWindowPreviewKeyDown(this, space);
+        bool played = space.Handled && engine.State == Benchmix.Engine.Audio.TransportState.Playing;
+        space = Press(Key.Space);
+        OnWindowPreviewKeyDown(this, space);
+        Check("Space on the timeline plays, and again pauses",
+              played && space.Handled && engine.State == Benchmix.Engine.Audio.TransportState.Paused);
+
+        _vm.StopCommand.Execute(null);
+        _scriptedFocus = BpmBox;
+        space = Press(Key.Space);
+        OnWindowPreviewKeyDown(this, space);
+        Check("Space with PROJECT BPM focused is left to the box",
+              !space.Handled && engine.State == Benchmix.Engine.Audio.TransportState.Stopped);
+
+        _vm.BeginRename(track);
+        UpdateLayout();
+        _scriptedFocus = box;
+        space = Press(Key.Space);
+        OnWindowPreviewKeyDown(this, space);
+        Check("Space while typing a track's name is left to the box, so a name can have spaces in it",
+              !space.Handled && engine.State == Benchmix.Engine.Audio.TransportState.Stopped);
+        _vm.CancelRename(id);
+
+        var link = Descendants(this).OfType<System.Windows.Controls.Primitives.ToggleButton>().FirstOrDefault(b => b.Content as string == "LINK");
+        if (link is null) notes.Add("no LINK button found, so Space with a button focused is untested");
+        else
+        {
+            _scriptedFocus = link;
+            space = Press(Key.Space);
+            OnWindowPreviewKeyDown(this, space);
+            Check("Space with a track's button focused plays, and is used up before it can press that button again",
+                  space.Handled && engine.State == Benchmix.Engine.Audio.TransportState.Playing);
+            _vm.StopCommand.Execute(null);
+        }
+        _scriptedFocus = null;
     }
 
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
@@ -1254,6 +1384,7 @@ public partial class MainWindow : Window
         }
 
         await CheckSplitThroughMenuAsync(Check, Labels);
+        await CheckRenameThroughMenuAsync(Check, Labels);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -1273,6 +1404,66 @@ public partial class MainWindow : Window
     /// straight to the engine and passed; none went through the menu, which is the only way in.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// "Rename track" on a strip's right-click menu (Daniel, 2026-10-11), pressed through its own
+    /// automation peer without opening the popup — an open popup would appear on his screen.
+    /// </summary>
+    private async Task CheckRenameThroughMenuAsync(Action<string, bool> check, Func<string> labels)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        await Settle();
+
+        var topper = _vm.Tracks.Count == 2 ? _vm.Tracks[1] : null;
+        var item = topper is null ? null : StripOf(topper)?.ContextMenu?.Items.OfType<MenuItem>()
+                                               .FirstOrDefault(m => m.Header as string == "Rename track");
+        check("the track strip's right-click menu offers 'Rename track'", item is not null);
+        if (topper is null || item is null) return;
+
+        // What the right-click itself does before the menu opens: select the track under it. The
+        // bed is selected first, so renaming the wrong track cannot pass.
+        _vm.SelectedTrack = _vm.Tracks[0];
+        if (StripOf(topper) is { } strip)
+            OnTrackHeaderRightClicked(strip, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+                                             { RoutedEvent = PreviewMouseRightButtonDownEvent });
+        check("a right-click on a track's strip selects that track, so its menu acts on it", ReferenceEquals(_vm.SelectedTrack, topper));
+
+        var id = topper.Id;
+        string old = topper.Name, renamed = old + " (renamed)";
+        try
+        {
+            var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer(item);
+            ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        }
+        catch (Exception ex)
+        {
+            check($"the menu item can be clicked ({ex.GetType().Name}: {ex.Message})", false);
+            return;
+        }
+        await Settle();
+
+        var box = RenameBoxOf(topper);
+        check($"clicking it opens that track's name for typing, filled in with the current name ('{box?.Text}'; status '{_vm.Status}')",
+              topper.IsRenaming && box is { Visibility: Visibility.Visible } && box.Text == old);
+        if (box is null || PresentationSource.FromVisual(this) is not { } source) return;
+
+        box.Text = renamed;
+        OnRenameKeyDown(box, new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Enter) { RoutedEvent = PreviewKeyDownEvent });
+        await Settle();
+        check($"typing a name and pressing Enter renames it on screen and in the project ('{topper.Name}')",
+              topper.Name == renamed && topper.Model.Name == renamed && labels().Contains(renamed));
+
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        string? back = _vm.Tracks.FirstOrDefault(t => t.Id == id)?.Name;
+        check($"one Ctrl+Z puts the old name back ('{back}')", back == old);
+    }
+
     private async Task CheckSplitThroughMenuAsync(Action<string, bool> check, Func<string> labels)
     {
         var topper = _vm.Tracks.Count == 2 ? _vm.Tracks[1] : null;
@@ -1602,7 +1793,9 @@ public partial class MainWindow : Window
         Controls.PlayheadOverlay => "playhead",
         System.Windows.Controls.Primitives.ToggleButton t when t.Content is string ts => "toggle:" + ts,
         Button b when b.Content is string bs => "button:" + bs,
-        TextBox => "textbox:projectBpm",
+        TextBox { Name: "BpmBox" } => "textbox:projectBpm",
+        TextBox { Name: "RenameBox" } => "textbox:rename",
+        TextBox => "textbox",
         Slider => "slider:master",
         TextBlock tb when tb.Text is { Length: > 0 } s && s.Length < 60 => "text:" + s,
         _ => null,
@@ -1786,8 +1979,85 @@ public partial class MainWindow : Window
 
     private void OnTrackHeaderClicked(object sender, MouseButtonEventArgs e)
     {
-        TakeKeyboardFromText();
+        // A press inside the name being typed is for the text: taking the keyboard away from it
+        // would end the renaming before the click could place the caret.
+        if (!IsInRenameBox(e.OriginalSource as DependencyObject)) TakeKeyboardFromText();
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+    }
+
+    /// <summary>A right-click on a strip selects its track first, so the menu acts on the one under the pointer.</summary>
+    private void OnTrackHeaderRightClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+    }
+
+    // ---------------- renaming a track ----------------
+
+    private void OnNameMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (NameDown((FrameworkElement)sender, e.OriginalSource as DependencyObject, e.ClickCount)) e.Handled = true;
+    }
+
+    /// <summary>A press on a track's name, apart from its event so the gesture test can double-click it.</summary>
+    private bool NameDown(FrameworkElement area, DependencyObject? pressedOn, int clickCount)
+    {
+        if (area.DataContext is not TrackViewModel t || t.IsRenaming || IsInRenameBox(pressedOn)) return false;
+        return clickCount >= 2 && _vm.BeginRename(t);
+    }
+
+    /// <summary>
+    /// The strip menu's "Rename track". A menu item only inherits its track's DataContext once the
+    /// menu has opened; the right-press that opens it has already selected that track, so that is
+    /// the fall-back.
+    /// </summary>
+    private void OnRenameTrackMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _vm.BeginRename(t);
+    }
+
+    private void OnRenameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: TrackViewModel t } box) return;
+        if (e.Key == Key.Enter) { _vm.CommitRename(t.Id, box.Text); ReturnKeyboardToTimeline(); e.Handled = true; }
+        else if (e.Key == Key.Escape) { _vm.CancelRename(t.Id); ReturnKeyboardToTimeline(); e.Handled = true; }
+    }
+
+    /// <summary>
+    /// The keyboard leaving the name box keeps what was typed — but only when it went somewhere else
+    /// in this window, which is clicking elsewhere. Switching to another program (no new focus) or
+    /// opening the box's own right-click menu (a popup, outside the window) leaves the typing open.
+    /// </summary>
+    private void OnRenameLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: TrackViewModel t } box) return;
+        if (e.NewFocus is not DependencyObject to || to is System.Windows.Controls.Primitives.MenuBase or MenuItem) return;
+        if (!ReferenceEquals(to, this) && !(to is Visual v && v.IsDescendantOf(this))) return;
+        _vm.CommitRename(t.Id, box.Text);
+    }
+
+    /// <summary>
+    /// Puts the keyboard in the name box when it opens, with the old name selected so typing replaces
+    /// it. Never in a scripted run: asking Windows for the keyboard would activate the hidden window.
+    /// Deferred to ContextIdle, after a closing menu has handed the keyboard back to where it was.
+    /// </summary>
+    private void OnRenameBoxShown(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not TextBox box || !box.IsVisible || App.IsScriptedRun) return;
+        Dispatcher.BeginInvoke(() => { if (box.IsVisible) { box.Focus(); box.SelectAll(); } },
+                               System.Windows.Threading.DispatcherPriority.ContextIdle);
+    }
+
+    private static bool IsInRenameBox(DependencyObject? d)
+    {
+        for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is TextBox { Name: "RenameBox" }) return true;
+        return false;
+    }
+
+    /// <summary>Hands the keyboard back to the timeline after typing, so Delete and Space work again.</summary>
+    private void ReturnKeyboardToTimeline()
+    {
+        if (!App.IsScriptedRun) Keyboard.Focus(this);
     }
 
     /// <summary>
@@ -1798,32 +2068,50 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnWindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton != MouseButton.Middle) return;
-        _vm.StopAndReturn();
-        e.Handled = true;
+        if (WindowPress(e.ChangedButton, e.OriginalSource as DependencyObject)) e.Handled = true;
     }
 
     /// <summary>
-    /// Delete removes the selected sections. It is handled here, not as a KeyBinding, because a
-    /// bare key bound on the Window also fires from inside the PROJECT BPM box — so it only acts
-    /// when the keyboard focus is not in a text box, where Delete means a character.
+    /// Every press in the window, before anything under the pointer sees it; true when it was used
+    /// up. A press anywhere but in the name being typed keeps that name, as clicking away does in
+    /// Explorer — a click on a lane moves no keyboard focus, so the box's own focus loss cannot be
+    /// relied on for that.
+    /// </summary>
+    private bool WindowPress(MouseButton button, DependencyObject? pressedOn)
+    {
+        if (!IsInRenameBox(pressedOn)) _vm.CommitOpenRenames();
+        if (button != MouseButton.Middle) return false;
+        _vm.StopAndReturn();
+        return true;
+    }
+
+    /// <summary>
+    /// The two bare keys that act: Delete removes the selected sections, Space plays and pauses.
+    /// They are handled here, not as KeyBindings, because a bare key bound on the Window also fires
+    /// from inside a text box — Space would start playback instead of typing a space into a track's
+    /// name — so they act only when the keyboard focus is not in a text box or a menu. Being the
+    /// window's Preview, Space also comes here before a focused button, which would otherwise take
+    /// it as a press of itself.
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key != Key.Delete || Modifiers != ModifierKeys.None) return;
-        if (e.IsRepeat) { e.Handled = true; return; }              // a held key is one press
+        if (e.Key is not (Key.Delete or Key.Space) || Modifiers != ModifierKeys.None) return;
 
         // OriginalSource is the element the key was raised on — the focused one, including one
-        // inside an open menu's popup, which Keyboard.FocusedElement does not report.
-        if (!DeleteKeyAppliesTo(e.OriginalSource as IInputElement ?? FocusedForKeys)) return;
+        // inside an open menu's popup, which Keyboard.FocusedElement does not report. Typing gets
+        // the key, held or not: a held Delete in PROJECT BPM deletes more than one character.
+        if (!BareKeyAppliesTo(e.OriginalSource as IInputElement ?? FocusedForKeys)) return;
+        if (e.IsRepeat) { e.Handled = true; return; }              // a held key is one press
+
+        if (e.Key == Key.Space) { _vm.PlayPauseCommand.Execute(null); e.Handled = true; return; }
         if (PressDelete()) e.Handled = true;
     }
 
     /// <summary>
-    /// Whether a Delete press with this element focused is for the timeline rather than for text
-    /// being typed or a menu being used.
+    /// Whether a Delete or Space press with this element focused is for the timeline rather than for
+    /// text being typed or a menu being used.
     /// </summary>
-    public static bool DeleteKeyAppliesTo(IInputElement? focused)
+    public static bool BareKeyAppliesTo(IInputElement? focused)
         => focused is not (System.Windows.Controls.Primitives.TextBoxBase or PasswordBox
                            or System.Windows.Controls.Primitives.MenuBase or MenuItem);
 
@@ -1870,7 +2158,13 @@ public partial class MainWindow : Window
     private Point? _scriptedWindowPoint;
     private ModifierKeys? _scriptedModifiers;
 
-    private ModifierKeys Modifiers => _scriptedModifiers ?? Keyboard.Modifiers;
+    /// <summary>
+    /// Ctrl, Shift and Alt as a gesture sees them. A scripted run never reads the real keyboard:
+    /// Daniel types while the checks run, and a Ctrl he happened to be holding turned snapping off,
+    /// made a double-click two Ctrl+clicks and left Space unhandled — 13 checks failed at random on
+    /// 2026-10-11 until this.
+    /// </summary>
+    private ModifierKeys Modifiers => _scriptedModifiers ?? (App.IsScriptedRun ? ModifierKeys.None : Keyboard.Modifiers);
 
     private Point WindowPoint(MouseEventArgs e) => _scriptedWindowPoint ?? e.GetPosition(this);
 
@@ -1931,11 +2225,18 @@ public partial class MainWindow : Window
     }
 
     /// <summary>The lane element of a track's row, for the gesture test to aim at.</summary>
-    private FrameworkElement? LaneOf(TrackViewModel t)
+    private FrameworkElement? LaneOf(TrackViewModel t) => RowPart<FrameworkElement>(t, "Lane");
+    private FrameworkElement? StripOf(TrackViewModel t) => RowPart<FrameworkElement>(t, "Strip");
+    private FrameworkElement? NameAreaOf(TrackViewModel t) => RowPart<FrameworkElement>(t, "NameArea");
+    private TextBlock? NameTextOf(TrackViewModel t) => RowPart<TextBlock>(t, "NameText");
+    private TextBox? RenameBoxOf(TrackViewModel t) => RowPart<TextBox>(t, "RenameBox");
+
+    /// <summary>A named element of a track's row, from the row template.</summary>
+    private T? RowPart<T>(TrackViewModel t, string name) where T : class
     {
         if (TrackList.ItemContainerGenerator.ContainerFromItem(t) is not ContentPresenter row) return null;
         row.ApplyTemplate();
-        return row.ContentTemplate?.FindName("Lane", row) as FrameworkElement;
+        return row.ContentTemplate?.FindName(name, row) as T;
     }
 
     private void OnLaneMouseDown(object sender, MouseButtonEventArgs e)

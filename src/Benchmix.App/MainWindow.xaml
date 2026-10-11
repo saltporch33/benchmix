@@ -12,7 +12,6 @@
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
     <Window.InputBindings>
-        <KeyBinding Key="Space" Command="{Binding PlayPauseCommand}"/>
         <KeyBinding Key="O" Modifiers="Ctrl" Command="{Binding OpenCommand}"/>
         <KeyBinding Key="S" Modifiers="Ctrl" Command="{Binding SaveCommand}"/>
         <KeyBinding Key="S" Modifiers="Ctrl+Shift" Command="{Binding SaveAsCommand}"/>
@@ -186,9 +185,17 @@
                                     <!-- Preview, so a press on a knob or a button selects the track too:
                                          those controls handle the press themselves, and the selected
                                          track is where Ctrl+V pastes. -->
-                                    <Border Grid.Column="0"
+                                    <Border x:Name="Strip" Grid.Column="0"
                                             BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,1"
-                                            PreviewMouseLeftButtonDown="OnTrackHeaderClicked">
+                                            PreviewMouseLeftButtonDown="OnTrackHeaderClicked"
+                                            PreviewMouseRightButtonDown="OnTrackHeaderRightClicked">
+                                        <!-- Click handlers only: a ContextMenu lives in its own popup and cannot
+                                             reach the window through a binding (MenuWiringTests). -->
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Rename track" Click="OnRenameTrackMenu"/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
                                         <Border.Style>
                                             <Style TargetType="Border">
                                                 <Setter Property="Background" Value="{StaticResource Bg1Brush}"/>
@@ -220,9 +227,21 @@
                                                               Margin="4,0,0,0" Value="{Binding MeterLevel}"
                                                               MeterBrush="{StaticResource GoodBrush}" WarnBrush="{StaticResource WarnBrush}"
                                                               ClipBrush="{StaticResource BadBrush}" TrackBrush="{StaticResource Bg3Brush}"/>
-                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
-                                                           FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                                           VerticalAlignment="Center" ToolTip="{Binding Name}"/>
+                                                <!-- The name, or while renaming a box to type it in. The box edits a
+                                                     draft, never Name itself, so a refresh of the row cannot wipe it. -->
+                                                <Grid x:Name="NameArea" Background="Transparent" MouseLeftButtonDown="OnNameMouseDown">
+                                                    <TextBlock x:Name="NameText" Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
+                                                               FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                               VerticalAlignment="Center" ToolTip="{Binding NameTip}"
+                                                               Visibility="{Binding IsRenaming, Converter={StaticResource NotBoolVis}}"/>
+                                                    <TextBox x:Name="RenameBox" Style="{StaticResource DarkBox}" Padding="3,0" Height="19"
+                                                             FontSize="12.5" VerticalAlignment="Center" MaxLength="80"
+                                                             Text="{Binding RenameDraft, UpdateSourceTrigger=PropertyChanged}"
+                                                             Visibility="{Binding IsRenaming, Converter={StaticResource BoolVis}}"
+                                                             PreviewKeyDown="OnRenameKeyDown" LostKeyboardFocus="OnRenameLostFocus"
+                                                             IsVisibleChanged="OnRenameBoxShown"
+                                                             ToolTip="Type the track's new name. Enter keeps it; Esc puts the old one back."/>
+                                                </Grid>
                                             </DockPanel>
 
                                             <!-- analysis row -->

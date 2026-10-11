@@ -183,6 +183,40 @@ public sealed class ProjectSession : IDisposable
         return model;
     }
 
+    /// <summary>The longest name a track keeps; a longer one is cut there.</summary>
+    public const int MaximumTrackNameLength = 80;
+
+    /// <summary>
+    /// A typed track name, cleaned: tabs, line breaks and other control characters become spaces,
+    /// the ends are trimmed, and it is cut at <see cref="MaximumTrackNameLength"/>. Null when nothing
+    /// is left, because a track with no name is a lane nobody can tell apart in a status message.
+    /// </summary>
+    public static string? CleanTrackName(string? typed)
+    {
+        if (typed is null) return null;
+        string name = new string(typed.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+        if (name.Length > MaximumTrackNameLength)
+        {
+            int cut = char.IsHighSurrogate(name[MaximumTrackNameLength - 1]) ? MaximumTrackNameLength - 1 : MaximumTrackNameLength;
+            name = name[..cut].TrimEnd();
+        }
+        return name.Length == 0 ? null : name;
+    }
+
+    /// <summary>
+    /// Renames a track (Daniel, 2026-10-11). A blank name is refused and the old one kept; the same
+    /// name again is not a change. Only the name changes — nothing is heard, nothing moves.
+    /// </summary>
+    public EditResult RenameTrack(TrackModel track, string? typed)
+    {
+        if (!Project.Tracks.Contains(track)) return EditResult.No("That track is no longer in the project.");
+        if (CleanTrackName(typed) is not { } name) return EditResult.No($"A track needs a name — kept \"{track.Name}\".");
+        if (name == track.Name) return EditResult.No($"Kept the name \"{track.Name}\".");
+        string old = track.Name;
+        track.Name = name;
+        return new EditResult(true, $"Renamed \"{old}\" to \"{name}\".");
+    }
+
     private string NextTrackName()
     {
         var taken = Project.Tracks.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

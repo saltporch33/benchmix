@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**203 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**209 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -310,6 +310,63 @@ and lanes unchanged, the room under the last track empty.
 **Not verified:** Windows' own double-click timing and distance under a real hand. The checks hand
 the handler a click count of 2; whether two real clicks are close enough together to be one is
 Windows' decision (its double-click setting).
+
+## 2026-10-11 — renaming a track, and Space as a bare key
+
+**In the test project.** `TrackOrderAndNameTests` (6): a blank name (empty, spaces, tabs and line
+breaks, null) is refused and the old name kept; spaces around a name are trimmed, a pasted line break
+becomes a space, a 200-character name is cut at 80; renaming to the same name is not a change; a
+rename of a track no longer in the project writes nothing; a renamed track keeps its name through
+save and load, and undo gives the old one back; an empty track he named "Drums" keeps that name when
+a song is put on it. **209 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 95 to **115 checks**, through the window's own
+handlers with a scripted focused element — the box is never actually given the keyboard:
+
+```
+PASS  a single click on a track's name does not open it for typing
+PASS  double-clicking a track's name opens it for typing
+PASS  the box starts with the current name ('Still D.R.E. (Instrumental)')
+PASS  the box is never given the keyboard in a scripted run
+PASS  Enter keeps the new name, on screen and in the project ('Still D.R.E. (Instrumental) (renamed)')
+PASS  one undo puts the old name back ('Still D.R.E. (Instrumental)')
+PASS  Esc leaves the name as it was
+PASS  a blank name is refused and the old one kept ("A track needs a name — kept "Still D.R.E. (Instrumental)".")
+PASS  a press inside the name box does not end the renaming
+PASS  the box's own right-click menu taking the keyboard does not end the renaming
+PASS  switching to another program does not end the renaming
+PASS  clicking elsewhere keeps what was typed ('Clicked away')
+PASS  a name still being typed when an undo rebuilds the tracks is dropped, not written in afterwards
+PASS  the name says how to rename it on hover
+PASS  the control map labels the name box textbox:rename and PROJECT BPM textbox:projectBpm
+PASS  Space is not a bare KeyBinding, so it cannot fire inside a text box
+PASS  Space on the timeline plays, and again pauses
+PASS  Space with PROJECT BPM focused is left to the box
+PASS  Space while typing a track's name is left to the box, so a name can have spaces in it
+PASS  Space with a track's button focused plays, and is used up before it can press that button again
+```
+
+`--buttontest` grew from 31 to **36 checks**: the strip's right-click menu offers *Rename track*; a
+right-click on a strip selects that track (the bed is selected first, so renaming the wrong track
+cannot pass); the real menu item, pressed through its automation peer, opens that track's name
+filled in with the current name; typing and Enter renames it on screen and in the project; one
+Ctrl+Z puts the old name back.
+
+The menu check failed the first time it ran: a right-click menu's items only inherit their track
+once the menu has opened, and the check presses the item without opening it (an open popup would
+appear on his screen). The lane menu's *Split into vocals + instrumental* had been passing the same
+way only because it falls back to the selected track. *Rename track* now does the same; in real use
+the right-press that opens the menu has just selected that track.
+
+The full set then failed once, 13 gesture checks at once, on a build that had just passed: the
+gestures read the real keyboard's modifiers in a scripted run (see DECISIONS.md). Fixed; all eight
+runs then passed and stayed out of the way: gesturetest 115, buttontest 36.
+
+**Not verified:** typing into the box with a real keyboard; the keyboard really moving into the box
+when it opens (never done in a scripted run, which must not take the keyboard), and in particular
+after choosing *Rename track* from a menu that has just closed; and Space after really clicking a
+button. By hand: double-click a name, type a name with spaces, press Enter; right-click a strip →
+Rename track, type, click a lane.
 
 ## The stretch engine
 

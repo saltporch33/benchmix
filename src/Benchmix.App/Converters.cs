@@ -51,6 +51,16 @@ public sealed class BoolToVisibilityConverter : IValueConverter
         => Binding.DoNothing;
 }
 
+/// <summary>Collapsed when true: the other half of a pair that swaps with <see cref="BoolToVisibilityConverter"/>.</summary>
+public sealed class InverseBoolToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}
+
 /// <summary>Visible only when the bound count is zero — the empty-state prompt.</summary>
 public sealed class ZeroToVisibilityConverter : IValueConverter
 {

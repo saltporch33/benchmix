@@ -191,6 +191,67 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         IsPlaying = false;
     }
 
+    // ---------------- renaming a track ----------------
+
+    /// <summary>
+    /// Opens a track's name for typing (Daniel, 2026-10-11): a double-click on the name, or the
+    /// strip's right-click menu. One at a time — opening another keeps what was typed in the first.
+    /// </summary>
+    public bool BeginRename(TrackViewModel track)
+    {
+        if (_session is null || !Tracks.Contains(track)) return false;
+        if (track.IsRenaming) return true;
+        if (DragInProgress) { Status = "Let go of the section first."; return false; }
+        if (IsBusy) { Status = "Wait for that to finish, then rename the track."; return false; }
+
+        CommitOpenRenames();
+        track.RenameDraft = track.Name;
+        track.IsRenaming = true;
+        Status = $"Type a new name for {track.Name}, then press Enter. Esc keeps the old one.";
+        return true;
+    }
+
+    /// <summary>
+    /// Keeps what was typed as the track's name: Enter, or clicking anywhere else. Found by id in
+    /// the current project, so a box left over from before an undo writes nothing. A blank name, or
+    /// the same one, changes nothing and costs no press of Ctrl+Z.
+    /// </summary>
+    public bool CommitRename(Guid trackId, string? typed)
+    {
+        var track = Tracks.FirstOrDefault(t => t.Id == trackId);
+        if (track is null || !track.IsRenaming) return false;
+        track.IsRenaming = false;
+
+        string? name = ProjectSession.CleanTrackName(typed);
+        if (name is null || name == track.Model.Name)
+        {
+            Status = name is null ? $"A track needs a name — kept \"{track.Name}\"." : $"Kept the name \"{track.Name}\".";
+            return false;
+        }
+
+        PushUndo($"rename {track.Name}");
+        var result = Session.RenameTrack(track.Model, typed);
+        track.RefreshFromModel();
+        MarkDirty();
+        Status = result.Message;
+        return result.Changed;
+    }
+
+    /// <summary>Esc: the name stays as it was.</summary>
+    public void CancelRename(Guid trackId)
+    {
+        var track = Tracks.FirstOrDefault(t => t.Id == trackId);
+        if (track is null || !track.IsRenaming) return;
+        track.IsRenaming = false;
+        Status = $"Name left as \"{track.Name}\".";
+    }
+
+    /// <summary>Keeps whatever is being typed in any track's name, as clicking elsewhere does.</summary>
+    public void CommitOpenRenames()
+    {
+        foreach (var t in Tracks.Where(t => t.IsRenaming).ToList()) CommitRename(t.Id, t.RenameDraft);
+    }
+
     /// <summary>
     /// What a click of the scroll wheel does (Daniel, 2026-10-11): stop, and go back to where play
     /// last started — a double-click, a seek, or Space after a pause — so Space plays the same
@@ -507,6 +568,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task NewAsync()
     {
+        CommitOpenRenames();
         if (!ConfirmDiscard()) return;
         if (_session is null) return;
 
@@ -535,6 +597,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task OpenAsync()
     {
+        CommitOpenRenames();
         if (!ConfirmDiscard()) return;
         if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
 
@@ -720,6 +783,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private async Task ReloadFromProjectAsync(BenchmixProject project, string message)
     {
+        // Every row is about to be rebuilt; a name half-typed into one of them goes with it, rather
+        // than being written later into a track that is no longer in the project.
+        foreach (var t in Tracks) t.IsRenaming = false;
+
         var keepTrack = SelectedTrack?.Id;
         var keepClip = SelectedClip?.Id;
         var keepSelected = SelectedClips.Select(c => c.Id).ToHashSet();

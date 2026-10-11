@@ -82,8 +82,8 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click — 95 checks |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 31 checks |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space — 115 checks |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 36 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
@@ -126,9 +126,10 @@ These **exit 1 on failure** and also log a `verdict=` line to
 - **An untouched track is bit-identical — with the limiter OFF.** The limiter is on by default and
   does attenuate a loud track. Overstating this is a logged mistake with its own test.
 - **Every editing shortcut is Ctrl-modified**, because a bare key bound on the Window also fires
-  from inside the PROJECT BPM TextBox. The one bare key that acts, Delete (2026-10-03), is
-  deliberately **not** a KeyBinding: `OnWindowPreviewKeyDown` runs it only when the keyboard focus
-  is not in a text box, and `--gesturetest` fails if a Delete KeyBinding ever appears.
+  from inside a TextBox (PROJECT BPM, a track's name). The two bare keys that act, Delete
+  (2026-10-03) and Space (moved out of the KeyBindings 2026-10-11, so a name can have spaces), are
+  deliberately **not** KeyBindings: `OnWindowPreviewKeyDown` runs them only when the keyboard focus
+  is not in a text box or a menu, and `--gesturetest` fails if either KeyBinding ever appears.
 - **Nothing touches his own music files without an explicit yes.** Tag write-back is offered, not
   done.
 

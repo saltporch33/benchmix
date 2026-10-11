@@ -352,3 +352,24 @@ the ruler already did.
 | **Shift or Ctrl held makes it two ordinary clicks**, which do not play. | As on the ruler, where Shift+double-click has always set a listening loop; and a Ctrl+double-click toggles a section twice, leaving it as it was. |
 | **The empty room under the last track now takes clicks.** A double-click there plays, Alt+click moves the playhead, a plain click lets go of the selected sections (as a click on empty lane space does). | It used to ignore every click, so "anywhere" stopped at the last track. |
 | **For now the first click of a double-click still does what a click does**: on a section it selects just that section, in a gap it clears the selection. | Keeping a group selected through a double-click belongs with dragging a group, which is still to come. |
+
+## 2026-10-11 — renaming a track, and Space as a bare key
+
+Daniel, 2026-10-11, verbatim: *"3. rename tracks"*.
+
+| Decision | Why |
+| --- | --- |
+| **Double-click a track's name, or right-click its strip → *Rename track*.** The name becomes a box with the old name selected. **Enter**, or a click anywhere else, keeps what was typed; **Esc** keeps the old name. One undo step, and only when the name really changed. | Double-clicking a name to edit it is what Explorer does. The menu is there for anyone who does not think to double-click. |
+| **A blank name is refused** and the old one kept; spaces around a name are trimmed, line breaks become spaces, and a name stops at 80 characters. | A blank track is a lane nobody can tell apart in a status message, and a saved blank name is replaced by the file's name on reopening anyway. |
+| **The box edits a draft, never the name itself.** | Any edit elsewhere refreshes the row from the project, which would wipe a box bound to the name mid-word. |
+| **Switching to another program, or the box's own right-click menu, does not end the renaming.** Only the keyboard moving somewhere else in this window, or a press outside the box, keeps the name. | Alt+Tab away and back must not commit half a name; nor must right-click → Paste inside the box. |
+| **A name still being typed when an undo rebuilds the tracks is dropped**, not written in afterwards. | It would be written into a track that is no longer the one on screen. |
+| **A name he types that looks like "Track 3" is still treated as a placeholder**: the first song put on that empty track renames it after the song. Any other name he types is kept. | That is the existing rule for empty tracks (2026-09-24); telling his "Track 3" from Benchmix's would need a new field in the file for a case that hardly arises. |
+| **Space is no longer a KeyBinding.** Like Delete it is handled in code, and only when the keyboard is not in a text box or a menu, so a track's name can have spaces in it. The window now sees Space before a focused button does: after clicking a button, Space plays or pauses rather than pressing that button again. | A bare KeyBinding on the window fires from inside a text box — the rule CLAUDE.md records for Ctrl shortcuts. That a focused button used to take Space is read off WPF's key routing, not measured. |
+| **A held Delete or Space inside a text box now repeats as typing does.** | The repeat used to be swallowed before the focus was checked, so holding Delete in PROJECT BPM removed one character. |
+
+Found on the way: in a scripted run the gestures read the **real** keyboard's Ctrl, Shift and Alt
+whenever a check had not scripted them. Run while Daniel was typing, a Ctrl he happened to be
+holding turned snapping off, made double-clicks into two Ctrl+clicks and left Space unhandled —
+13 gesture checks failed at once, on a build that had just passed. A scripted run now never reads
+the keyboard; the same build then passed all 115.
