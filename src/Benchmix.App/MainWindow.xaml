@@ -161,228 +161,243 @@
                           x:Name="TrackScroller"
                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
                           PreviewMouseWheel="OnTimelineWheel">
-                <ItemsControl x:Name="TrackList" ItemsSource="{Binding Tracks}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="{x:Type vm:TrackViewModel}">
-                            <Grid Height="152" Background="{StaticResource Bg0Brush}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="392"/>
-                                    <ColumnDefinition Width="*"/>
-                                </Grid.ColumnDefinitions>
+                <!-- The tracks, then whatever room is left under them. A double-click there plays
+                     from that point, as it does on a lane or the ruler; MinHeight makes the room
+                     exist whenever the tracks do not fill the view. -->
+                <Grid x:Name="TrackContent" MinHeight="{Binding ViewportHeight, ElementName=TrackScroller}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="392"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <ItemsControl x:Name="TrackList" Grid.ColumnSpan="2" ItemsSource="{Binding Tracks}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:TrackViewModel}">
+                                <Grid Height="152" Background="{StaticResource Bg0Brush}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="392"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
 
-                                <!-- ────────── channel strip ────────── -->
-                                <!-- Preview, so a press on a knob or a button selects the track too:
-                                     those controls handle the press themselves, and the selected
-                                     track is where Ctrl+V pastes. -->
-                                <Border Grid.Column="0"
-                                        BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,1"
-                                        PreviewMouseLeftButtonDown="OnTrackHeaderClicked">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Background" Value="{StaticResource Bg1Brush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Background" Value="{StaticResource Bg2Brush}"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <Grid Margin="10,7,10,6">
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="Auto"/>
-                                            <RowDefinition Height="*"/>
-                                            <RowDefinition Height="Auto"/>
-                                        </Grid.RowDefinitions>
+                                    <!-- ────────── channel strip ────────── -->
+                                    <!-- Preview, so a press on a knob or a button selects the track too:
+                                         those controls handle the press themselves, and the selected
+                                         track is where Ctrl+V pastes. -->
+                                    <Border Grid.Column="0"
+                                            BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,1"
+                                            PreviewMouseLeftButtonDown="OnTrackHeaderClicked">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource Bg1Brush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="Background" Value="{StaticResource Bg2Brush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid Margin="10,7,10,6">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
 
-                                        <!-- name row -->
-                                        <DockPanel Grid.Row="0">
-                                            <Border Width="4" Height="15" CornerRadius="2" DockPanel.Dock="Left"
-                                                    Background="{Binding ColorBrush}" Margin="0,0,7,0"/>
-                                            <Button DockPanel.Dock="Right" Content="&#x2715;" Style="{StaticResource ToolButton}"
-                                                    Padding="6,1" Margin="4,0,0,0" FontSize="10"
-                                                    ToolTip="Remove this track from the project. Ctrl+Z brings it back."
-                                                    Command="{Binding DataContext.RemoveTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"/>
-                                            <c:LevelMeter DockPanel.Dock="Right" Width="6" Height="15" IsVertical="True"
-                                                          Margin="4,0,0,0" Value="{Binding MeterLevel}"
-                                                          MeterBrush="{StaticResource GoodBrush}" WarnBrush="{StaticResource WarnBrush}"
-                                                          ClipBrush="{StaticResource BadBrush}" TrackBrush="{StaticResource Bg3Brush}"/>
-                                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
-                                                       FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                                       VerticalAlignment="Center" ToolTip="{Binding Name}"/>
-                                        </DockPanel>
+                                            <!-- name row -->
+                                            <DockPanel Grid.Row="0">
+                                                <Border Width="4" Height="15" CornerRadius="2" DockPanel.Dock="Left"
+                                                        Background="{Binding ColorBrush}" Margin="0,0,7,0"/>
+                                                <Button DockPanel.Dock="Right" Content="&#x2715;" Style="{StaticResource ToolButton}"
+                                                        Padding="6,1" Margin="4,0,0,0" FontSize="10"
+                                                        ToolTip="Remove this track from the project. Ctrl+Z brings it back."
+                                                        Command="{Binding DataContext.RemoveTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <c:LevelMeter DockPanel.Dock="Right" Width="6" Height="15" IsVertical="True"
+                                                              Margin="4,0,0,0" Value="{Binding MeterLevel}"
+                                                              MeterBrush="{StaticResource GoodBrush}" WarnBrush="{StaticResource WarnBrush}"
+                                                              ClipBrush="{StaticResource BadBrush}" TrackBrush="{StaticResource Bg3Brush}"/>
+                                                <TextBlock Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
+                                                           FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center" ToolTip="{Binding Name}"/>
+                                            </DockPanel>
 
-                                        <!-- analysis row -->
-                                        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,4">
-                                            <TextBlock Text="{Binding BpmText}" Style="{StaticResource Body}"/>
-                                            <TextBlock Text="?" Style="{StaticResource Caption}" Margin="3,0,0,0"
-                                                       Foreground="{StaticResource WarnBrush}"
-                                                       ToolTip="Tempo was estimated from the audio, not read from a tag."
-                                                       Visibility="{Binding BpmIsEstimate, Converter={StaticResource BoolVis}}"/>
-                                            <TextBlock Text="  &#183;  " Style="{StaticResource Caption}"/>
-                                            <TextBlock Text="{Binding KeyText}" Style="{StaticResource Body}"/>
-                                            <TextBlock Text="?" Style="{StaticResource Caption}" Margin="3,0,0,0"
-                                                       Foreground="{StaticResource WarnBrush}"
-                                                       ToolTip="Key was estimated from the audio. Benchmix gets this right about half the time, so trust your ears."
-                                                       Visibility="{Binding KeyIsEstimate, Converter={StaticResource BoolVis}}"/>
-                                        </StackPanel>
+                                            <!-- analysis row -->
+                                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,3,0,4">
+                                                <TextBlock Text="{Binding BpmText}" Style="{StaticResource Body}"/>
+                                                <TextBlock Text="?" Style="{StaticResource Caption}" Margin="3,0,0,0"
+                                                           Foreground="{StaticResource WarnBrush}"
+                                                           ToolTip="Tempo was estimated from the audio, not read from a tag."
+                                                           Visibility="{Binding BpmIsEstimate, Converter={StaticResource BoolVis}}"/>
+                                                <TextBlock Text="  &#183;  " Style="{StaticResource Caption}"/>
+                                                <TextBlock Text="{Binding KeyText}" Style="{StaticResource Body}"/>
+                                                <TextBlock Text="?" Style="{StaticResource Caption}" Margin="3,0,0,0"
+                                                           Foreground="{StaticResource WarnBrush}"
+                                                           ToolTip="Key was estimated from the audio. Benchmix gets this right about half the time, so trust your ears."
+                                                           Visibility="{Binding KeyIsEstimate, Converter={StaticResource BoolVis}}"/>
+                                            </StackPanel>
 
-                                        <!-- knob row -->
-                                        <StackPanel Grid.Row="2" Orientation="Horizontal" VerticalAlignment="Top">
-                                            <c:Knob Width="58" Height="74" Margin="0,0,4,0"
-                                                    Label="TEMPO" Minimum="0.5" Maximum="1.5" DefaultValue="1"
-                                                    Value="{Binding Speed, Mode=TwoWay}" ValueText="{Binding SpeedText}"
-                                                    IsBipolar="True"
-                                                    ArcBrush="{StaticResource AccentBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Speed without changing pitch. Drag up/down, Shift for fine, double-click to reset."/>
-                                            <c:Knob Width="58" Height="74" Margin="0,0,10,0"
-                                                    Label="PITCH" Minimum="-12" Maximum="12" DefaultValue="0"
-                                                    Value="{Binding Semitones, Mode=TwoWay}" ValueText="{Binding SemitonesText}"
-                                                    IsBipolar="True"
-                                                    ArcBrush="{StaticResource GoodBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Pitch in semitones, without changing speed. Drag up/down, Shift for fine, double-click to reset."/>
+                                            <!-- knob row -->
+                                            <StackPanel Grid.Row="2" Orientation="Horizontal" VerticalAlignment="Top">
+                                                <c:Knob Width="58" Height="74" Margin="0,0,4,0"
+                                                        Label="TEMPO" Minimum="0.5" Maximum="1.5" DefaultValue="1"
+                                                        Value="{Binding Speed, Mode=TwoWay}" ValueText="{Binding SpeedText}"
+                                                        IsBipolar="True"
+                                                        ArcBrush="{StaticResource AccentBrush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="Speed without changing pitch. Drag up/down, Shift for fine, double-click to reset."/>
+                                                <c:Knob Width="58" Height="74" Margin="0,0,10,0"
+                                                        Label="PITCH" Minimum="-12" Maximum="12" DefaultValue="0"
+                                                        Value="{Binding Semitones, Mode=TwoWay}" ValueText="{Binding SemitonesText}"
+                                                        IsBipolar="True"
+                                                        ArcBrush="{StaticResource GoodBrush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="Pitch in semitones, without changing speed. Drag up/down, Shift for fine, double-click to reset."/>
 
-                                            <c:Knob Width="52" Height="74" Label="LOW" Minimum="0" Maximum="2" DefaultValue="1"
-                                                    Value="{Binding EqLow, Mode=TwoWay}" ValueText="{Binding EqLowText}"
-                                                    ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Bass, below about 250 Hz. All the way down is a true kill: the usual move on the vocal track."/>
-                                            <c:Knob Width="52" Height="74" Label="MID" Minimum="0" Maximum="2" DefaultValue="1"
-                                                    Value="{Binding EqMid, Mode=TwoWay}" ValueText="{Binding EqMidText}"
-                                                    ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Middle, about 250 Hz to 2.5 kHz: where vocals and guitars live. All the way down is a true kill."/>
-                                            <c:Knob Width="52" Height="74" Margin="0,0,10,0" Label="HIGH" Minimum="0" Maximum="2" DefaultValue="1"
-                                                    Value="{Binding EqHigh, Mode=TwoWay}" ValueText="{Binding EqHighText}"
-                                                    ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Treble, above about 2.5 kHz: cymbals and air. All the way down is a true kill."/>
+                                                <c:Knob Width="52" Height="74" Label="LOW" Minimum="0" Maximum="2" DefaultValue="1"
+                                                        Value="{Binding EqLow, Mode=TwoWay}" ValueText="{Binding EqLowText}"
+                                                        ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="Bass, below about 250 Hz. All the way down is a true kill: the usual move on the vocal track."/>
+                                                <c:Knob Width="52" Height="74" Label="MID" Minimum="0" Maximum="2" DefaultValue="1"
+                                                        Value="{Binding EqMid, Mode=TwoWay}" ValueText="{Binding EqMidText}"
+                                                        ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="Middle, about 250 Hz to 2.5 kHz: where vocals and guitars live. All the way down is a true kill."/>
+                                                <c:Knob Width="52" Height="74" Margin="0,0,10,0" Label="HIGH" Minimum="0" Maximum="2" DefaultValue="1"
+                                                        Value="{Binding EqHigh, Mode=TwoWay}" ValueText="{Binding EqHighText}"
+                                                        ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="Treble, above about 2.5 kHz: cymbals and air. All the way down is a true kill."/>
 
-                                            <c:Knob Width="52" Height="74" Label="VOL" Minimum="0" Maximum="2" DefaultValue="1"
-                                                    Value="{Binding Gain, Mode=TwoWay}" ValueText="{Binding GainText}"
-                                                    ArcBrush="{StaticResource Text1Brush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="This track's volume. Most of the useful cut is in the last bit of travel before silence."/>
-                                        </StackPanel>
+                                                <c:Knob Width="52" Height="74" Label="VOL" Minimum="0" Maximum="2" DefaultValue="1"
+                                                        Value="{Binding Gain, Mode=TwoWay}" ValueText="{Binding GainText}"
+                                                        ArcBrush="{StaticResource Text1Brush}" TrackBrush="{StaticResource Bg3Brush}"
+                                                        KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                        ToolTip="This track's volume. Most of the useful cut is in the last bit of travel before silence."/>
+                                            </StackPanel>
 
-                                        <!-- button row -->
-                                        <StackPanel Grid.Row="3" Orientation="Horizontal">
-                                            <Button Content="Match BPM" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
-                                                    Command="{Binding DataContext.MatchTempoCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Stretch this track to the project tempo, pitch untouched. A half- or double-time reading is folded first."/>
-                                            <Button Content="Match key" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
-                                                    Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Shift this track's pitch to sit with the key of the first other track. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
-                                            <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
-                                                    ToolTip="Put tempo, pitch, EQ and volume back to normal. Sections, fades, LINK, mute and solo stay as they are."
-                                                    Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                    CommandParameter="{Binding}"/>
-                                            <ToggleButton Content="LINK" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
-                                                          IsChecked="{Binding LinkPitchToTempo, Mode=TwoWay}"
-                                                          ToolTip="Let pitch follow tempo, like speeding up a record. Nothing is reconstructed, so nothing can smear; the PITCH knob then just reads along."/>
-                                            <ToggleButton Content="M" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
-                                                          IsChecked="{Binding Muted, Mode=TwoWay}" ToolTip="Mute this track."/>
-                                            <ToggleButton Content="S" Style="{StaticResource PillToggle}" Margin="3,0,0,0"
-                                                          IsChecked="{Binding Soloed, Mode=TwoWay}" ToolTip="Solo: silence every other track. A muted track stays silent even when soloed."/>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
+                                            <!-- button row -->
+                                            <StackPanel Grid.Row="3" Orientation="Horizontal">
+                                                <Button Content="Match BPM" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
+                                                        Command="{Binding DataContext.MatchTempoCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Stretch this track to the project tempo, pitch untouched. A half- or double-time reading is folded first."/>
+                                                <Button Content="Match key" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
+                                                        Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Shift this track's pitch to sit with the key of the first other track. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
+                                                <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
+                                                        ToolTip="Put tempo, pitch, EQ and volume back to normal. Sections, fades, LINK, mute and solo stay as they are."
+                                                        Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <ToggleButton Content="LINK" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
+                                                              IsChecked="{Binding LinkPitchToTempo, Mode=TwoWay}"
+                                                              ToolTip="Let pitch follow tempo, like speeding up a record. Nothing is reconstructed, so nothing can smear; the PITCH knob then just reads along."/>
+                                                <ToggleButton Content="M" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
+                                                              IsChecked="{Binding Muted, Mode=TwoWay}" ToolTip="Mute this track."/>
+                                                <ToggleButton Content="S" Style="{StaticResource PillToggle}" Margin="3,0,0,0"
+                                                              IsChecked="{Binding Soloed, Mode=TwoWay}" ToolTip="Solo: silence every other track. A muted track stays silent even when soloed."/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
 
-                                <!-- the selected track: where Ctrl+V pastes -->
-                                <Border Grid.Column="0" Width="3" HorizontalAlignment="Left"
-                                        Background="{StaticResource AccentBrush}" IsHitTestVisible="False"
-                                        Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}"/>
+                                    <!-- the selected track: where Ctrl+V pastes -->
+                                    <Border Grid.Column="0" Width="3" HorizontalAlignment="Left"
+                                            Background="{StaticResource AccentBrush}" IsHitTestVisible="False"
+                                            Visibility="{Binding IsSelected, Converter={StaticResource BoolVis}}"/>
 
-                                <!-- ────────── lane ────────── -->
-                                <Border Grid.Column="1" x:Name="Lane"
-                                        BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
-                                        ClipToBounds="True"
-                                        MouseLeftButtonDown="OnLaneMouseDown" MouseMove="OnLaneMouseMove"
-                                        MouseLeftButtonUp="OnLaneMouseUp"
-                                        PreviewMouseRightButtonDown="OnLaneRightButtonDown"
-                                        LostMouseCapture="OnLaneLostCapture"
-                                        ContextMenuOpening="OnLaneContextMenuOpening">
-                                    <Border.Style>
-                                        <Style TargetType="Border">
-                                            <Setter Property="Background" Value="{StaticResource Bg0Brush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Background" Value="#13161B"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Border.Style>
-                                    <Border.ContextMenu>
-                                        <ContextMenu>
-                                            <MenuItem Header="Fade in" >
-                                                <MenuItem Header="none"  Click="OnFadeIn"  Tag="0"/>
-                                                <MenuItem Header="0.25 s" Click="OnFadeIn" Tag="0.25"/>
-                                                <MenuItem Header="0.5 s"  Click="OnFadeIn" Tag="0.5"/>
-                                                <MenuItem Header="1 s"    Click="OnFadeIn" Tag="1"/>
-                                                <MenuItem Header="2 s"    Click="OnFadeIn" Tag="2"/>
-                                                <MenuItem Header="4 s"    Click="OnFadeIn" Tag="4"/>
-                                            </MenuItem>
-                                            <MenuItem Header="Fade out">
-                                                <MenuItem Header="none"  Click="OnFadeOut" Tag="0"/>
-                                                <MenuItem Header="0.25 s" Click="OnFadeOut" Tag="0.25"/>
-                                                <MenuItem Header="0.5 s"  Click="OnFadeOut" Tag="0.5"/>
-                                                <MenuItem Header="1 s"    Click="OnFadeOut" Tag="1"/>
-                                                <MenuItem Header="2 s"    Click="OnFadeOut" Tag="2"/>
-                                                <MenuItem Header="4 s"    Click="OnFadeOut" Tag="4"/>
-                                            </MenuItem>
-                                            <Separator/>
-                                            <MenuItem Header="Trim start to playhead" Click="OnTrimStartToPlayhead"/>
-                                            <MenuItem Header="Trim end to playhead"   Click="OnTrimEndToPlayhead"/>
-                                            <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
-                                            <Separator/>
-                                            <MenuItem Header="Split at playhead"      Click="OnSplitHere"      InputGestureText="Ctrl+I"/>
-                                            <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D"/>
-                                            <Separator/>
-                                            <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X"/>
-                                            <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C"/>
-                                            <MenuItem Header="Paste at playhead"      Click="OnPasteSection"   InputGestureText="Ctrl+V"/>
-                                            <MenuItem Header="Delete section"         Click="OnDeleteSection"/>
-                                            <Separator/>
-                                            <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
-                                            <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
-                                                      Click="OnLoopModeMenu" InputGestureText="Ctrl+L"/>
-                                            <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
-                                            <Separator/>
-                                            <!-- A Click handler like every item above, never a Command bound
-                                                 through RelativeSource AncestorType=Window: a ContextMenu is
-                                                 not inside the window, so that binding comes back empty and
-                                                 the item silently does nothing. Until 2026-10-03 this one did. -->
-                                            <MenuItem Header="Split into vocals + instrumental" Click="OnSplitStems"
-                                                      ToolTip="Runs on your GPU, about 20 seconds. Downloads a 64 MB model the first time."/>
-                                        </ContextMenu>
-                                    </Border.ContextMenu>
-                                    <Grid>
-                                        <c:WaveformView
-                                            Clips="{Binding ClipVisuals}"
-                                            PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
-                                            IsMuted="{Binding Muted}"
-                                            WaveBrush="{Binding ColorBrush}"
-                                            ClipBackground="{Binding ClipBackground}"/>
-                                        <TextBlock Text="{Binding LoadError}" Foreground="{StaticResource BadBrush}"
-                                                   FontSize="11.5" Margin="10" VerticalAlignment="Center"
-                                                   TextWrapping="Wrap"/>
-                                        <TextBlock Text="Empty track — click here, then Ctrl+V pastes at the playhead. Or drag a section onto it, or drop a song file on it."
-                                                   Style="{StaticResource Caption}" Margin="14,0" VerticalAlignment="Center"
-                                                   IsHitTestVisible="False" TextWrapping="Wrap"
-                                                   Visibility="{Binding IsEmpty, Converter={StaticResource BoolVis}}"/>
-                                    </Grid>
-                                </Border>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                                    <!-- ────────── lane ────────── -->
+                                    <Border Grid.Column="1" x:Name="Lane"
+                                            BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
+                                            ClipToBounds="True"
+                                            MouseLeftButtonDown="OnLaneMouseDown" MouseMove="OnLaneMouseMove"
+                                            MouseLeftButtonUp="OnLaneMouseUp"
+                                            PreviewMouseRightButtonDown="OnLaneRightButtonDown"
+                                            LostMouseCapture="OnLaneLostCapture"
+                                            ContextMenuOpening="OnLaneContextMenuOpening">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource Bg0Brush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                        <Setter Property="Background" Value="#13161B"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Border.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="Fade in" >
+                                                    <MenuItem Header="none"  Click="OnFadeIn"  Tag="0"/>
+                                                    <MenuItem Header="0.25 s" Click="OnFadeIn" Tag="0.25"/>
+                                                    <MenuItem Header="0.5 s"  Click="OnFadeIn" Tag="0.5"/>
+                                                    <MenuItem Header="1 s"    Click="OnFadeIn" Tag="1"/>
+                                                    <MenuItem Header="2 s"    Click="OnFadeIn" Tag="2"/>
+                                                    <MenuItem Header="4 s"    Click="OnFadeIn" Tag="4"/>
+                                                </MenuItem>
+                                                <MenuItem Header="Fade out">
+                                                    <MenuItem Header="none"  Click="OnFadeOut" Tag="0"/>
+                                                    <MenuItem Header="0.25 s" Click="OnFadeOut" Tag="0.25"/>
+                                                    <MenuItem Header="0.5 s"  Click="OnFadeOut" Tag="0.5"/>
+                                                    <MenuItem Header="1 s"    Click="OnFadeOut" Tag="1"/>
+                                                    <MenuItem Header="2 s"    Click="OnFadeOut" Tag="2"/>
+                                                    <MenuItem Header="4 s"    Click="OnFadeOut" Tag="4"/>
+                                                </MenuItem>
+                                                <Separator/>
+                                                <MenuItem Header="Trim start to playhead" Click="OnTrimStartToPlayhead"/>
+                                                <MenuItem Header="Trim end to playhead"   Click="OnTrimEndToPlayhead"/>
+                                                <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
+                                                <Separator/>
+                                                <MenuItem Header="Split at playhead"      Click="OnSplitHere"      InputGestureText="Ctrl+I"/>
+                                                <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D"/>
+                                                <Separator/>
+                                                <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X"/>
+                                                <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C"/>
+                                                <MenuItem Header="Paste at playhead"      Click="OnPasteSection"   InputGestureText="Ctrl+V"/>
+                                                <MenuItem Header="Delete section"         Click="OnDeleteSection"/>
+                                                <Separator/>
+                                                <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
+                                                <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
+                                                          Click="OnLoopModeMenu" InputGestureText="Ctrl+L"/>
+                                                <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
+                                                <Separator/>
+                                                <!-- A Click handler like every item above, never a Command bound
+                                                     through RelativeSource AncestorType=Window: a ContextMenu is
+                                                     not inside the window, so that binding comes back empty and
+                                                     the item silently does nothing. Until 2026-10-03 this one did. -->
+                                                <MenuItem Header="Split into vocals + instrumental" Click="OnSplitStems"
+                                                          ToolTip="Runs on your GPU, about 20 seconds. Downloads a 64 MB model the first time."/>
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <Grid>
+                                            <c:WaveformView
+                                                Clips="{Binding ClipVisuals}"
+                                                PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                IsMuted="{Binding Muted}"
+                                                WaveBrush="{Binding ColorBrush}"
+                                                ClipBackground="{Binding ClipBackground}"/>
+                                            <TextBlock Text="{Binding LoadError}" Foreground="{StaticResource BadBrush}"
+                                                       FontSize="11.5" Margin="10" VerticalAlignment="Center"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock Text="Empty track — click here, then Ctrl+V pastes at the playhead. Or drag a section onto it, or drop a song file on it."
+                                                       Style="{StaticResource Caption}" Margin="14,0" VerticalAlignment="Center"
+                                                       IsHitTestVisible="False" TextWrapping="Wrap"
+                                                       Visibility="{Binding IsEmpty, Converter={StaticResource BoolVis}}"/>
+                                        </Grid>
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <Border x:Name="BelowTracks" Grid.Row="1" Grid.Column="1" Background="Transparent"
+                            MouseLeftButtonDown="OnBelowTracksMouseDown"/>
+                </Grid>
             </ScrollViewer>
 
             <!-- playhead + loop, over both ruler and lanes -->

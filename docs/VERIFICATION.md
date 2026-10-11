@@ -277,6 +277,40 @@ VERIFY: every run passed and stayed out of the way
 **Not verified:** a real wheel press. The checks raise the event; a mouse whose driver maps the wheel
 button to something else (some send it as a keystroke) would never reach the window.
 
+## 2026-10-11 — double-click to play from there
+
+No unit test: this is wiring in the window, which the test project cannot see. **203 tests,
+0 failed, 0 skipped**, unchanged.
+
+**In the real window.** `--gesturetest` grew from 86 to **95 checks**. The ruler's press, move and
+release were split out of their event handlers so the test can make a double-click (WPF lets nobody
+set `ClickCount`); the three old "double-click" checks had called `PlayFrom` directly and so proved
+nothing about the ruler. Every check below goes through the real handler with a scripted pointer
+and click count, and asks the engine where it is. Published exe, 2026-10-11:
+
+```
+PASS  double-click on the ruler seeks (engine at 18.500s)
+PASS  double-click on the ruler starts the transport
+PASS  double-click on the ruler while playing jumps there and keeps playing (engine at 25.000s)
+PASS  Shift+double-click on the ruler still sets a listening loop and does not play (20.00s to 22.00s)
+PASS  a double-click on a section plays from where it was double-clicked (engine at 2.250s)
+PASS  the second press of a double-click drags nothing, even if the hand moves before letting go
+PASS  a double-click while playing jumps there and keeps playing (engine at 3.100s)
+PASS  a double-click on a section's edge plays and trims nothing
+PASS  a Shift+double-click on a lane is two Shift+clicks: it does not play
+PASS  a double-click on empty lane space plays from there (engine at 272.206s)
+PASS  a double-click under the last track plays from there (engine at 251.706s)
+PASS  a plain click under the last track lets go of the selected sections
+```
+
+`scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way. The editing probe's
+picture was looked at after the track list was wrapped in a grid to make room under it: rows, strips
+and lanes unchanged, the room under the last track empty.
+
+**Not verified:** Windows' own double-click timing and distance under a real hand. The checks hand
+the handler a click count of 2; whether two real clicks are close enough together to be one is
+Windows' decision (its double-click setting).
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

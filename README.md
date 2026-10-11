@@ -48,6 +48,7 @@ control on screen is one you asked for.
 | | |
 | --- | --- |
 | <kbd>Space</kbd> | play / pause |
+| double-click a lane, the ruler, or the empty room under the tracks | play from there; if already playing, jump there and keep playing |
 | click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again. (The ■ button goes back to 0:00.) |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |

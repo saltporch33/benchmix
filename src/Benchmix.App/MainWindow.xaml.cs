@@ -431,17 +431,61 @@ public partial class MainWindow : Window
         _vm.MasterGain = 0;
         _vm.Session.Graph.MasterGain = 0;
         _vm.Session.Graph.SnapParameters();
+        //
+        // The presses go through the ruler's own handler with a scripted pointer and click count:
+        // until 2026-10-11 these checks called PlayFrom directly, which proved nothing about the ruler.
+        var engine = _vm.Session.Engine;
+        double oneFrame = 1.0 / _vm.Session.SampleRate;
+        Point Ruler(double s)
+        {
+            var o = RulerHost.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (s - _vm.ScrollSeconds) * _vm.PixelsPerSecond, o.Y + RulerHost.ActualHeight / 2);
+        }
+        void DoubleClickRuler(double s)
+        {
+            var p = Ruler(s);
+            _scriptedWindowPoint = p;
+            RulerDown(RulerHost, p, 1); RulerUp(RulerHost);
+            RulerDown(RulerHost, p, 2); RulerUp(RulerHost);
+            _scriptedWindowPoint = null;
+        }
+        UpdateLayout();
         _vm.StopCommand.Execute(null);
-        _vm.PlayFrom(18.5);
-        Check($"double-click seeks (got {_vm.PositionSeconds:F2})", Math.Abs(_vm.PositionSeconds - 18.5) < 0.05);
-        Check("double-click starts the transport", _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing);
+        DoubleClickRuler(18.5);
+        Check($"double-click on the ruler seeks (engine at {engine.PositionSeconds:F3}s)",
+              Math.Abs(engine.PositionSeconds - 18.5) <= 2 * oneFrame);
+        Check("double-click on the ruler starts the transport", engine.State == Benchmix.Engine.Audio.TransportState.Playing);
 
-        _vm.PlayFrom(25.0);
-        Check("double-click while playing keeps playing", _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing);
+        DoubleClickRuler(25.0);
+        Check($"double-click on the ruler while playing jumps there and keeps playing (engine at {engine.PositionSeconds:F3}s)",
+              engine.State == Benchmix.Engine.Audio.TransportState.Playing && Math.Abs(engine.PositionSeconds - 25.0) <= 2 * oneFrame);
         _vm.StopCommand.Execute(null);
+
+        _scriptedModifiers = ModifierKeys.Shift;
+        _scriptedWindowPoint = Ruler(20);
+        RulerDown(RulerHost, Ruler(20), 1); RulerUp(RulerHost);
+        RulerDown(RulerHost, Ruler(20), 2);
+        _scriptedWindowPoint = Ruler(22);
+        RulerMove(RulerHost, Ruler(22));
+        RulerUp(RulerHost);
+        _scriptedWindowPoint = null;
+        _scriptedModifiers = null;
+        Check($"Shift+double-click on the ruler still sets a listening loop and does not play ({_vm.LoopStart:0.00}s to {_vm.LoopEnd:0.00}s)",
+              _vm.LoopStart is { } ls && _vm.LoopEnd is { } le && Math.Abs(ls - 20) < 0.01 && Math.Abs(le - 22) < 0.01
+              && engine.State != Benchmix.Engine.Audio.TransportState.Playing);
+        _vm.ClearLoopCommand.Execute(null);
 
         // --- a click of the scroll wheel stops and goes back to where play started ---
         try { RunWheelClickGestures(Check, notes); }
+        finally
+        {
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _vm.StopCommand.Execute(null);
+        }
+
+        // --- a double-click on a lane, or under the tracks, plays from there ---
+        try { RunDoubleClickGestures(Check, notes); }
         finally
         {
             _scriptedWindowPoint = null;
@@ -844,6 +888,116 @@ public partial class MainWindow : Window
         _vm.UndoCommand.Execute(null);                             // put the song back for the checks that follow
         PumpUntil(() => _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id) is { } c
                         && Math.Abs(c.TimelineStartSeconds - before) <= frame);
+    }
+
+    /// <summary>
+    /// Double-click to play (Daniel, 2026-10-11), through the lane's and the empty room's own press
+    /// handlers with a scripted pointer and click count. The engine itself is asked where it is.
+    /// </summary>
+    private void RunDoubleClickGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (_vm.Tracks.FirstOrDefault() is not { IsLoaded: true } track || LaneOf(track) is not { ActualHeight: > 0 } lane)
+        {
+            notes.Add("no laid-out track, so double-click on a lane is untested - pass a file to cover it");
+            return;
+        }
+        var clip = track.Clips.FirstOrDefault(c => c.TimelineLengthSeconds > 6);
+        if (clip is null) { notes.Add("no section longer than 6 s, so double-click on a lane is untested"); return; }
+
+        var engine = _vm.Session.Engine;
+        double frame = 1.0 / _vm.Session.SampleRate;
+        bool Playing() => engine.State == Benchmix.Engine.Audio.TransportState.Playing;
+        // Where the handler itself puts the press, so the check does not depend on pixel rounding.
+        bool PlayingAt(FrameworkElement surface, Point p)
+            => Playing() && Math.Abs(engine.PositionSeconds - SecondsAtLaneX(LaneX(surface, p))) <= 2 * frame;
+        ClipViewModel? Find(Guid id) => _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id);
+
+        _vm.ScrollSeconds = Math.Max(0, clip.TimelineStartSeconds);
+        UpdateLayout();
+        double pps = _vm.PixelsPerSecond;
+        Point At(FrameworkElement surface, double t)
+        {
+            var o = surface.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (t - _vm.ScrollSeconds) * pps, o.Y + surface.ActualHeight / 2);
+        }
+        // Two presses as WPF delivers a double-click; the second is left held, as a hand holds it.
+        void DoubleClick(Point p)
+        {
+            _scriptedWindowPoint = p;
+            LaneDown(lane, p, 1); LaneUp(lane);
+            LaneDown(lane, p, 2);
+        }
+        void MoveAndLetGo(Point p)
+        {
+            var to = new Point(p.X + 30, p.Y);
+            _scriptedWindowPoint = to;
+            LaneMove(lane, to, true);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+        }
+
+        var id = clip.Id;
+        double start = clip.TimelineStartSeconds, length = clip.LengthSeconds;
+
+        _vm.StopCommand.Execute(null);
+        var onSection = At(lane, start + 2.25);
+        DoubleClick(onSection);
+        Check($"a double-click on a section plays from where it was double-clicked (engine at {engine.PositionSeconds:0.000}s)",
+              PlayingAt(lane, onSection));
+        MoveAndLetGo(onSection);
+        Check("the second press of a double-click drags nothing, even if the hand moves before letting go",
+              Find(id) is { } a && a.TimelineStartSeconds == start);
+
+        _vm.PlayFrom(start + 0.5);
+        var later = At(lane, start + 3.1);
+        DoubleClick(later);
+        LaneUp(lane);
+        Check($"a double-click while playing jumps there and keeps playing (engine at {engine.PositionSeconds:0.000}s)",
+              PlayingAt(lane, later));
+
+        _vm.StopCommand.Execute(null);
+        var onEdge = new Point(At(lane, start).X + 2, onSection.Y);            // inside the 7 px trim grab
+        DoubleClick(onEdge);
+        MoveAndLetGo(onEdge);
+        Check("a double-click on a section's edge plays and trims nothing",
+              Playing() && Find(id) is { } b && b.LengthSeconds == length && b.TimelineStartSeconds == start);
+
+        _vm.StopCommand.Execute(null);
+        _scriptedModifiers = ModifierKeys.Shift;
+        DoubleClick(onSection);
+        LaneUp(lane);
+        _scriptedModifiers = null;
+        Check("a Shift+double-click on a lane is two Shift+clicks: it does not play", !Playing());
+
+        double pastTheEnd = track.Clips.Max(c => c.TimelineEndSeconds) + 3;
+        _vm.ScrollSeconds = Math.Max(0, pastTheEnd - 5);
+        UpdateLayout();
+        _vm.StopCommand.Execute(null);
+        var inAGap = At(lane, pastTheEnd);
+        DoubleClick(inAGap);
+        LaneUp(lane);
+        Check($"a double-click on empty lane space plays from there (engine at {engine.PositionSeconds:0.000}s)",
+              PlayingAt(lane, inAGap));
+        _scriptedWindowPoint = null;
+
+        if (BelowTracks.ActualHeight < 10)
+        {
+            notes.Add($"no room under the tracks ({BelowTracks.ActualHeight:0} px), so a double-click there is untested");
+            return;
+        }
+        _vm.StopCommand.Execute(null);
+        var below = At(BelowTracks, _vm.ScrollSeconds + 2.5);
+        _scriptedWindowPoint = below;
+        BelowDown(BelowTracks, below, 1);
+        BelowDown(BelowTracks, below, 2);
+        _scriptedWindowPoint = null;
+        Check($"a double-click under the last track plays from there (engine at {engine.PositionSeconds:0.000}s)",
+              PlayingAt(BelowTracks, below));
+
+        _vm.SelectClip(Find(id));
+        BelowDown(BelowTracks, below, 1);
+        Check("a plain click under the last track lets go of the selected sections", _vm.SelectedClips.Count == 0);
     }
 
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
@@ -1543,16 +1697,25 @@ public partial class MainWindow : Window
     private void OnRulerMouseDown(object sender, MouseButtonEventArgs e)
     {
         TakeKeyboardFromText();
-        var host = (FrameworkElement)sender;
-        double seconds = SecondsAtRulerX(e.GetPosition(host).X);
+        RulerDown((FrameworkElement)sender, WindowPoint(e), e.ClickCount);
+        e.Handled = true;
+    }
 
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+    /// <summary>
+    /// A press on the ruler, apart from its event so the gesture test can make one — a double-click
+    /// included, whose ClickCount WPF lets nobody set.
+    /// </summary>
+    private void RulerDown(FrameworkElement host, Point window, int clickCount)
+    {
+        double seconds = SecondsAtRulerX(LaneX(host, window));
+
+        if (Modifiers.HasFlag(ModifierKeys.Shift))
         {
             _settingLoop = true;
             _loopAnchorSeconds = seconds;
             _vm.SetLoop(seconds, seconds);
         }
-        else if (e.ClickCount == 2)
+        else if (clickCount >= 2)
         {
             // Double-click plays from here. Scrubbing is deliberately switched off for the rest of
             // the gesture: the button is still down, and without this any jitter before you lift it
@@ -1567,26 +1730,52 @@ public partial class MainWindow : Window
             _vm.SeekTo(seconds);
         }
 
-        host.CaptureMouse();
-        e.Handled = true;
+        if (_scriptedWindowPoint is null) host.CaptureMouse();
     }
 
-    private void OnRulerMouseMove(object sender, MouseEventArgs e)
+    private void OnRulerMouseMove(object sender, MouseEventArgs e) => RulerMove((FrameworkElement)sender, WindowPoint(e));
+
+    private void RulerMove(FrameworkElement host, Point window)
     {
         if (!_scrubbing && !_settingLoop) return;
-        var host = (FrameworkElement)sender;
-        double seconds = SecondsAtRulerX(e.GetPosition(host).X);
+        double seconds = SecondsAtRulerX(LaneX(host, window));
 
         if (_settingLoop) _vm.SetLoop(_loopAnchorSeconds, seconds);
         else _vm.SeekTo(seconds);
     }
 
-    private void OnRulerMouseUp(object sender, MouseButtonEventArgs e)
+    private void OnRulerMouseUp(object sender, MouseButtonEventArgs e) => RulerUp((FrameworkElement)sender);
+
+    private void RulerUp(FrameworkElement host)
     {
-        ((FrameworkElement)sender).ReleaseMouseCapture();
+        if (host.IsMouseCaptured) host.ReleaseMouseCapture();
         _vm.EndGesture();
         _scrubbing = false;
         _settingLoop = false;
+    }
+
+    // ---------------- under the last track ----------------
+
+    private void OnBelowTracksMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        TakeKeyboardFromText();
+        if (BelowDown((FrameworkElement)sender, WindowPoint(e), e.ClickCount)) e.Handled = true;
+    }
+
+    /// <summary>
+    /// A press in the empty room under the last track. A double-click plays from there, as on a lane
+    /// or the ruler; Alt+click puts the playhead there; a plain click lets go of the selected
+    /// sections, as a click on empty lane space does. It selects no track: there is none there.
+    /// </summary>
+    private bool BelowDown(FrameworkElement surface, Point window, int clickCount = 1)
+    {
+        double at = SecondsAtLaneX(LaneX(surface, window));
+        bool shift = Modifiers.HasFlag(ModifierKeys.Shift), ctrl = Modifiers.HasFlag(ModifierKeys.Control);
+
+        if (clickCount >= 2 && !shift && !ctrl) { _vm.PlayFrom(at); return true; }
+        if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
+        if (!shift && !ctrl) _vm.SelectClip(null);
+        return true;
     }
 
     // ---------------- lanes: select, drag sections, seek ----------------
@@ -1752,7 +1941,7 @@ public partial class MainWindow : Window
     private void OnLaneMouseDown(object sender, MouseButtonEventArgs e)
     {
         TakeKeyboardFromText();
-        if (LaneDown((FrameworkElement)sender, WindowPoint(e))) e.Handled = true;
+        if (LaneDown((FrameworkElement)sender, WindowPoint(e), e.ClickCount)) e.Handled = true;
     }
 
     /// <summary>
@@ -1784,12 +1973,22 @@ public partial class MainWindow : Window
         if (_dragClip is not null) LaneUp((FrameworkElement)sender);
     }
 
-    private bool LaneDown(FrameworkElement lane, Point window)
+    private bool LaneDown(FrameworkElement lane, Point window, int clickCount = 1)
     {
         if (lane.DataContext is not TrackViewModel vm) return false;
 
         _vm.SelectedTrack = vm;
         double x = LaneX(lane, window);
+
+        // A double-click plays from where it lands (Daniel, 2026-10-11), on a section or between
+        // them, and that is all the second press does: it arms no drag and no trim, so a hand that
+        // moves a little before letting go moves nothing. With Shift or Ctrl held it is two ordinary
+        // clicks — as on the ruler, where Shift+double-click still sets a loop.
+        if (clickCount >= 2 && !Modifiers.HasFlag(ModifierKeys.Shift) && !Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            _vm.PlayFrom(SecondsAtLaneX(x));
+            return true;
+        }
 
         if (Modifiers.HasFlag(ModifierKeys.Alt))
         {

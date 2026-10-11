@@ -337,3 +337,18 @@ double-clicked). Press Space to hear the same bit again." (The option's words, n
 | **It works in the middle of a drag**: playback stops and the section being dragged carries on to its drop. | The click is caught by the window before anything under the pointer, and used up there, so nothing else acts on it. |
 | **An undo while playing keeps the return point.** | Undo re-seeks to stay where it is, which would otherwise have made the undo moment the place to go back to. |
 | **Stop waits for the sound card's block in flight before seeking back.** | Seeking at once let a block already being rendered finish afterwards and move the playhead on by its own length, so the jump back would have landed about 10 ms late. Not measurable offline; the real-device check below landed exactly, 8 of 8. |
+
+## 2026-10-11 — double-click to play from there
+
+Daniel, 2026-10-11, verbatim: *"6. double clicking anywhere starts play from that location of the
+playhead"*. Read as "the playhead goes to where I double-click, and plays" — what a double-click on
+the ruler already did.
+
+| Decision | Why |
+| --- | --- |
+| **A double-click on a lane — on a section or on empty space — on the ruler, or in the empty room under the last track plays from the point double-clicked.** Already playing, it jumps there and keeps playing. | "Anywhere" on the timeline. The ruler already worked this way; the lanes did nothing on a double-click. |
+| **Not on a track's strip.** A double-click on a knob still resets it; the name will be where renaming starts (feature 3 of the seven). | Those already mean something, and the strip has no point in time to play from. |
+| **The second press of a double-click does nothing else**: it starts no drag and no trim, so a hand that moves before letting go moves nothing. | Otherwise double-clicking to listen would nudge the section or trim its edge. |
+| **Shift or Ctrl held makes it two ordinary clicks**, which do not play. | As on the ruler, where Shift+double-click has always set a listening loop; and a Ctrl+double-click toggles a section twice, leaving it as it was. |
+| **The empty room under the last track now takes clicks.** A double-click there plays, Alt+click moves the playhead, a plain click lets go of the selected sections (as a click on empty lane space does). | It used to ignore every click, so "anywhere" stopped at the last track. |
+| **For now the first click of a double-click still does what a click does**: on a section it selects just that section, in a gap it clears the selection. | Keeping a group selected through a double-click belongs with dragging a group, which is still to come. |
