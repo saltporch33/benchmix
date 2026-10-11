@@ -605,6 +605,15 @@ public partial class MainWindow : Window
             _vm.StopCommand.Execute(null);
         }
 
+        // --- dragging a track up or down ---
+        try { RunReorderGestures(Check, notes); }
+        finally
+        {
+            EndReorder();
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -1039,9 +1048,13 @@ public partial class MainWindow : Window
         }
         void UndoAndWait() { _vm.UndoCommand.Execute(null); PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == id)?.Name == original); Refetch(); }
 
-        NameDown(area, null, 1);
+        var onName = area.TranslatePoint(new Point(area.ActualWidth - 4, area.ActualHeight / 2), this);
+        _scriptedWindowPoint = onName;                       // scripted: no mouse capture is taken
+        NameDown(area, onName, null, 1);
+        NameUp();
         Check("a single click on a track's name does not open it for typing", !track.IsRenaming);
-        NameDown(area, null, 2);
+        NameDown(area, onName, null, 2);
+        _scriptedWindowPoint = null;
         UpdateLayout();
         Check("double-clicking a track's name opens it for typing", track.IsRenaming && box.Visibility == Visibility.Visible);
         Check($"the box starts with the current name ('{box.Text}')", box.Text == original);
@@ -1128,6 +1141,119 @@ public partial class MainWindow : Window
             _vm.StopCommand.Execute(null);
         }
         _scriptedFocus = null;
+    }
+
+    /// <summary>
+    /// Dragging a track up or down (Daniel, 2026-10-11), through the name row's own handlers with a
+    /// scripted pointer. Leaves the order as it found it.
+    /// </summary>
+    private void RunReorderGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (_vm.Tracks.Count < 2) { notes.Add("fewer than two tracks, so dragging a track up or down is untested"); return; }
+        List<Guid> Order() => _vm.Tracks.Select(t => t.Id).ToList();
+        var original = Order();
+        FrameworkElement? Row(TrackViewModel t) => TrackList.ItemContainerGenerator.ContainerFromItem(t) as FrameworkElement;
+        Point Into(TrackViewModel t, double fraction)
+        {
+            var row = Row(t)!;
+            return row.TranslatePoint(new Point(200, row.ActualHeight * fraction), this);
+        }
+        void UndoToOriginal()
+        {
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => Order().SequenceEqual(original));
+            UpdateLayout();
+        }
+        // Press the track's grip, move through the middle, let go at `to`; returns whether the line showed.
+        bool DragName(TrackViewModel t, Point to)
+        {
+            var area = NameAreaOf(t)!;
+            var press = area.TranslatePoint(new Point(4, area.ActualHeight / 2), this);
+            _scriptedWindowPoint = press;
+            NameDown(area, press, null, 1);
+            var mid = new Point(press.X, (press.Y + to.Y) / 2);
+            _scriptedWindowPoint = mid;
+            NameMove(mid, true);
+            _scriptedWindowPoint = to;
+            NameMove(to, true);
+            bool shown = InsertLine.Visibility == Visibility.Visible;
+            NameUp();
+            _scriptedWindowPoint = null;
+            return shown;
+        }
+
+        var first = _vm.Tracks[0];
+        var second = _vm.Tracks[1];
+        if (NameAreaOf(first) is not { } firstArea || Row(second) is null)
+        {
+            notes.Add("the rows are not laid out, so dragging a track up or down is untested");
+            return;
+        }
+
+        var press = firstArea.TranslatePoint(new Point(4, firstArea.ActualHeight / 2), this);
+        _scriptedWindowPoint = press;
+        NameDown(firstArea, press, null, 1);
+        var nudge = new Point(press.X, press.Y + 2);
+        _scriptedWindowPoint = nudge;
+        NameMove(nudge, true);
+        NameUp();
+        _scriptedWindowPoint = null;
+        Check("a small pull on a track's name is a click, not a move", Order().SequenceEqual(original));
+
+        var voice = _vm.Session.VoiceFor(first.Model);
+        bool lineShown = DragName(first, Into(second, 0.75));
+        Check("a line shows where the track will land while it is dragged, and goes away after",
+              lineShown && InsertLine.Visibility != Visibility.Visible);
+        Check($"dragging a track's name down past the next one moves it down (now place {_vm.Tracks.IndexOf(first) + 1})",
+              _vm.Tracks.Count > 1 && _vm.Tracks[0].Id == second.Id && _vm.Tracks[1].Id == first.Id);
+        Check("the project's order moves with the rows, so saving, undo and Shift+click see the same order",
+              _vm.Tracks.Select(t => t.Model).SequenceEqual(_vm.Session.Project.Tracks));
+        Check("the moved track keeps its voice: the sound engine is not touched",
+              voice is not null && ReferenceEquals(_vm.Session.VoiceFor(first.Model), voice));
+        Check($"the status bar says where it went (\"{_vm.Status}\")", _vm.Status.StartsWith("Moved") && _vm.Status.Contains("down"));
+        UndoToOriginal();
+        Check("one undo puts the order back", Order().SequenceEqual(original));
+
+        first = _vm.Tracks[0];
+        second = _vm.Tracks[1];
+        DragName(second, Into(first, 0.25));
+        Check($"dragging a track's name up past the one above moves it up (now place {_vm.Tracks.IndexOf(second) + 1})",
+              _vm.Tracks[0].Id == second.Id && _vm.Tracks[1].Id == first.Id);
+        UndoToOriginal();
+
+        // A track cannot be moved while a section is held under the mouse: the section's drag is
+        // mid-way through putting it somewhere, and every row would be rebuilt under it.
+        first = _vm.Tracks[0];
+        second = _vm.Tracks[1];
+        var song = _vm.Tracks.FirstOrDefault(t => t.Clips.Any(c => c.TimelineLengthSeconds > 2));
+        if (song is null || LaneOf(song) is not { } lane) notes.Add("no section to hold, so moving a track mid-drag is untested");
+        else
+        {
+            var clip = song.Clips.First(c => c.TimelineLengthSeconds > 2);
+            _vm.ScrollSeconds = Math.Max(0, clip.TimelineStartSeconds);
+            UpdateLayout();
+            var o = lane.TranslatePoint(new Point(0, 0), this);
+            var grab = new Point(o.X + (clip.TimelineStartSeconds + 1 - _vm.ScrollSeconds) * _vm.PixelsPerSecond, o.Y + lane.ActualHeight / 2);
+            _scriptedModifiers = ModifierKeys.Control;              // free, so letting go where it started moves nothing
+            _scriptedWindowPoint = grab;
+            LaneDown(lane, grab);
+            var away = new Point(grab.X + 40, grab.Y);
+            _scriptedWindowPoint = away;
+            LaneMove(lane, away, true);
+            bool held = _vm.DragInProgress;
+            DragName(first, Into(second, 0.75));
+            Check($"a track cannot be moved while a section is held under the mouse (\"{_vm.Status}\")",
+                  held && Order().SequenceEqual(original) && _vm.Status == "Let go of the section first.");
+            _scriptedWindowPoint = grab;
+            LaneMove(lane, grab, true);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+
+        UpdateLayout();
+        Check("the grip explains itself on hover", GripOf(_vm.Tracks[0]) is { ToolTip: string { Length: > 0 } });
     }
 
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
@@ -1995,15 +2121,103 @@ public partial class MainWindow : Window
 
     private void OnNameMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (NameDown((FrameworkElement)sender, e.OriginalSource as DependencyObject, e.ClickCount)) e.Handled = true;
+        if (NameDown((FrameworkElement)sender, WindowPoint(e), e.OriginalSource as DependencyObject, e.ClickCount)) e.Handled = true;
     }
 
-    /// <summary>A press on a track's name, apart from its event so the gesture test can double-click it.</summary>
-    private bool NameDown(FrameworkElement area, DependencyObject? pressedOn, int clickCount)
+    private void OnNameMouseMove(object sender, MouseEventArgs e) => NameMove(WindowPoint(e), e.LeftButton == MouseButtonState.Pressed);
+
+    private void OnNameMouseUp(object sender, MouseButtonEventArgs e) => NameUp();
+
+    /// <summary>Losing the mouse mid-drag (Alt+Tab, a dialog) puts nothing anywhere: the track stays.</summary>
+    private void OnNameLostCapture(object sender, MouseEventArgs e)
+    {
+        if (_reorderTrack is not null) EndReorder();
+    }
+
+    /// <summary>
+    /// A press on a track's grip, colour or name, apart from its event so the gesture test can make
+    /// one. A double-click on it renames; a single press arms a drag up or down.
+    /// </summary>
+    private bool NameDown(FrameworkElement area, Point window, DependencyObject? pressedOn, int clickCount)
     {
         if (area.DataContext is not TrackViewModel t || t.IsRenaming || IsInRenameBox(pressedOn)) return false;
-        return clickCount >= 2 && _vm.BeginRename(t);
+        if (clickCount >= 2) { EndReorder(); return _vm.BeginRename(t); }
+
+        _reorderTrack = t;
+        _reorderArea = area;
+        _reorderOrigin = window;
+        _reordering = false;
+        _reorderTo = -1;
+        if (_scriptedWindowPoint is null) area.CaptureMouse();
+        return true;
     }
+
+    /// <summary>
+    /// Dragging a track: past 4 px up or down it is a move, and a line shows where it will land. The
+    /// rows themselves stay put until the drop — moving one while it holds the mouse would lose it.
+    /// No auto-scroll: the pointer is held to the rows on screen.
+    /// </summary>
+    private void NameMove(Point window, bool pressed)
+    {
+        if (_reorderTrack is null || !(pressed || _scriptedWindowPoint is not null)) return;
+        if (!_reordering)
+        {
+            if (Math.Abs(window.Y - _reorderOrigin.Y) < 4) return;
+            _reordering = true;
+            _vm.Status = $"Moving {_reorderTrack.Name}: let go where the line is.";
+        }
+
+        int from = _vm.Tracks.IndexOf(_reorderTrack);
+        double top = TrackScroller.TranslatePoint(new Point(0, 0), this).Y;
+        double y = Math.Clamp(window.Y, top, top + TrackScroller.ViewportHeight);
+
+        // The row the pointer is in the upper half of goes below it; past the last, to the bottom.
+        int insert = _vm.Tracks.Count;
+        for (int i = 0; i < _vm.Tracks.Count; i++)
+        {
+            if (TrackList.ItemContainerGenerator.ContainerFromItem(_vm.Tracks[i]) is not FrameworkElement row) continue;
+            if (y < row.TranslatePoint(new Point(0, 0), this).Y + row.ActualHeight / 2) { insert = i; break; }
+        }
+        _reorderTo = insert > from ? insert - 1 : insert;
+
+        if (from < 0 || _reorderTo == from) { InsertLine.Visibility = Visibility.Collapsed; return; }
+        var edgeOf = _vm.Tracks[Math.Min(insert, _vm.Tracks.Count - 1)];
+        if (TrackList.ItemContainerGenerator.ContainerFromItem(edgeOf) is FrameworkElement edge)
+        {
+            double at = edge.TranslatePoint(new Point(0, insert < _vm.Tracks.Count ? 0 : edge.ActualHeight), ReorderLayer).Y;
+            Canvas.SetTop(InsertLine, at - 1);
+            InsertLine.Width = ReorderLayer.ActualWidth;
+            InsertLine.Visibility = Visibility.Visible;
+        }
+    }
+
+    private void NameUp()
+    {
+        var track = _reorderTrack;
+        bool reordering = _reordering;
+        int to = _reorderTo;
+        EndReorder();                                    // state first: the release re-enters via LostMouseCapture
+        if (track is null) return;
+        if (reordering && to >= 0) _vm.MoveTrack(track, to);
+        _vm.EndGesture();
+    }
+
+    private void EndReorder()
+    {
+        var area = _reorderArea;
+        _reorderTrack = null;
+        _reorderArea = null;
+        _reordering = false;
+        _reorderTo = -1;
+        InsertLine.Visibility = Visibility.Collapsed;
+        if (_scriptedWindowPoint is null && area is { IsMouseCaptured: true }) area.ReleaseMouseCapture();
+    }
+
+    private TrackViewModel? _reorderTrack;
+    private FrameworkElement? _reorderArea;
+    private Point _reorderOrigin;
+    private bool _reordering;
+    private int _reorderTo = -1;
 
     /// <summary>
     /// The strip menu's "Rename track". A menu item only inherits its track's DataContext once the
@@ -2230,6 +2444,7 @@ public partial class MainWindow : Window
     private FrameworkElement? NameAreaOf(TrackViewModel t) => RowPart<FrameworkElement>(t, "NameArea");
     private TextBlock? NameTextOf(TrackViewModel t) => RowPart<TextBlock>(t, "NameText");
     private TextBox? RenameBoxOf(TrackViewModel t) => RowPart<TextBox>(t, "RenameBox");
+    private TextBlock? GripOf(TrackViewModel t) => RowPart<TextBlock>(t, "Grip");
 
     /// <summary>A named element of a track's row, from the row template.</summary>
     private T? RowPart<T>(TrackViewModel t, string name) where T : class

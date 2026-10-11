@@ -191,6 +191,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         IsPlaying = false;
     }
 
+    // ---------------- moving a track up or down ----------------
+
+    /// <summary>
+    /// Moves a track to another place in the list (Daniel, 2026-10-11): the row on screen and the
+    /// project together, as one undo step. The engine is not touched — nothing is heard to change.
+    /// </summary>
+    public bool MoveTrack(TrackViewModel track, int toIndex)
+    {
+        if (_session is null) return false;
+        int from = Tracks.IndexOf(track);
+        if (from < 0) return false;                                // a row left over from before an undo
+        if (DragInProgress) { Status = "Let go of the section first."; return false; }
+        if (IsBusy) { Status = "Wait for that to finish, then move the track."; return false; }
+        int to = Math.Clamp(toIndex, 0, Tracks.Count - 1);
+        if (to == from) { Status = $"{track.Name} left where it was."; return false; }
+
+        PushUndo($"move {track.Name}");
+        var result = Session.MoveTrack(track.Model, to);
+        if (!result.Changed) { Status = result.Message; return false; }
+        Tracks.Move(from, to);
+        MarkDirty();
+        Status = result.Message;
+        return true;
+    }
+
     // ---------------- renaming a track ----------------
 
     /// <summary>

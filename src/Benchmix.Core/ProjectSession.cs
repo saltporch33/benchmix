@@ -217,6 +217,22 @@ public sealed class ProjectSession : IDisposable
         return new EditResult(true, $"Renamed \"{old}\" to \"{name}\".");
     }
 
+    /// <summary>
+    /// Moves a track up or down the list (Daniel, 2026-10-11). Only the order changes. Each voice is
+    /// found by its track's id, so the engine is not touched and the mix plays on as it was. The
+    /// order on screen is this order: Shift+click ranges and Match key read it.
+    /// </summary>
+    public EditResult MoveTrack(TrackModel track, int toIndex)
+    {
+        int from = Project.Tracks.IndexOf(track);
+        if (from < 0) return EditResult.No("That track is no longer in the project.");
+        int to = Math.Clamp(toIndex, 0, Project.Tracks.Count - 1);
+        if (to == from) return EditResult.No($"{track.Name} is already there.");
+        Project.Tracks.RemoveAt(from);
+        Project.Tracks.Insert(to, track);
+        return new EditResult(true, $"Moved {track.Name} {(to < from ? "up" : "down")}, to place {to + 1} of {Project.Tracks.Count}.");
+    }
+
     private string NextTrackName()
     {
         var taken = Project.Tracks.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

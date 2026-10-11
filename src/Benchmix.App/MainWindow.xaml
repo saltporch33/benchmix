@@ -216,8 +216,6 @@
 
                                             <!-- name row -->
                                             <DockPanel Grid.Row="0">
-                                                <Border Width="4" Height="15" CornerRadius="2" DockPanel.Dock="Left"
-                                                        Background="{Binding ColorBrush}" Margin="0,0,7,0"/>
                                                 <Button DockPanel.Dock="Right" Content="&#x2715;" Style="{StaticResource ToolButton}"
                                                         Padding="6,1" Margin="4,0,0,0" FontSize="10"
                                                         ToolTip="Remove this track from the project. Ctrl+Z brings it back."
@@ -227,14 +225,27 @@
                                                               Margin="4,0,0,0" Value="{Binding MeterLevel}"
                                                               MeterBrush="{StaticResource GoodBrush}" WarnBrush="{StaticResource WarnBrush}"
                                                               ClipBrush="{StaticResource BadBrush}" TrackBrush="{StaticResource Bg3Brush}"/>
-                                                <!-- The name, or while renaming a box to type it in. The box edits a
+                                                <!-- The grip, the colour and the name. Dragged up or down it moves the
+                                                     track; the name double-clicked is renamed, in a box that edits a
                                                      draft, never Name itself, so a refresh of the row cannot wipe it. -->
-                                                <Grid x:Name="NameArea" Background="Transparent" MouseLeftButtonDown="OnNameMouseDown">
-                                                    <TextBlock x:Name="NameText" Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
+                                                <Grid x:Name="NameArea" Background="Transparent"
+                                                      MouseLeftButtonDown="OnNameMouseDown" MouseMove="OnNameMouseMove"
+                                                      MouseLeftButtonUp="OnNameMouseUp" LostMouseCapture="OnNameLostCapture">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <TextBlock x:Name="Grip" Text="&#x2261;" FontSize="13" Margin="0,-1,5,0"
+                                                               Foreground="{StaticResource Text2Brush}" VerticalAlignment="Center" Cursor="SizeNS"
+                                                               ToolTip="Drag up or down to move this track. Double-click the name to rename it."/>
+                                                    <Border Grid.Column="1" Width="4" Height="15" CornerRadius="2"
+                                                            Background="{Binding ColorBrush}" Margin="0,0,7,0"/>
+                                                    <TextBlock x:Name="NameText" Grid.Column="2" Text="{Binding Name}" Foreground="{StaticResource Text0Brush}"
                                                                FontSize="12.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
                                                                VerticalAlignment="Center" ToolTip="{Binding NameTip}"
                                                                Visibility="{Binding IsRenaming, Converter={StaticResource NotBoolVis}}"/>
-                                                    <TextBox x:Name="RenameBox" Style="{StaticResource DarkBox}" Padding="3,0" Height="19"
+                                                    <TextBox x:Name="RenameBox" Grid.Column="2" Style="{StaticResource DarkBox}" Padding="3,0" Height="19"
                                                              FontSize="12.5" VerticalAlignment="Center" MaxLength="80"
                                                              Text="{Binding RenameDraft, UpdateSourceTrigger=PropertyChanged}"
                                                              Visibility="{Binding IsRenaming, Converter={StaticResource BoolVis}}"
@@ -308,7 +319,7 @@
                                                 <Button Content="Match key" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
-                                                        ToolTip="Shift this track's pitch to sit with the key of the first other track. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
+                                                        ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
                                                 <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         ToolTip="Put tempo, pitch, EQ and volume back to normal. Sections, fades, LINK, mute and solo stay as they are."
                                                         Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -416,6 +427,10 @@
                     </ItemsControl>
                     <Border x:Name="BelowTracks" Grid.Row="1" Grid.Column="1" Background="Transparent"
                             MouseLeftButtonDown="OnBelowTracksMouseDown"/>
+                    <!-- Where a track being dragged up or down will land. -->
+                    <Canvas x:Name="ReorderLayer" Grid.RowSpan="2" Grid.ColumnSpan="2" IsHitTestVisible="False">
+                        <Rectangle x:Name="InsertLine" Height="2" Visibility="Collapsed" Fill="{StaticResource AccentBrush}"/>
+                    </Canvas>
                 </Grid>
             </ScrollViewer>
 

@@ -373,3 +373,16 @@ whenever a check had not scripted them. Run while Daniel was typing, a Ctrl he h
 holding turned snapping off, made double-clicks into two Ctrl+clicks and left Space unhandled —
 13 gesture checks failed at once, on a build that had just passed. A scripted run now never reads
 the keyboard; the same build then passed all 115.
+
+## 2026-10-11 — dragging a track up or down
+
+Daniel, 2026-10-11, verbatim: *"4. click and drag tracks to reorder them up and down"*.
+
+| Decision | Why |
+| --- | --- |
+| **Drag a track by its name row — the ≡ grip, its colour or its name — up or down.** Past 4 px it is a move; a blue line shows where it will land; the move happens once, when it is let go. One undo step. | The knobs and buttons in the strip already use a press and a drag for themselves, so the name row is the one free handle. The rows stay put until the drop, because moving a row while it holds the mouse would lose the mouse. |
+| **The project's order and the order on screen move together** (`ProjectSession.MoveTrack` and the rows' `Move`). | Shift+click ranges, saving and undo all read the project's order; if only the rows moved, a range would sweep up the wrong tracks and the next undo would put them back. |
+| **The engine is not touched.** Each track's voice is found by its id, so the mix plays on exactly as it was. | Moving a row is not a change to the sound. After the next undo or reopen the voices are rebuilt in the new order and summed in that order, which in floating point can change the last bit of a sample and nothing more — measured as within 2.4e-7 on three tracks. |
+| **Refused while a section is held under the mouse**, or while something is loading. | The section's drag is part-way through putting it somewhere. |
+| **No auto-scroll**: the line only reaches the rows on screen. | As for every drag today. |
+| **Match key still matches the first other track in the list**, which is now whichever track is at the top. Its tooltip says so. | The behaviour is unchanged; what "first" means is now his to choose. |

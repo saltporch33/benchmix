@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**209 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**214 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -367,6 +367,38 @@ when it opens (never done in a scripted run, which must not take the keyboard), 
 after choosing *Rename track* from a menu that has just closed; and Space after really clicking a
 button. By hand: double-click a name, type a name with spaces, press Enter; right-click a strip →
 Rename track, type, click a lane.
+
+## 2026-10-11 — dragging a track up or down
+
+**In the test project** (`TrackOrderAndNameTests`, 5 more): a moved track is in its new place when
+the project is saved and reopened; one undo puts the order back; moving a track onto its own place,
+or the top one further up, is not a change, and past the bottom lands at the bottom; a Shift+click
+range from A to C takes B's section with the tracks in order A, B, C, and **not** once B has been
+moved to the top; and **moving a track is not heard** — three tracks (the ramp, a 431 Hz tone and
+noise) render the same, sample for sample (`==`), straight after the move, and within 2.4e-7 of the
+original after a reload rebuilds the voices in the new order. **214 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 115 to **125 checks**, through the name row's own
+handlers with a scripted pointer. Published exe, 2026-10-11:
+
+```
+PASS  a small pull on a track's name is a click, not a move
+PASS  a line shows where the track will land while it is dragged, and goes away after
+PASS  dragging a track's name down past the next one moves it down (now place 2)
+PASS  the project's order moves with the rows, so saving, undo and Shift+click see the same order
+PASS  the moved track keeps its voice: the sound engine is not touched
+PASS  the status bar says where it went ("Moved Still D.R.E. (Instrumental) down, to place 2 of 3.")
+PASS  one undo puts the order back
+PASS  dragging a track's name up past the one above moves it up (now place 1)
+PASS  a track cannot be moved while a section is held under the mouse ("Let go of the section first.")
+PASS  the grip explains itself on hover
+```
+
+`scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way. The editing probe's
+picture was looked at: the ≡ grip sits left of each track's colour, the rest of the strip unchanged.
+
+**Not verified:** the drag under a real hand with real mouse capture (a scripted run takes no
+capture), and the line's position when the rows are scrolled part-way.
 
 ## The stretch engine
 

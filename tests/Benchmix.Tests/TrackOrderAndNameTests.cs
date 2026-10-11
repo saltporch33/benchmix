@@ -7,8 +7,9 @@ using Xunit;
 namespace Benchmix.Tests;
 
 /// <summary>
-/// Renaming a track (Daniel, 2026-10-11). The name is the only thing that changes; these pin that
-/// a bad name never replaces a good one and that a rename survives saving and undo like any edit.
+/// Renaming a track and moving it up or down the list (Daniel, 2026-10-11). Only the name, or only
+/// the order, changes; these pin that nothing else does, and that both survive saving and undo like
+/// any edit.
 /// </summary>
 public class TrackOrderAndNameTests : IDisposable
 {
@@ -128,5 +129,124 @@ public class TrackOrderAndNameTests : IDisposable
         var placed = await s.PlaceFileAsync(empty, _wav, 5);
         Assert.True(placed.Changed, placed.Message);
         Assert.True(empty.Name == "Drums", $"the track he named 'Drums' was renamed '{empty.Name}' when a song was put on it");
+    }
+
+    // ---------------------------------------------------------------- moving a track
+
+    /// <summary>Another source, quiet enough that three summed stay well under full scale.</summary>
+    private string Wav(string name, Func<int, float> sample)
+    {
+        int frames = Rate * 20;
+        var s = new float[frames * 2];
+        for (int f = 0; f < frames; f++) { float v = sample(f); s[f * 2] = v; s[f * 2 + 1] = v; }
+        string path = Path.Combine(_dir, name + ".wav");
+        AudioClip.FromSamples(name, s, Rate).SaveWav(path);
+        return path;
+    }
+
+    /// <summary>Three tracks: the ramp (turned down), a 431 Hz tone, and seeded noise.</summary>
+    private async Task<(ProjectSession S, TrackModel A, TrackModel B, TrackModel C)> ThreeTracksAsync()
+    {
+        var rnd = new Random(7);
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await s.AddTrackAsync(_wav);
+        var b = await s.AddTrackAsync(Wav("tone", f => (float)(0.25 * Math.Sin(2 * Math.PI * 431 * f / Rate))));
+        var c = await s.AddTrackAsync(Wav("noise", _ => (float)((rnd.NextDouble() * 2 - 1) * 0.2)));
+        a.Gain = 0.3;
+        s.ApplyAll();
+        return (s, a, b, c);
+    }
+
+    static float[] Render(ProjectSession session, int frames)
+    {
+        session.ApplyAll();
+        var g = session.Graph;
+        g.LimiterEnabled = false;
+        g.Seek(0);
+        g.SnapParameters();
+        var buf = new float[frames * 2];
+        for (int done = 0; done < frames;)
+        {
+            int n = Math.Min(1024, frames - done);
+            g.Render(buf.AsSpan(done * 2, n * 2), n);
+            done += n;
+        }
+        return buf;
+    }
+
+    [Fact]
+    public async Task MovingATrackChangesItsPlaceInTheSavedProject()
+    {
+        var (s, a, b, c) = await ThreeTracksAsync();
+        var r = s.MoveTrack(c, 0);
+        Assert.True(r.Changed, r.Message);
+
+        string path = Path.Combine(_dir, "moved.benchmix");
+        ProjectStore.Save(s.Project, path);
+        var order = ProjectStore.Load(path).Project.Tracks.Select(t => t.Id).ToList();
+        Assert.True(order.SequenceEqual(new[] { c.Id, a.Id, b.Id }),
+            "the saved project reopened with the tracks in their old order: the move was not saved");
+    }
+
+    [Fact]
+    public async Task MovingATrackIsOneUndoStepThatPutsTheOrderBack()
+    {
+        var (s, a, b, c) = await ThreeTracksAsync();
+        var undo = new UndoStack();
+        undo.Push(s.Project, "move");
+        Assert.True(s.MoveTrack(a, 2).Changed);
+        Assert.True(s.Project.Tracks.Select(t => t.Id).SequenceEqual(new[] { b.Id, c.Id, a.Id }), "a track moved to the bottom did not land there");
+
+        var back = undo.Undo(s.Project);
+        Assert.True(back is not null && back.Tracks.Select(t => t.Id).SequenceEqual(new[] { a.Id, b.Id, c.Id }),
+            "Ctrl+Z did not put the tracks back in their old order");
+    }
+
+    [Fact]
+    public async Task MovingATrackToWhereItAlreadyIsChangesNothing()
+    {
+        var (s, a, b, c) = await ThreeTracksAsync();
+        Assert.False(s.MoveTrack(b, 1).Changed, "moving a track onto its own place counted as a change, so it would cost a press of Ctrl+Z");
+        Assert.False(s.MoveTrack(a, -5).Changed, "moving the top track further up counted as a change");
+        Assert.True(s.MoveTrack(a, 99).Changed && s.Project.Tracks[^1] == a, "moving a track past the bottom did not put it at the bottom");
+        Assert.False(s.MoveTrack(a.Clone(), 0).Changed, "a track no longer in the project was moved");
+    }
+
+    [Fact]
+    public async Task AShiftClickRangeFollowsTheOrderOnScreenAfterAMove()
+    {
+        // Shift+click takes the tracks BETWEEN its two ends, and "between" is the order on screen.
+        var (s, a, b, c) = await ThreeTracksAsync();
+        foreach (var t in new[] { a, b, c })
+            Assert.True(TimelineEditor.Split(t, 5, s).Changed && TimelineEditor.Split(t, 10, s).Changed);
+        ClipModel Middle(TrackModel t) => t.Clips.OrderBy(x => x.TrackStartSeconds).ElementAt(1);
+
+        bool TakesB() => SectionSelection.Range(s.Project.Tracks, a, Middle(a), c, Middle(c), s).Any(r => r.Track == b);
+        Assert.True(TakesB(), "with the tracks in order A, B, C, a range from A to C should take B's section between them");
+
+        Assert.True(s.MoveTrack(b, 0).Changed);
+        Assert.False(TakesB(), "B was moved to the top, yet a range from A to C still took its section — Delete would remove a section from a track not between the two clicked");
+    }
+
+    [Fact]
+    public async Task MovingATrackIsNotHeard()
+    {
+        // A move does not touch the engine, and voices are found by id, so what plays straight after
+        // is the same, sample for sample. After a reload — every undo, redo and open rebuilds the
+        // voices in the new order — the three are summed in a different order, which in floating
+        // point can differ in the last bit and no further.
+        var (s, a, b, c) = await ThreeTracksAsync();
+        var before = Render(s, Rate * 2);
+
+        Assert.True(s.MoveTrack(c, 0).Changed);
+        var straightAfter = Render(s, Rate * 2);
+        Assert.True(before.SequenceEqual(straightAfter), "moving a track changed what plays straight away — the engine should not have been touched");
+
+        await s.OpenAsync(s.Project.Clone());
+        var afterReload = Render(s, Rate * 2);
+        float worst = 0;
+        for (int i = 0; i < before.Length; i++) worst = Math.Max(worst, Math.Abs(before[i] - afterReload[i]));
+        Assert.True(worst <= 2.4e-7f,
+            $"after a reload the mix differs by {worst:E2} — more than float rounding of a three-way sum, so moving a track changed what is heard");
     }
 }

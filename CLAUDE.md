@@ -29,6 +29,9 @@ mistakes, not by describing the project.
   the drag gestures never add seconds together to place a section: the engine rounds each position
   separately, and a sum of seconds can land a frame off — which silently turns a seam or a butt join
   into a gap with two declicks. Keep new placement code in frames.
+- **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
+  and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
+  rows would make a range sweep up the wrong tracks.
 - **A track's origin (`TimelineOffsetSeconds`) moves.** Paste, drag or loop before it and it moves
   back, with every section moving forward by the same whole frames. It is not a wall; do not clamp
   to it.
@@ -82,7 +85,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space — 115 checks |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space, dragging a track up or down — 125 checks |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 36 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
