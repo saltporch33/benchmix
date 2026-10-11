@@ -8,6 +8,7 @@
         Background="{StaticResource Bg0Brush}"
         AllowDrop="True" Drop="OnFilesDropped" DragOver="OnDragOver"
         PreviewKeyDown="OnWindowPreviewKeyDown"
+        PreviewMouseDown="OnWindowPreviewMouseDown"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
     <Window.InputBindings>
@@ -88,7 +89,7 @@
                 <Button Style="{StaticResource TransportButton}" Command="{Binding PlayPauseCommand}"
                         Content="{Binding IsPlaying, Converter={StaticResource PlayGlyph}}" ToolTip="Play / pause (Space)"/>
                 <Button Style="{StaticResource TransportButton}" Command="{Binding StopCommand}"
-                        Content="&#x25A0;" ToolTip="Stop, and go back to the start."/>
+                        Content="&#x25A0;" ToolTip="Stop, and go back to the start. (Clicking the scroll wheel stops and goes back to where you started playing.)"/>
 
                 <TextBlock Margin="16,0,4,0" VerticalAlignment="Center" FontFamily="Consolas" FontSize="19"
                            Foreground="{StaticResource Text0Brush}"

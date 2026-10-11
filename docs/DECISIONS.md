@@ -323,3 +323,17 @@ monitor and manage token usage"*. This is the first one; the others are recorded
 | **Nothing snaps to bar lines.** A dragged section snaps to another section's edge (either end, any track, within 10 px) and otherwise lands exactly where it is let go. Ctrl still turns snapping off. Trims, loop repeats and "Move section to playhead" were never bar-snapped and are unchanged. | His words. Edge snapping is what keeps sections from leaving gaps or overlapping, which he asked to keep. |
 | **The ruler still draws bar lines** from PROJECT BPM, as a guide only. | He asked for bar *snapping* to go. Whether the lines should go too is a question for him, not a default to take. |
 | **PROJECT BPM is unchanged.** It still seeds from the first track, sets Match BPM's target and spaces the ruler's bar lines; it no longer affects where anything lands. | The same answer: *"I don't want any project bpm I want to keep full independence. Keep the bpm info exactly as it is."* — read as "do not tie the new features to it, and leave what exists alone". |
+
+## 2026-10-11 — a click of the scroll wheel stops
+
+Daniel, 2026-10-11, verbatim: *"5. clicking the mouse 3 button (clicking the scroll wheel) stops
+play"*. Asked what it should do, he chose the offered option "Stop, jump back", which was described
+to him as: "Stops, and the playhead jumps back to where you started playing (for example, where you
+double-clicked). Press Space to hear the same bit again." (The option's words, not his.)
+
+| Decision | Why |
+| --- | --- |
+| **A wheel-click anywhere in the window stops and goes back to where play last started.** "Started" is where play was last started from — a double-click, a click on the ruler, or Space after a pause — or was moved to while playing. The ■ button still goes back to 0:00. | His choice. Space after a pause counts as a start because that is where he would want to hear from again; until this change only a seek set the return point, so a wheel-click after Space resumed went back to the seek before the pause. |
+| **It works in the middle of a drag**: playback stops and the section being dragged carries on to its drop. | The click is caught by the window before anything under the pointer, and used up there, so nothing else acts on it. |
+| **An undo while playing keeps the return point.** | Undo re-seeks to stay where it is, which would otherwise have made the undo moment the place to go back to. |
+| **Stop waits for the sound card's block in flight before seeking back.** | Seeking at once let a block already being rendered finish afterwards and move the playhead on by its own length, so the jump back would have landed about 10 ms late. Not measurable offline; the real-device check below landed exactly, 8 of 8. |

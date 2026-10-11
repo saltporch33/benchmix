@@ -134,6 +134,10 @@ public sealed class PlaybackEngine : IDisposable
         {
             if (_source is null || DeviceLost) return;
             Graph.SnapParameters();
+            // Wherever play starts is where Stop comes back to — after a pause too. Only a seek used
+            // to set it, so Space after a pause and then a click of the scroll wheel went back to
+            // the seek before the pause rather than to where it had just started playing.
+            if (_source.State != TransportState.Playing) _source.StopReturnFrame = Graph.TargetPositionFrames;
             _source.State = TransportState.Playing;
         }
     }
@@ -163,14 +167,33 @@ public sealed class PlaybackEngine : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Stops and goes back to where play last started (<see cref="StopReturnFrame"/>).
+    /// <para>
+    /// The device may be part-way through a block when this is called. Seeking at once let that
+    /// block finish afterwards and move the playhead on by its own length, so the jump back landed
+    /// a block late — about 10 ms, and not even the same 10 ms twice. The seek now waits it out.
+    /// </para>
+    /// </summary>
     public void Stop()
     {
         lock (_gate)
         {
             if (_source is null) return;
             _source.State = TransportState.Stopped;
+            WaitForIdle();
             Graph.Seek(_source.StopReturnFrame);
         }
+    }
+
+    /// <summary>
+    /// Where <see cref="Stop"/> goes back to: the frame play last started from, or was last moved to
+    /// with <see cref="Seek"/>. Read and put back across an undo, which re-seeks to stay where it is.
+    /// </summary>
+    public long StopReturnFrame
+    {
+        get { lock (_gate) return _source?.StopReturnFrame ?? 0; }
+        set { lock (_gate) { if (_source is not null) _source.StopReturnFrame = Math.Max(0, value); } }
     }
 
     public void TogglePlay()

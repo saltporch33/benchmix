@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**199 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**203 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -238,6 +238,44 @@ from a section edge, so nothing in the window proved where a plain drag lands.
 
 **Not verified:** the new check was not run against a build with the old code; that it would have
 failed there (landing at 50.00 s) is read off the removed branch, not measured.
+
+## 2026-10-11 — a click of the scroll wheel stops
+
+**In the test project.** `TransportTests` (4), on the offline engine pulled block by block the way a
+device pulls it: stop goes back to where play started (30.000 s), not to 0:00 or to where it got to;
+**Space after a pause is where the wheel-click goes back to** (31.000 s); a second Play while playing
+does not move the return point; the return point read before a re-seek and put back afterwards (what
+undo does) still holds. All `==` on frames. Run against a build with the new line in `Play()` taken
+out, `SpaceAfterAPauseIsWhereTheWheelClickGoesBackTo` fails and the other three pass — they pin
+behaviour the engine already had. **203 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 81 to **86 checks**. The wheel-click is raised on
+a real lane, so it travels the route a real press does, window first:
+
+```
+PASS  a click of the scroll wheel stops and goes back to where play started (engine at 30.000s, started at 30.000s)
+PASS  the wheel-click is not passed on to whatever is under the pointer
+PASS  after Space pauses and plays on, the wheel-click goes back to where Space started it (engine at 31.000s, expected 31.000s)
+PASS  a left press is not a stop
+PASS  a wheel-click in the middle of a drag stops playback and the drag carries on (landed 2.000s along, expected 2.000)
+```
+
+**On the real sound device.** `--playtest` (silent, master at zero) now also starts and wheel-click
+stops eight times, at different moments of the device's cycle, and requires each to land on the very
+frame play started from: **8 of 8, `off=0`**. That proves the return lands exactly with a live audio
+thread. It does not prove the race fix in `Stop()`: rendering a block takes a small fraction of each
+device period, so a Stop without the wait would usually land exactly too.
+
+**In the published exe** (`scripts/verify-exe.ps1`, all eight runs):
+
+```
+latencycheck PASS   gesturetest PASS (86 checks)   buttontest PASS (31 checks)   loadcheck PASS
+playtest PASS (realtime; 8 of 8 wheel-clicks exact)   stemtest PASS   uiprobe-sections PASS   uiprobe-editing PASS
+VERIFY: every run passed and stayed out of the way
+```
+
+**Not verified:** a real wheel press. The checks raise the event; a mouse whose driver maps the wheel
+button to something else (some send it as a keystroke) would never reach the window.
 
 ## The stretch engine
 

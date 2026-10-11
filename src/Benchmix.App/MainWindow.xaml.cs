@@ -236,10 +236,31 @@ public partial class MainWindow : Window
 
         App.Log($"playtest: wall={sw.Elapsed.TotalSeconds:F2}s audio-advanced={advancedSeconds:F2}s ratio={ratio:F3}");
         bool realtime = ratio is > 0.95 and < 1.05;
-        App.Log($"playtest: state={s.Engine.State} verdict={(realtime ? "PASS - device is pulling in realtime" : "FAIL - stream is not running at realtime")}");
+
+        // The scroll-wheel click's jump back, with the real audio thread pulling. A Stop that seeks
+        // while a block is in flight lands a block late; it must land on the very frame play
+        // started from. Eight tries, at different moments of the device's cycle.
+        bool returned = true;
+        for (int i = 0; i < 8; i++)
+        {
+            long from = (long)((20.0 + i * 0.731) * s.SampleRate);
+            s.Engine.Seek(from);                       // in frames, so the comparison below is exact
+            _vm.PlayPauseCommand.Execute(null);
+            await Task.Delay(90 + i * 17);
+            _vm.StopAndReturn();
+            long landed = s.Engine.PositionFrames;
+            App.Log($"playtest: wheel-click {i + 1} started={from} landed={landed} off={landed - from}");
+            returned &= landed == from;
+        }
+
+        bool passed = realtime && returned;
+        string verdict = passed ? "PASS - device is pulling in realtime, and a wheel-click lands back where play started"
+                       : !realtime ? "FAIL - stream is not running at realtime"
+                       : "FAIL - a wheel-click did not land back where play started";
+        App.Log($"playtest: state={s.Engine.State} verdict={verdict}");
 
         _vm.StopCommand.Execute(null);
-        EndVerificationRun(realtime);
+        EndVerificationRun(passed);
     }
 
     /// <summary>
@@ -418,6 +439,15 @@ public partial class MainWindow : Window
         _vm.PlayFrom(25.0);
         Check("double-click while playing keeps playing", _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing);
         _vm.StopCommand.Execute(null);
+
+        // --- a click of the scroll wheel stops and goes back to where play started ---
+        try { RunWheelClickGestures(Check, notes); }
+        finally
+        {
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _vm.StopCommand.Execute(null);
+        }
 
         if (App.StartupFiles.Length > 0)
             Check($"the song given on the command line loaded ({_vm.Tracks.FirstOrDefault()?.LoadError ?? "ok"})",
@@ -734,6 +764,88 @@ public partial class MainWindow : Window
     /// clipboard of whoever is using the machine.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// The scroll-wheel click (Daniel, 2026-10-11), raised on a real lane so it travels the route a
+    /// real press does — the window's Preview first. The offline engine never moves by itself, so
+    /// it is pulled on as a device would pull it: silently, at master zero.
+    /// </summary>
+    private void RunWheelClickGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (_vm.Tracks.FirstOrDefault() is not { IsLoaded: true } track || LaneOf(track) is not { ActualHeight: > 0 } lane)
+        {
+            notes.Add("no laid-out track, so the scroll-wheel click is untested - pass a file to cover it");
+            return;
+        }
+
+        var s = _vm.Session;
+        int rate = s.SampleRate;
+        var block = new float[rate / 10 * s.Graph.Channels];
+        void Listen(double seconds) { for (int i = 0; i < (int)Math.Round(seconds * 10); i++) s.Graph.Render(block, rate / 10); }
+        MouseButtonEventArgs Press(MouseButton button) => new(Mouse.PrimaryDevice, 0, button) { RoutedEvent = PreviewMouseDownEvent };
+        bool Stopped() => s.Engine.State == Benchmix.Engine.Audio.TransportState.Stopped;
+        double frame = 1.0 / rate;
+
+        _vm.PlayFrom(30);
+        Listen(1);
+        var wheel = Press(MouseButton.Middle);
+        lane.RaiseEvent(wheel);
+        Check($"a click of the scroll wheel stops and goes back to where play started " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, started at 30.000s)",
+              Stopped() && s.Engine.PositionFrames == 30L * rate);
+        Check("the wheel-click is not passed on to whatever is under the pointer", wheel.Handled);
+
+        // Space's command, as the key runs it: pause at 31 s, then play on from there.
+        _vm.PlayFrom(30);
+        Listen(1);
+        _vm.PlayPauseCommand.Execute(null);
+        _vm.PlayPauseCommand.Execute(null);
+        Listen(1);
+        lane.RaiseEvent(Press(MouseButton.Middle));
+        Check($"after Space pauses and plays on, the wheel-click goes back to where Space started it " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, expected 31.000s)",
+              Stopped() && s.Engine.PositionFrames == 31L * rate);
+
+        _vm.PlayFrom(30);
+        var left = Press(MouseButton.Left);
+        lane.RaiseEvent(left);
+        Check("a left press is not a stop", !Stopped() && !left.Handled);
+
+        // In the middle of dragging a section: playback stops, and the drag carries on to its drop.
+        var clip = track.Clips.FirstOrDefault(c => c.TimelineLengthSeconds > 4);
+        if (clip is null) { notes.Add("no section longer than 4 s, so a wheel-click mid-drag is untested"); return; }
+        _vm.ScrollSeconds = Math.Max(0, clip.TimelineStartSeconds);
+        UpdateLayout();
+        double pps = _vm.PixelsPerSecond;
+        var origin = lane.TranslatePoint(new Point(0, 0), this);
+        Point At(double t) => new(origin.X + (t - _vm.ScrollSeconds) * pps, origin.Y + lane.ActualHeight / 2);
+        double before = clip.TimelineStartSeconds, grabAt = before + 2;
+        var id = clip.Id;
+
+        _vm.PlayFrom(30);
+        _scriptedModifiers = ModifierKeys.Control;                // free, so where it lands is exact
+        _scriptedWindowPoint = At(grabAt);
+        LaneDown(lane, At(grabAt));
+        _scriptedWindowPoint = At(grabAt + 1);
+        LaneMove(lane, At(grabAt + 1), true);
+        lane.RaiseEvent(Press(MouseButton.Middle));
+        bool stoppedMidDrag = Stopped(), stillHeld = _vm.DragInProgress;
+        _scriptedWindowPoint = At(grabAt + 2);
+        LaneMove(lane, At(grabAt + 2), true);
+        LaneUp(lane);
+        _scriptedWindowPoint = null;
+        _scriptedModifiers = null;
+        var moved = _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id);
+        double along = (moved?.TimelineStartSeconds ?? double.NaN) - before;
+        Check($"a wheel-click in the middle of a drag stops playback and the drag carries on " +
+              $"(landed {along:0.000}s along, expected 2.000)",
+              stoppedMidDrag && stillHeld && Math.Abs(along - 2) <= frame);
+
+        _vm.UndoCommand.Execute(null);                             // put the song back for the checks that follow
+        PumpUntil(() => _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id) is { } c
+                        && Math.Abs(c.TimelineStartSeconds - before) <= frame);
+    }
+
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
     {
         // The shortcuts are XAML wiring, which no unit test can see.
@@ -1487,6 +1599,19 @@ public partial class MainWindow : Window
     {
         TakeKeyboardFromText();
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+    }
+
+    /// <summary>
+    /// A click of the scroll wheel, anywhere in the window, stops and goes back to where play last
+    /// started (Daniel, 2026-10-11). It is the window's Preview, so it is seen first — also in the
+    /// middle of a drag, while a lane holds the mouse — and it is used up, so nothing under the
+    /// pointer acts on it.
+    /// </summary>
+    private void OnWindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Middle) return;
+        _vm.StopAndReturn();
+        e.Handled = true;
     }
 
     /// <summary>

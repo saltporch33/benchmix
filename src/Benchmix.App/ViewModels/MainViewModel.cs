@@ -191,6 +191,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         IsPlaying = false;
     }
 
+    /// <summary>
+    /// What a click of the scroll wheel does (Daniel, 2026-10-11): stop, and go back to where play
+    /// last started — a double-click, a seek, or Space after a pause — so Space plays the same
+    /// stretch again. The Stop button still goes back to 0:00.
+    /// </summary>
+    public void StopAndReturn()
+    {
+        if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
+        Session.Engine.Stop();
+        PositionSeconds = Session.Engine.PositionSeconds;
+        IsPlaying = false;
+        Status = $"Stopped, back at {PositionSeconds:0.00}s where it started playing.";
+    }
+
     public void SeekTo(double seconds)
     {
         if (_session is null || _rendering) return;
@@ -714,6 +729,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // next split or paste to the start of the song, and a loop changed since the step being
         // undone came back in the engine while the band on screen still showed the new one.
         double at = PositionSeconds;
+        long returnTo = Session.Engine.StopReturnFrame;     // re-seeking below would move it to here
         project.LoopStartSeconds = Session.Project.LoopStartSeconds;
         project.LoopEndSeconds = Session.Project.LoopEndSeconds;
 
@@ -722,6 +738,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             await Session.OpenAsync(project);
             SeekTo(at);
+            Session.Engine.StopReturnFrame = returnTo;
             Tracks.Clear();
             foreach (var m in project.Tracks)
             {
