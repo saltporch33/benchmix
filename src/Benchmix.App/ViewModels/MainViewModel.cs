@@ -1169,7 +1169,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Where a drag is lined up against another section's edge, for the guide line.</summary>
     [ObservableProperty] private double? _snapLineSeconds;
 
-    private SnapSettings SnapFor(bool free) => new(!free, PixelsPerSecond, ProjectBpm);
+    private SnapSettings SnapFor(bool free) => new(!free, PixelsPerSecond);
 
     /// <summary>The track a section is currently on during a move.</summary>
     public TrackViewModel? MovingOn => _move is null ? null : Tracks.FirstOrDefault(t => ReferenceEquals(t.Model, _move.Current));
@@ -1370,8 +1370,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnProjectBpmChanged(double value)
     {
-        // NaN or infinity here would propagate into bar snapping and into the ruler's tick loop,
-        // where the loop bound never terminates and the window hangs for good.
+        // NaN or infinity here would propagate into the ruler's tick loop, where the loop bound
+        // never terminates and the window hangs for good.
         if (!double.IsFinite(value) || value < 0)
         {
             Status = "That tempo is not a number.";

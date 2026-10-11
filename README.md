@@ -37,8 +37,8 @@ control on screen is one you asked for.
 2. **Set the project tempo** — it seeds from the first track you add. Everything matches to this.
 3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did.
 4. **Line them up** — drag a section sideways, or up and down onto another track. It snaps to the
-   edges of other sections when it gets close, and to bars otherwise; hold <kbd>Ctrl</kbd> for free
-   movement.
+   edges of other sections when it gets close, and otherwise lands exactly where you let go; hold
+   <kbd>Ctrl</kbd> to stop it snapping at all.
 5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
 6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak.
 7. **Render to file.**
@@ -62,7 +62,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
-| drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges, then to bars; <kbd>Ctrl</kbd> frees it |
+| drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges (never to bars); <kbd>Ctrl</kbd> frees it |
 | drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
 | <kbd>Alt</kbd>+click a lane | move the playhead without moving anything |
 | <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |

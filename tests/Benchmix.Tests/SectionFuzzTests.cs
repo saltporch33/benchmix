@@ -64,7 +64,13 @@ public class SectionFuzzTests : IDisposable
             var all = session.Project.Tracks.SelectMany(t => t.Clips.Select(c => (t, c))).ToList();
             return all.Count == 0 ? null : all[rng.Next(all.Count)];
         }
-        SnapSettings Snap() => rng.Next(3) == 0 ? SnapSettings.Off : new SnapSettings(true, R(5, 200), rng.Next(2) == 0 ? 0 : 97.5);
+        SnapSettings Snap()
+        {
+            if (rng.Next(3) == 0) return SnapSettings.Off;
+            var snap = new SnapSettings(true, R(5, 200));
+            _ = rng.Next(2);    // drew the bar tempo before bar snapping went; still drawn so every seed replays as recorded
+            return snap;
+        }
 
         for (int step = 0; step < 250; step++)
         {

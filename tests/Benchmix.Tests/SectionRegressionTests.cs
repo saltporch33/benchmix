@@ -200,7 +200,7 @@ public class SectionRegressionTests : IDisposable
             double before = Anchor(track, x);
 
             var move = new SectionMove(session, track, mover);
-            move.DragTo(track, 0.1, new SnapSettings(true, 40, 0));
+            move.DragTo(track, 0.1, new SnapSettings(true, 40));
             move.Commit();
 
             var stillX = track.Clips.Single(c => c.Id == x.Id);

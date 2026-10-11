@@ -874,6 +874,16 @@ public partial class MainWindow : Window
         Check($"with Ctrl held it goes exactly where it was put (at {moved.TimelineStartSeconds:0.00000}s)",
               Math.Abs(moved.TimelineStartSeconds - 48.1) <= frame);
 
+        // --- no bar snapping (2026-10-11): away from every edge, a plain drag lands where it is let go ---
+        double bpmBefore = _vm.ProjectBpm;
+        _vm.ProjectBpm = 120;                         // a bar line every 2 s; the old snap would have pulled 49.47 to 50
+        Drag(emptyLane, At(emptyLane, 50), At(emptyLane, 51.37));
+        _vm.ProjectBpm = bpmBefore;
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"a plain drag far from any section lands exactly where it was dropped, not on a bar line " +
+              $"(at {moved.TimelineStartSeconds:0.00000}s, expected 49.47000)",
+              Math.Abs(moved.TimelineStartSeconds - 49.47) <= frame);
+
         // --- loop mode: drag the right end three lengths further ---
         _vm.LoopMode = true;
         double end = moved.TimelineEndSeconds;
@@ -1741,8 +1751,8 @@ public partial class MainWindow : Window
             }
         }
 
-        // Ctrl is the one exception to snapping everywhere: it lets go of section edges, bar
-        // lines and whole repeats, and the drag goes exactly where the pointer does.
+        // Ctrl is the one exception to snapping everywhere: it lets go of section edges and
+        // whole repeats, and the drag goes exactly where the pointer does.
         bool free = Modifiers.HasFlag(ModifierKeys.Control);
         double delta = dx / Math.Max(0.01, _vm.PixelsPerSecond);
 

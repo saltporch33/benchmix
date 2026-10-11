@@ -75,7 +75,7 @@ Recorded so they are visible and reversible, not buried in code.
 | **Clips held fully in RAM** | ~92 MB per 4-minute stereo track against 32 GB. Makes every seek, loop and scrub free. |
 | **Per-track stretch, not per-clip** | Matches the mental model of a deck with one tempo fader. Still true now that a track holds several sections: tempo, pitch and EQ belong to the track, and a section pasted from another song takes them on. |
 | **5 ms declick on trimmed edges only** | Cutting into a waveform lands on a non-zero sample, which clicks. Untrimmed clips get no ramp, which is what preserves bit-exact passthrough. |
-| **Snap clips to bars by default**, Ctrl to override | Mashups are assembled on bar lines. |
+| **Snap clips to bars by default**, Ctrl to override | Mashups are assembled on bar lines. *(Superseded 2026-10-11: nothing snaps to bars any more — see that entry.)* |
 | **Self-contained single-file exe** (68.5 MB) | He asked for "one .exe, keep it clean". Self-contained means it keeps working even if the .NET SDK is ever removed. |
 | **Silent play-test rather than a loopback recording** | Proving the audio pipeline runs should not mean blasting music at someone who is working. Master at zero, measure the frame-pull rate. |
 
@@ -159,7 +159,7 @@ is recorded here to be reversible.
 | **Ctrl+V pastes files copied in Explorer** if they were copied more recently than anything copied in Benchmix, judged by Windows' own clipboard counter. | "Pasting audio" read literally. Most recent copy wins, wherever it was made. The clipboard is only ever read. |
 | **A track's origin is not a wall.** Pasting, dragging or looping before where a track's song was first dropped moves the origin back and every section forward by the same whole number of frames. | Exact to the frame at the track's original tempo; within one frame (about 20 µs) at any other, because an origin cannot sit on a whole output frame and a whole track frame at once. Joins are untouched either way. |
 | **A dropped section overwrites** what is under it, like paste. **A trim stops at the next section.** | Moving or pasting puts something somewhere new; trimming adjusts one section and must never change another. Both are one undo step. |
-| **Snapping priority:** another section's edge, on any track, within 10 px; otherwise bar lines, as before; Ctrl turns both off. Either end of the dragged section can be the one that snaps. Trims snap to section edges only, as trims never snapped to bars. | Bars were already the default ("Snap clips to bars by default, Ctrl to override", 2026-09-16). Section edges take priority because when one is that close, it is what is being aimed at. Across tracks this lines a vocal up against a beat on another deck. |
+| **Snapping priority:** another section's edge, on any track, within 10 px; otherwise bar lines, as before; Ctrl turns both off. *(2026-10-11: the bar lines are gone; section edges and Ctrl are unchanged.)* Either end of the dragged section can be the one that snaps. Trims snap to section edges only, as trims never snapped to bars. | Bars were already the default ("Snap clips to bars by default, Ctrl to override", 2026-09-16). Section edges take priority because when one is that close, it is what is being aimed at. Across tracks this lines a vocal up against a beat on another deck. |
 | **Loop mode builds ordinary sections** — the same repeats Ctrl+D makes — not a new "looped clip" object. | It reuses the hand-built loop path the engine already plays, needs no file-format change, and every repeat can still be edited on its own. |
 | In loop mode the edge moves in **whole repeats**; **Ctrl** gives part of a repeat. A part-repeat on the right is the section's head, on the left its tail, so the loop stays in phase. | Whole repeats is the loop equivalent of snapping; Ctrl is "manual granular control" everywhere else. |
 | **A run of repeats is one loop.** Grabbing the outer end of an existing loop lengthens or shortens all of it. The edge *between* two repeats is not a loop handle — pressing there moves that repeat. | Otherwise grabbing the end of a four-repeat loop and dragging back would start a new loop of the last repeat and never shrink the old one; and grabbing an inner edge would collapse every repeat beyond it the moment the drag began. |
@@ -308,3 +308,18 @@ does, and that turned up defects the guide would otherwise have had to warn abou
 Each fix has a check that fails without it: `MenuWiringTests`, `UndoSkipsAStepThatChangedNothing`,
 `ClearTrimUncoversTheSongInPlaceAndStopsAtTheSectionsEitherSide`, and the undo/Reset/New checks at
 the end of `--buttontest`, each run against a staged build with the old code first.
+
+## 2026-10-11 — bar snapping off
+
+Daniel asked for seven features on 2026-10-11, and when asked how a tempo ramp should be set up
+he added, verbatim: *"Secondly I don't want bars, and come to think of it, please disable bar
+snapping (but retain the snapping of clips next to each other to avoid overlap and gaps. Retain
+ctrl+drag for me to override that though)."* He also asked that the work be done one feature at a
+time, verbatim: *"I'd like to approve you to move forward on one feature at a time, so I can
+monitor and manage token usage"*. This is the first one; the others are recorded as they land.
+
+| Decision | Why |
+| --- | --- |
+| **Nothing snaps to bar lines.** A dragged section snaps to another section's edge (either end, any track, within 10 px) and otherwise lands exactly where it is let go. Ctrl still turns snapping off. Trims, loop repeats and "Move section to playhead" were never bar-snapped and are unchanged. | His words. Edge snapping is what keeps sections from leaving gaps or overlapping, which he asked to keep. |
+| **The ruler still draws bar lines** from PROJECT BPM, as a guide only. | He asked for bar *snapping* to go. Whether the lines should go too is a question for him, not a default to take. |
+| **PROJECT BPM is unchanged.** It still seeds from the first track, sets Match BPM's target and spaces the ruler's bar lines; it no longer affects where anything lands. | The same answer: *"I don't want any project bpm I want to keep full independence. Keep the bpm info exactly as it is."* — read as "do not tie the new features to it, and leave what exists alone". |

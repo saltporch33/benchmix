@@ -5,13 +5,16 @@ namespace Benchmix.Core;
 /// <summary>How a drag should snap, decided once per pointer move by the window.</summary>
 /// <param name="Enabled">False while Ctrl is held: the drag goes exactly where the pointer does.</param>
 /// <param name="PixelsPerSecond">Current zoom, so "close" means close on screen rather than in time.</param>
-/// <param name="ProjectBpm">Bar lines to fall back on when no section edge is close; 0 for none.</param>
-public sealed record SnapSettings(bool Enabled, double PixelsPerSecond, double ProjectBpm)
+/// <remarks>
+/// Nothing snaps to bar lines: Daniel asked for bar snapping to go on 2026-10-11 (docs/DECISIONS.md).
+/// Away from every section edge a drag lands exactly where it is dropped.
+/// </remarks>
+public sealed record SnapSettings(bool Enabled, double PixelsPerSecond)
 {
     /// <summary>How near, on screen, an edge has to come before it pulls.</summary>
     public const double RadiusPixels = 10;
 
-    public static readonly SnapSettings Off = new(false, 1, 0);
+    public static readonly SnapSettings Off = new(false, 1);
 
     public double RadiusSeconds => RadiusPixels / Math.Max(0.01, PixelsPerSecond);
 }
@@ -20,8 +23,9 @@ public sealed record SnapSettings(bool Enabled, double PixelsPerSecond, double P
 public readonly record struct SnapEdge(double TimelineSeconds, TrackModel Track, ClipModel Clip, bool IsEnd);
 
 /// <summary>
-/// Where things snap to. Section edges first — on any track, because lining a vocal up against the
-/// end of a beat on another deck is the everyday case — and bar lines when nothing is close.
+/// Where things snap to: section edges, on any track, because lining a vocal up against the end of
+/// a beat on another deck is the everyday case. Nothing else — when no edge is close, a drag goes
+/// exactly where it is dropped.
 /// </summary>
 public static class Snapping
 {
@@ -103,7 +107,7 @@ public sealed class SectionMove
     public ClipModel Clip { get; }
     public long LengthFrames { get; }
 
-    /// <summary>What the last move snapped to, in words: "a section" or "a bar"; null when free.</summary>
+    /// <summary>What the last move snapped to, in words ("a section"); null when it was not snapped.</summary>
     public string? SnappedTo { get; private set; }
 
     /// <summary>Where on the timeline it snapped to a section edge, for drawing a guide line.</summary>
@@ -150,12 +154,6 @@ public sealed class SectionMove
                 start = Math.Max(0, endOnEdge ? hit.TimelineSeconds - length : hit.TimelineSeconds);
                 SnappedTo = "a section";
                 SnapLineSeconds = hit.TimelineSeconds;
-            }
-            else if (snap.ProjectBpm > 10)
-            {
-                double bar = 4 * 60.0 / snap.ProjectBpm;
-                start = Math.Max(0, Math.Round(start / bar) * bar);
-                SnappedTo = "a bar";
             }
         }
 

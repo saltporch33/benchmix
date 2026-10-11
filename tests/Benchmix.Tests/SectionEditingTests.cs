@@ -294,7 +294,7 @@ public class SectionEditingTests : IDisposable
             var mover = a.Clips[1];
 
             // 28 px/s: ten pixels is about a third of a second, and this is a fifth off.
-            var snap = new SnapSettings(true, 28, 0);
+            var snap = new SnapSettings(true, 28);
             var move = new SectionMove(session, a, mover);
             move.DragTo(a, 8.2, snap);
             move.Commit();
@@ -322,7 +322,7 @@ public class SectionEditingTests : IDisposable
             var last = a.Clips[1];
 
             var move = new SectionMove(session, a, first);
-            move.DragTo(a, 19.85, new SnapSettings(true, 28, 0));    // its end at 29.85 — near 30
+            move.DragTo(a, 19.85, new SnapSettings(true, 28));    // its end at 29.85 — near 30
             move.Commit();
 
             Assert.True(End(first, session) == Start(last, session),
@@ -340,7 +340,7 @@ public class SectionEditingTests : IDisposable
             var mover = a.Clips[1];
 
             var move = new SectionMove(session, a, mover);
-            move.DragTo(a, 20.1234, new SnapSettings(false, 28, 120));
+            move.DragTo(a, 20.1234, new SnapSettings(false, 28));
             move.Commit();
 
             Assert.Null(move.SnappedTo);
@@ -349,7 +349,7 @@ public class SectionEditingTests : IDisposable
     }
 
     [Fact]
-    public async Task WithNoSectionNearbyADragStillSnapsToBarLines()
+    public async Task WithNoSectionNearbyADragLandsExactlyWhereItWasDropped()
     {
         var (session, a) = await OpenAsync();
         using (session)
@@ -357,13 +357,17 @@ public class SectionEditingTests : IDisposable
             TimelineEditor.Split(a, 20, session);
             var mover = a.Clips[1];
 
-            // 120 BPM: a bar is 2 s. 36.7 s is far from any section edge, and nearest bar 36 s.
+            // A project tempo of 120 BPM puts a bar line at 36 s. 36.7 s is far from any section
+            // edge, so before 2026-10-11 the drag was pulled onto that bar.
+            session.Project.ProjectBpm = 120;
             var move = new SectionMove(session, a, mover);
-            move.DragTo(a, 36.7, new SnapSettings(true, 28, 120));
+            move.DragTo(a, 36.7, new SnapSettings(true, 28));
             move.Commit();
 
-            Assert.Equal("a bar", move.SnappedTo);
-            Assert.Equal(36.0, TimelineEditor.TimelineSecondsAt(a, mover.TrackStartSeconds), 9);
+            Assert.True(move.SnappedTo is null, $"the drag snapped to {move.SnappedTo} with no section nearby");
+            Assert.True(Start(mover, session) == session.SecondsToFrames(36.7),
+                $"the section landed at frame {Start(mover, session)}, not {session.SecondsToFrames(36.7)} where it was dropped: " +
+                "it jumped to a bar line, and bar snapping was turned off on 2026-10-11");
         }
     }
 
@@ -379,7 +383,7 @@ public class SectionEditingTests : IDisposable
             TimelineEditor.Split(a, 30, session);
             var mover = a.Clips[1];
             var move = new SectionMove(session, a, mover);
-            move.DragTo(a, 12.2, new SnapSettings(true, 28, 0));
+            move.DragTo(a, 12.2, new SnapSettings(true, 28));
             move.Commit();
 
             double landed = TimelineEditor.TimelineSecondsAt(a, mover.TrackStartSeconds);
@@ -459,7 +463,7 @@ public class SectionEditingTests : IDisposable
             b.Clips[0].SourceEndSeconds = 7.777;
 
             var trim = new SectionTrim(session, a, a.Clips[0], start: false);
-            trim.DragTo(7.7, new SnapSettings(true, 28, 0));
+            trim.DragTo(7.7, new SnapSettings(true, 28));
 
             double end = TimelineEditor.TimelineSecondsAt(a, TimelineEditor.SecondsOf(End(a.Clips[0], session), session));
             Assert.True(Math.Abs(end - 7.777) <= 1.0 / Rate, $"trimmed to {end:0.00000} s instead of snapping to 7.77700 s");

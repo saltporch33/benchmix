@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**199 tests, 0 failures, 0 skipped** (2026-10-03). `dotnet test` — about 90 seconds (the stem
+**199 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -210,6 +210,34 @@ With the fixes: **199 tests, 0 failed, 0 skipped**; `scripts/verify-exe.ps1` all
 `--buttontest` **31 checks**, `--gesturetest` 80. One existing test, `TheStackIsBounded`, pushed 20
 identical states and counted 5 undos; identical steps are now skipped by design, so it makes a real
 change before each push.
+
+## 2026-10-11 — bar snapping off
+
+**In the test project.** The bar test `WithNoSectionNearbyADragStillSnapsToBarLines` is replaced
+by `WithNoSectionNearbyADragLandsExactlyWhereItWasDropped`: PROJECT BPM 120 (a bar line every 2 s),
+snapping on, a section dropped at 36.7 s, far from any edge. It must land on exactly
+`SecondsToFrames(36.7)` (`==`, in frames) and report no snap. The edge-snapping tests are unchanged
+and still pass; `SnapSettings` no longer carries a tempo, so nothing else can reintroduce bar
+snapping without changing its signature. The fuzz test still draws the random number that used to
+pick its bar tempo, so every recorded seed replays the same sequence. **199 tests, 0 failed,
+0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 80 to **81 checks**. The new one sets PROJECT BPM
+to 120 and drags a section with no modifier, through the lane handlers, from 48.10 s to 49.47 s —
+1.47 s from the nearest section edge, 0.53 s from the bar line at 50 s that the old snap would have
+pulled it to. Published exe, 2026-10-11:
+
+```
+PASS  a plain drag far from any section lands exactly where it was dropped, not on a bar line (at 49.47000s, expected 49.47000)
+gesturetest       PASS  exit 0   outside: focus taken: no  on screen: no  taskbar button: no  activatable: no
+```
+
+Run with `verify-exe.ps1 -Only gesturetest`: the change touches no audio, timing or native code,
+so the other seven runs were not repeated. Before this change no check dragged without Ctrl away
+from a section edge, so nothing in the window proved where a plain drag lands.
+
+**Not verified:** the new check was not run against a build with the old code; that it would have
+failed there (landing at 50.00 s) is read off the removed branch, not measured.
 
 ## The stretch engine
 
