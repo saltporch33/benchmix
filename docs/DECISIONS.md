@@ -259,3 +259,52 @@ stop. I was just asking if it was possible"*.
 | The button checks moved inside the app (`--buttontest`); `ui-verify.ps1` no longer drives the window from outside with UI Automation. | Measured: the outside UI Automation client made Windows activate the hidden window at its first call, despite `WS_EX_NOACTIVATE`, taking his keyboard for about 30 seconds. The buttons' own automation peers, called from inside, exercise the same controls and activate nothing. |
 | Both the app and the scripts check that each run stayed out of the way, and a run that did not fails. | "It should be invisible" is an assumption; the watch is what caught the activation above. |
 | A mistyped switch is refused before any window exists. | Otherwise it quietly became an ordinary session: on screen, taking focus, on the real audio device. |
+
+## 2026-10-03 — several sections at once, the Delete key, tooltips
+
+Daniel, 2026-10-03, verbatim:
+
+> "please add:
+> * tooltips w/short explanations over buttons
+> * ctrl+click to select multiple sections of audio
+> * shift+click to select a larger range of audio sections
+> * pressing delete key while one or more sections is selected deletes them"
+
+| Decision | Why |
+| --- | --- |
+| **Shift+click selects every section wholly inside the time between the section clicked before (the anchor) and this one, on every track from the one to the other.** Wholly inside, not merely overlapping. The anchor stays put, so a further Shift+click measures from the same place; the section just clicked becomes the one commands act on. | Two short pieces on one track must not sweep up the whole song on the track between them. "Wholly inside" is exactly what the eye sees between the two clicks. Either click order. |
+| **Ctrl+click toggles on release, not on press**, and only if the pointer did not move. | Ctrl held through a drag already means "place it freely" (2026-09-24), and that drag has to start from the same press. |
+| **Delete is handled in code with a focus check, not as a KeyBinding.** It acts only when the keyboard focus is not in a text box, and only when a section is selected — no fall-back to the section under the playhead. | The 2026-09-16 rule that every editing key is Ctrl-modified exists because a bare KeyBinding fires inside the PROJECT BPM box. Delete is the key he asked for, so the rule is kept by other means: the box keeps its Delete, the timeline gets it everywhere else. No fall-back, because a stray Delete with nothing selected must remove nothing. The menu's *Delete section* keeps its fall-back. |
+| **Delete removes every selected section as one undo step**, leaving the gaps. Cut, copy, repeat and the drags still act on one section — the one clicked last. | Multi-section cut, copy and drag are a larger feature he did not ask for. Keeping "the one clicked last" as the target leaves every existing command meaning what it did. |
+| A right-click on one of several selected sections keeps the selection and makes that one the target. | So the menu's *Delete section* removes them all, while its *Cut* and *Copy* act on the one under the pointer. |
+| Loop mode's handles follow the first selected section on a track. | Loop mode is a one-section gesture; a plain click selects one. |
+| Every button, knob and slider has a tooltip, and `--gesturetest` fails if one is missing. | Asked for; the check is what keeps it true as buttons are added. |
+| **A real press on a lane, the ruler or a track's strip takes the keyboard away from a text box** (`Keyboard.Focus(this)`), never in a scripted run. | Otherwise, after typing a tempo, Delete kept going to the PROJECT BPM box: a click on a lane moves no focus in WPF, so the key never reached the timeline until a button or knob happened to be clicked. The same press now commits the typed tempo, which its binding only does on losing focus. Scripted runs are excluded because asking Windows for the keyboard would activate the hidden window — the one thing they must never do. |
+| **Delete is refused while a section is held under the mouse**, armed or dragging, and Cut likewise during a drag. | Deleting the held section left the drag holding one no longer on the track; the drop then cleared whatever was under its ghost, or put the deleted section back on another track. |
+| **Delete under an open menu is left to the menu**, and a held key counts once. | A right-click opens the menu and gives it the keyboard; Delete then removed the section under the menu while the menu's own *Delete section* fell back to the playhead. |
+| **A section whose file is missing is never in a Shift+click range.** | It has no length, is not drawn and cannot be clicked, so Delete would have erased the missing song's arrangement for good once the file was back. |
+| **The right-click menu acts on the section right-clicked**, not the first selected one on the track. | With several selected, *Fade*, *Trim* and *Move section to playhead* read the first selected section and changed the wrong one. |
+
+An adversarial review of the change (five lenses, every finding handed to a skeptic to refute) found the five defects in the last five rows, all fixed the same day, each with a `--gesturetest` check or a unit test that fails without the fix. It also found that commands acted on the section clicked *first* after a Shift+click while the README promised the one clicked *last*; the anchor and the target are now two different things, as the first row says.
+
+## 2026-10-03 — defects found while rewriting the user guide
+
+Daniel, 2026-10-03, verbatim: *"the split vocals instrumental feature does nothing."* and *"I don't
+need music lessons on how to make songs mix nicely. I need the How To section to give click here
+click there instructions."* Writing click-by-click steps meant checking what every click really
+does, and that turned up defects the guide would otherwise have had to warn about mid-recipe.
+
+| Decision | Why |
+| --- | --- |
+| **Split into vocals + instrumental is a `Click` handler**, like every other item on the lane menu. | Its command was bound through `RelativeSource AncestorType=Window`, which a ContextMenu cannot see. The item drew enabled and did nothing, from the day it shipped. |
+| **Undo and redo leave the playhead and the listening loop where they are.** They change the edit, not where you are listening. PROJECT BPM, MASTER and LINK still come back with the snapshot, as before. | Reloading the snapshot rewound to 0:00, so the split or paste after any Ctrl+Z landed at the start of the song; and a loop changed since was put back in the engine while the band on screen showed the new one. |
+| **An undo step that changed nothing is skipped.** | A snapshot is taken before a command knows whether it will change anything, so a refused command left an identical step behind and the next Ctrl+Z seemed to do nothing. |
+| **Match BPM, Match key and Reset are one undo step each.** | Each knob snapshots itself before moving, so Reset left six steps and one Ctrl+Z restored only the last knob; undoing Match key left LINK off. |
+| **An undo or redo marks the project changed.** | Undo after saving left no `*`, so closing discarded the undone state without asking. Conservative: an undo back to exactly the saved state also shows `*`. |
+| **New clears the selection and does not mark the project changed.** | The selected track survived New as a track no longer on screen: Ctrl+V and Ctrl+I reported success on it while nothing appeared, and songs added next were never selected. Setting PROJECT BPM back to 0 after clearing the flag left a `*` on a blank project. |
+| **Clear trim uncovers the song in place**, as far as dragging each end outward could: to the start and end of the file, stopping at the sections either side. | It reset the source range in place, sliding the audio to start the song at the section's left edge and running it over every later section — two sections at once on one track, which is not representable. |
+| **Not changed:** splitting a track that holds a section pasted from another song. The stem tracks remap every section to this song's stems, so that section plays the wrong audio. Documented in the guide as a known problem. | The right behaviour is a choice (drop the section from the stems, keep it unseparated, or separate its song too), not a fix. |
+
+Each fix has a check that fails without it: `MenuWiringTests`, `UndoSkipsAStepThatChangedNothing`,
+`ClearTrimUncoversTheSongInPlaceAndStopsAtTheSectionsEitherSide`, and the undo/Reset/New checks at
+the end of `--buttontest`, each run against a staged build with the old code first.

@@ -275,6 +275,29 @@ public class UndoStackTests
         Assert.Equal(1.0, restored.Tracks[0].Speed);
     }
 
+    /// <summary>
+    /// Until 2026-10-03 a refused command — a split with nothing under the playhead — still left an
+    /// undo step behind, identical to the project. The next Ctrl+Z put back the same state and
+    /// seemed to do nothing; the edit he meant to undo needed a second press.
+    /// </summary>
+    [Fact]
+    public void UndoSkipsAStepThatChangedNothing()
+    {
+        var undo = new UndoStack();
+        var p = new BenchmixProject { Tracks = { new TrackModel { Name = "a", Speed = 1.0 } } };
+
+        undo.Push(p, "speed");
+        p.Tracks[0].Speed = 0.5;
+        undo.Push(p, "split");                 // refused: nothing changes after this snapshot
+
+        var restored = undo.Undo(p);
+        Assert.True(restored is { } r && r.Tracks[0].Speed == 1.0,
+            $"one Ctrl+Z after a refused command left the speed at {restored?.Tracks[0].Speed} — "
+          + "the press did nothing and the edit he meant to undo is still there");
+
+        Assert.Null(undo.Undo(restored!));    // and the skipped step is not waiting to be pressed
+    }
+
     [Fact]
     public void EmptyStackIsSafe()
     {
@@ -289,10 +312,11 @@ public class UndoStackTests
     {
         var undo = new UndoStack(limit: 5);
         var p = new BenchmixProject();
-        for (int i = 0; i < 20; i++) undo.Push(p, $"edit {i}");
+        // Every step a real change: an undo step that changed nothing is skipped, by design.
+        for (int i = 0; i < 20; i++) { undo.Push(p, $"edit {i}"); p.Name = $"after edit {i}"; }
 
         int undone = 0;
-        while (undo.Undo(p) is not null) undone++;
+        for (var current = p; undo.Undo(current) is { } previous; current = previous) undone++;
         Assert.Equal(5, undone);
     }
 }

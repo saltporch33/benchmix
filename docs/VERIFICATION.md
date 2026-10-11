@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**190 tests, 0 failures, 0 skipped** (2026-09-24). `dotnet test` — about 90 seconds (the stem
+**199 tests, 0 failures, 0 skipped** (2026-10-03). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -95,6 +95,122 @@ but the Windows clipboard counter it relies on is checked to resolve in the publ
 ends, the snap guide line, the selected track's bar and an empty track's hint — looked at, and
 correct.
 
+## 2026-10-03 — several sections at once, the Delete key, tooltips
+
+**In the test project.** `SectionSelectionTests` (5): a Shift+click range takes every section
+between its two ends whichever end was clicked first and never the one after; across tracks it
+takes the tracks between but only sections wholly inside the time, so a whole song on the track in
+between is **not** swept up by two short pieces (the assertion message says what Delete would then
+have removed); a range on one track leaves the others alone; deleting three selected sections on
+two tracks removes exactly those and moves no sample of the section kept (`==` on its start and
+source offset); deleting nothing changes nothing.
+
+**In the real window.** `--gesturetest` grew from 58 to **80 checks**, the 22 new ones through the
+same lane handlers a mouse reaches, with a scripted pointer, scripted modifier keys and a scripted
+focused element (a scripted run never holds the real keyboard): a plain click selects one; Ctrl+click
+adds a second, which becomes the one commands act on, and on a selected one takes it out again;
+Shift+click selects every section between and makes the one clicked last the target; the right-click
+menu's target follows the section right-clicked, not the first selected; Delete while a section is
+held under the mouse is refused; Delete through the real key handler with a `TextBox` as the focused
+element is left to the box, with a `ContextMenu` is left to the menu, and with the window focused
+removes all three in one go while the status bar counts them; one undo brings all three back; Delete
+with nothing selected deletes nothing even with the playhead on a section; no Delete `KeyBinding`
+exists; and every `ButtonBase`, `Knob` and `Slider` in the visual tree carries a tooltip (53 checked
+with two tracks loaded — the check names any that does not). The existing "with Ctrl held it goes
+exactly where it was put" check still passes, which is what proves a Ctrl-drag is still a free drag
+and not a toggle.
+
+**The adversarial review** (five lenses over the diff, 36 findings, the 14 non-trivial ones each
+handed to a skeptic told to refute it; all 14 stood, collapsing to six distinct defects) found, before
+anything was deployed: Delete went dead after typing in PROJECT BPM, because a lane click moves no
+keyboard focus; the right-click menu's fades, trims and *Move section to playhead* acted on the first
+selected section rather than the one right-clicked; Delete mid-drag left the drag holding a deleted
+section, whose drop then cleared audio under its ghost; Shift+click swept up the invisible zero-length
+sections of a track whose file is missing; after a Shift+click commands acted on the section clicked
+first while the README said last; and Delete fired under an open menu. All six are fixed above, each
+with a check or test that fails without the fix (`SectionSelectionTests` is now 6).
+
+**In the published exe** (`scripts/verify-exe.ps1`, after the review fixes; Daniel had closed his
+copy, so this is the build his shortcut opens):
+
+```
+latencycheck      PASS   gesturetest  PASS (80 checks)   buttontest  PASS (12 checks)
+loadcheck         PASS   playtest     PASS (silent)      stemtest    PASS
+uiprobe-sections  PASS   uiprobe-editing PASS
+VERIFY: every run passed and stayed out of the way
+```
+
+**Not verified:** how Ctrl+click and Shift+click feel under a real mouse (the scripted pointer
+presses and releases at the same point; a human's hand moves a pixel or two, and the 4 px move
+threshold is what keeps that a click), and the focus move itself — click PROJECT BPM, type, click a
+section, press Delete: the section should go and the typed tempo should stick. That is a by-hand
+check, because a scripted run is not allowed to take the keyboard. The guard logic behind it is
+driven with a real `KeyEventArgs` and a stand-in focused element.
+
+## 2026-10-03 — "Split into vocals + instrumental" did nothing
+
+Daniel, 2026-10-03, verbatim: *"the split vocals instrumental feature does nothing."* He was right,
+and it had done nothing since the day it shipped (87f3676). The right-click menu item's command was
+bound by looking up the window (`RelativeSource AncestorType=Window`). A right-click menu opens in a
+popup of its own, outside the window, so the lookup found nothing, the command was empty, and WPF
+draws an item with no command as enabled. A click went nowhere and nothing said so. Every other
+item on that menu calls a `Click` handler, which is why they all worked.
+
+Nothing caught it because nothing went through the menu: `--stemtest` and the stem unit tests call
+the separator directly and passed throughout. The engine was fine — stems written from T.R.O.Y. on
+2026-10-03 measure vocals −19.0 dB against an instrumental at −14.1 dB.
+
+**Proved before the fix, in a published exe** (staged build with the new check and the old wiring):
+`--buttontest` clicked the real menu item through its automation peer and `FAIL - clicking it
+starts separating`; the status bar still showed the previous Match key message.
+
+**The fix** is a `Click` handler like its neighbours (`OnSplitStems`). Two checks guard it:
+
+- `MenuWiringTests.NoRightClickMenuItemReachesTheWindowThroughABinding` reads every XAML file and
+  fails if anything inside a `ContextMenu` binds through `AncestorType`, `FindAncestor` or
+  `ElementName`. Run against the old line it fails, naming `MainWindow.xaml:359`.
+- `--buttontest` now ends by pressing *Split into vocals + instrumental* on the topper through the
+  real menu item: **22 checks**, up from 12. Published exe, 2026-10-03:
+
+```
+PASS  clicking it starts separating (status: 'Separating They Reminisce Over You (T.R.O.Y.) (Clean)...')
+PASS  it finishes with a vocals track and an instrumental track (4 tracks; status: 'Split ... in 24.2s on DirectML. ...')
+PASS  the original is muted, not removed
+PASS  the vocal stem carries the voice: -6.4 dB against the original (a song with no voice measured -44)
+PASS  the instrumental is not silent: -1.4 dB against the original
+PASS  '... — vocals' lands exactly on the original's sections
+PASS  '... — instrumental' lands exactly on the original's sections
+PASS  one Ctrl+Z undoes the whole split (2 tracks, original muted=False)
+```
+
+The −6.4 dB is the same figure as the 2026-09-16 control test's real-vocal result (−6.5 dB), now
+reached through the menu. `scripts/verify-exe.ps1` gained `-Only <name>` to run one switch, still
+watched from outside; the full set passed afterwards (all eight runs, gesture test 80 checks).
+
+**Not verified:** the first-run download dialog (the model is already on this machine, and a
+scripted run shows no dialogs), and the menu opening under a real right-click — the check invokes
+the item without opening the popup, because an open popup would appear on his screen.
+
+## 2026-10-03 — undo, New and Clear trim, found while rewriting the guide
+
+Checking the click-by-click guide against the code found six more defects; the reasons are in
+`DECISIONS.md`. Each check below was run first against a published build with the old code (staged
+under `%LOCALAPPDATA%\Benchmix.stage\`) and failed, then against the fix and passed.
+
+| Defect | Check | Against the old code |
+| --- | --- | --- |
+| Undo rewound the playhead to 0:00 | `--buttontest`: split at 37.5 s, Ctrl+Z, read the **engine's** position | `the engine is at 0.000s`. A first version read the view-model's position, which nothing updates in a scripted run, and passed against the bug; it now reads the engine. |
+| A refused command used up a press of Ctrl+Z | `UndoSkipsAStepThatChangedNothing`; `--buttontest` split, refused split, one Ctrl+Z | speed left at 0.5; `2 sections, want 1` |
+| Reset took one Ctrl+Z per knob | `--buttontest`: LOW 0.5, VOL 0.5, TEMPO 1.1, the real Reset button, one Ctrl+Z | `LOW 1, VOL 0.5, TEMPO 1` |
+| Undo after saving left no `*` | `--buttontest`: save to a temp folder, Ctrl+Z, read the title | `title 'Benchmix — undo-check'` |
+| New left a deleted track selected, and a `*` | `--buttontest`: New, then add a song | selected still T.R.O.Y.; `Untitled *`; the added song not selected |
+| Clear trim slid the audio and overlapped the next section | `ClearTrimUncoversTheSongInPlaceAndStopsAtTheSectionsEitherSide` — a ramp, rendered against the untouched song | `spans frames 624000–3504000; its neighbours end at 480000 and start at 960000` |
+
+With the fixes: **199 tests, 0 failed, 0 skipped**; `scripts/verify-exe.ps1` all eight runs pass,
+`--buttontest` **31 checks**, `--gesturetest` 80. One existing test, `TheStackIsBounded`, pushed 20
+identical states and counted 5 undos; identical steps are now skipped by design, so it makes a real
+change before each push.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
@@ -176,7 +292,8 @@ The substantive one: before the click the second track reads `102.0 BPM`; after 
 -8.8% to hit 93.0 BPM."* That is the whole feature working through the real control.
 
 The 2026-09-24 in-app version makes the same checks, plus the button counts: **12/12 pass** in the
-published exe.
+published exe. Since 2026-10-03 it also splits the topper through the real right-click menu item —
+**22 checks** (see above).
 
 ## Staying out of the way
 

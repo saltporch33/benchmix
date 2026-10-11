@@ -69,15 +69,15 @@ public sealed partial class TrackViewModel : ObservableObject
     /// </summary>
     public IReadOnlyList<Controls.ClipVisual> ClipVisuals { get; private set; } = Array.Empty<Controls.ClipVisual>();
 
-    /// <summary>Rebuilds the section view-models from the model, keeping the selected one selected.</summary>
+    /// <summary>Rebuilds the section view-models from the model, keeping the selected ones selected.</summary>
     public void RebuildClips()
     {
-        var selected = Clips.FirstOrDefault(c => c.IsSelected)?.Id;
+        var selected = Clips.Where(c => c.IsSelected).Select(c => c.Id).ToHashSet();
         Clips.Clear();
         foreach (var m in Model.Clips)
         {
             var vm = new ClipViewModel(_session, this, m, _onChanged);
-            if (m.Id == selected) vm.IsSelected = true;
+            if (selected.Contains(m.Id)) vm.IsSelected = true;
             Clips.Add(vm);
         }
         NotifyClipsChanged();

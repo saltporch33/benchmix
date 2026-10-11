@@ -64,10 +64,19 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
 | drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges, then to bars; <kbd>Ctrl</kbd> frees it |
 | drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
-| <kbd>Alt</kbd>+click a lane | move the playhead without moving the clip |
+| <kbd>Alt</kbd>+click a lane | move the playhead without moving anything |
+| <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |
+| <kbd>Shift</kbd>+click a section | select every section between the section you clicked before and this one |
+| <kbd>Delete</kbd> | delete the selected sections, leaving the gaps (not while typing in a text box) |
 
 The selected track has a blue bar down its left edge. Clicking anywhere on a track — its lane, its
 name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes.
+
+**Several sections at once.** Click one section, then <kbd>Ctrl</kbd>+click others to add them, or
+<kbd>Shift</kbd>+click to take every section between the two — on every track from the one to the
+other, but only sections wholly inside that stretch of time. <kbd>Delete</kbd> removes the whole
+selection in one undo step and leaves the gaps. Cut, copy, repeat and the drags still act on one
+section: the one you clicked last. Every button, knob and slider explains itself in a tooltip.
 
 **Loop mode.** Click a section, press *LOOP MODE* (or <kbd>Ctrl</kbd>+<kbd>L</kbd>), then drag
 either of its ends: instead of trimming, the section repeats to fill the space, in whole repeats.

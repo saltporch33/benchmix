@@ -412,6 +412,43 @@ public class SectionEditingTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Until 2026-10-03 the menu's Clear trim reset the section's source range in place: the song
+    /// restarted from its first second at the section's left edge and ran on over every section
+    /// after it — the audio jumped in time and two sections played at once on one track.
+    /// </summary>
+    [Fact]
+    public async Task ClearTrimUncoversTheSongInPlaceAndStopsAtTheSectionsEitherSide()
+    {
+        var (session, a) = await OpenAsync();
+        using (session)
+        {
+            const int frames = Rate * 40;
+            var untouched = Render(session, frames);
+
+            TimelineEditor.Split(a, 10, session);
+            TimelineEditor.Split(a, 20, session);
+            var middle = a.Clips[1];
+            new SectionTrim(session, a, middle, start: true).DragTo(13, SnapSettings.Off);
+            new SectionTrim(session, a, middle, start: false).DragTo(17, SnapSettings.Off);
+            Assert.True(Start(middle, session) > End(a.Clips[0], session), "the setup should leave a gap before the middle section");
+
+            SectionTrim.Clear(session, a, middle);
+
+            Assert.True(a.Clips.Count == 3 && ReferenceEquals(a.Clips[1], middle), "clearing a trim must not add, drop or reorder sections");
+            Assert.True(Start(middle, session) == End(a.Clips[0], session) && End(middle, session) == Start(a.Clips[2], session),
+                $"the cleared section spans frames {Start(middle, session)}–{End(middle, session)}; its neighbours end at "
+              + $"{End(a.Clips[0], session)} and start at {Start(a.Clips[2], session)} — it must stop exactly at both, "
+              + "or it plays over them or leaves a gap");
+
+            // A ramp, so a sample's value is where in the song it came from: identical to the
+            // untouched render means every second of the song is back at the moment it started at.
+            int differing = Differing(untouched, Render(session, frames));
+            Assert.True(differing == 0,
+                $"{differing} samples differ from the song before it was cut — Clear trim moved the audio in time");
+        }
+    }
+
     [Fact]
     public async Task TrimmingNearAnotherEdgeSnapsToIt()
     {

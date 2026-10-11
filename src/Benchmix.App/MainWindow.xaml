@@ -7,6 +7,7 @@
         MinHeight="560" MinWidth="1000"
         Background="{StaticResource Bg0Brush}"
         AllowDrop="True" Drop="OnFilesDropped" DragOver="OnDragOver"
+        PreviewKeyDown="OnWindowPreviewKeyDown"
         UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
 
     <Window.InputBindings>
@@ -25,7 +26,8 @@
         <!-- Sections. Every one is Ctrl-modified on purpose: a bare-key binding on the Window
              fires from inside the PROJECT BPM box too, because a TextBox does not mark a plain
              character's KeyDown as handled. Binding Delete or S here would make editing that box
-             destructive. -->
+             destructive. Delete is the one bare key that acts, and for that reason it is handled
+             in code (OnWindowPreviewKeyDown) only when the focus is not in a text box. -->
         <KeyBinding Key="I" Modifiers="Ctrl" Command="{Binding SplitAtPlayheadCommand}"/>
         <KeyBinding Key="X" Modifiers="Ctrl" Command="{Binding CutClipCommand}"/>
         <KeyBinding Key="C" Modifiers="Ctrl" Command="{Binding CopyClipCommand}"/>
@@ -50,22 +52,30 @@
             <DockPanel>
                 <TextBlock Text="BENCHMIX" FontWeight="Bold" FontSize="13" Margin="2,0,16,0"
                            VerticalAlignment="Center" Foreground="{StaticResource AccentBrush}"/>
-                <Button Content="New" Style="{StaticResource ToolButton}" Command="{Binding NewCommand}"/>
-                <Button Content="Open" Style="{StaticResource ToolButton}" Command="{Binding OpenCommand}"/>
-                <Button Content="Save" Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}"/>
+                <Button Content="New" Style="{StaticResource ToolButton}" Command="{Binding NewCommand}"
+                        ToolTip="Start a new, empty project. Asks first if there are unsaved changes (Ctrl+N)."/>
+                <Button Content="Open" Style="{StaticResource ToolButton}" Command="{Binding OpenCommand}"
+                        ToolTip="Open a saved .benchmix project (Ctrl+O)."/>
+                <Button Content="Save" Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}"
+                        ToolTip="Save the project: your work in progress, not the audio (Ctrl+S; Ctrl+Shift+S saves a copy)."/>
                 <Separator Width="10" Background="Transparent"/>
-                <Button Content="+ Add tracks" Style="{StaticResource PrimaryButton}" Command="{Binding AddTracksCommand}"/>
+                <Button Content="+ Add tracks" Style="{StaticResource PrimaryButton}" Command="{Binding AddTracksCommand}"
+                        ToolTip="Add songs, one track each, starting at 0:00. Dropping files onto the window adds them where you drop them."/>
                 <Button Content="+ Empty track" Style="{StaticResource ToolButton}" Command="{Binding AddEmptyTrackCommand}"
                         ToolTip="Add a track with nothing on it, to paste or drag sections onto (Ctrl+T)."/>
-                <Button Content="Render to file" Style="{StaticResource ToolButton}" Command="{Binding RenderCommand}"/>
+                <Button Content="Render to file" Style="{StaticResource ToolButton}" Command="{Binding RenderCommand}"
+                        ToolTip="Write the whole mix, start to end, to a WAV file (Ctrl+E)."/>
                 <ToggleButton Content="LOOP MODE" Style="{StaticResource PillToggle}" Margin="10,0,0,0" Padding="0"
                               VerticalAlignment="Center"
                               IsChecked="{Binding LoopMode, Mode=TwoWay}"
                               ToolTip="While on, dragging either end of a section repeats it instead of trimming it (Ctrl+L). It moves in whole repeats; hold Ctrl for part of one. This builds repeats on the track — it is not the Shift-drag listening loop."/>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                    <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"/>
-                    <Button Content="&#x2212;" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"/>
-                    <Button Content="+" Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}"/>
+                    <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"
+                            ToolTip="Zoom so the whole mix fits the window (Ctrl+0)."/>
+                    <Button Content="&#x2212;" Style="{StaticResource ToolButton}" Command="{Binding ZoomOutCommand}"
+                            ToolTip="Zoom out (Ctrl and the minus key)."/>
+                    <Button Content="+" Style="{StaticResource ToolButton}" Command="{Binding ZoomInCommand}"
+                            ToolTip="Zoom in (Ctrl and the = key). Ctrl+scroll zooms about the pointer."/>
                 </StackPanel>
                 <TextBlock/>
             </DockPanel>
@@ -78,7 +88,7 @@
                 <Button Style="{StaticResource TransportButton}" Command="{Binding PlayPauseCommand}"
                         Content="{Binding IsPlaying, Converter={StaticResource PlayGlyph}}" ToolTip="Play / pause (Space)"/>
                 <Button Style="{StaticResource TransportButton}" Command="{Binding StopCommand}"
-                        Content="&#x25A0;" ToolTip="Stop"/>
+                        Content="&#x25A0;" ToolTip="Stop, and go back to the start."/>
 
                 <TextBlock Margin="16,0,4,0" VerticalAlignment="Center" FontFamily="Consolas" FontSize="19"
                            Foreground="{StaticResource Text0Brush}"
@@ -88,12 +98,12 @@
                            Text="{Binding TotalSeconds, Converter={StaticResource TimeSlash}}"/>
 
                 <TextBlock Text="PROJECT BPM" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                <TextBox Style="{StaticResource DarkBox}" Width="62" VerticalAlignment="Center"
+                <TextBox x:Name="BpmBox" Style="{StaticResource DarkBox}" Width="62" VerticalAlignment="Center"
                          Text="{Binding ProjectBpm, StringFormat=F1, UpdateSourceTrigger=LostFocus}"
-                         ToolTip="Tracks are matched to this tempo."/>
+                         ToolTip="The tempo the whole mix runs at. Match BPM stretches tracks to it. Type a number, then click away."/>
 
                 <Button Content="Clear loop" Style="{StaticResource ToolButton}" Margin="16,0,0,0"
-                        Command="{Binding ClearLoopCommand}" ToolTip="Shift-drag on the ruler sets a loop."/>
+                        Command="{Binding ClearLoopCommand}" ToolTip="Clear the listening loop. Shift-drag on the ruler sets one; it only changes what plays."/>
 
                 <!-- master on the right -->
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
@@ -107,7 +117,7 @@
                                   MeterBrush="{StaticResource GoodBrush}" WarnBrush="{StaticResource WarnBrush}"
                                   ClipBrush="{StaticResource BadBrush}" TrackBrush="{StaticResource Bg3Brush}"/>
                     <Slider Width="110" Minimum="0" Maximum="2" Value="{Binding MasterGain}"
-                            VerticalAlignment="Center" ToolTip="Master level"/>
+                            VerticalAlignment="Center" ToolTip="Overall output level. A limiter after it keeps the mix from clipping."/>
                 </StackPanel>
                 <TextBlock/>
             </DockPanel>
@@ -190,7 +200,7 @@
                                                     Background="{Binding ColorBrush}" Margin="0,0,7,0"/>
                                             <Button DockPanel.Dock="Right" Content="&#x2715;" Style="{StaticResource ToolButton}"
                                                     Padding="6,1" Margin="4,0,0,0" FontSize="10"
-                                                    ToolTip="Remove this track"
+                                                    ToolTip="Remove this track from the project. Ctrl+Z brings it back."
                                                     Command="{Binding DataContext.RemoveTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"/>
                                             <c:LevelMeter DockPanel.Dock="Right" Width="6" Height="15" IsVertical="True"
@@ -232,26 +242,29 @@
                                                     IsBipolar="True"
                                                     ArcBrush="{StaticResource GoodBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                     KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Pitch in semitones, without changing speed."/>
+                                                    ToolTip="Pitch in semitones, without changing speed. Drag up/down, Shift for fine, double-click to reset."/>
 
                                             <c:Knob Width="52" Height="74" Label="LOW" Minimum="0" Maximum="2" DefaultValue="1"
                                                     Value="{Binding EqLow, Mode=TwoWay}" ValueText="{Binding EqLowText}"
                                                     ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                     KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                    ToolTip="Low band. All the way down is a true kill."/>
+                                                    ToolTip="Bass, below about 250 Hz. All the way down is a true kill: the usual move on the vocal track."/>
                                             <c:Knob Width="52" Height="74" Label="MID" Minimum="0" Maximum="2" DefaultValue="1"
                                                     Value="{Binding EqMid, Mode=TwoWay}" ValueText="{Binding EqMidText}"
                                                     ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"/>
+                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                    ToolTip="Middle, about 250 Hz to 2.5 kHz: where vocals and guitars live. All the way down is a true kill."/>
                                             <c:Knob Width="52" Height="74" Margin="0,0,10,0" Label="HIGH" Minimum="0" Maximum="2" DefaultValue="1"
                                                     Value="{Binding EqHigh, Mode=TwoWay}" ValueText="{Binding EqHighText}"
                                                     ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"/>
+                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                    ToolTip="Treble, above about 2.5 kHz: cymbals and air. All the way down is a true kill."/>
 
                                             <c:Knob Width="52" Height="74" Label="VOL" Minimum="0" Maximum="2" DefaultValue="1"
                                                     Value="{Binding Gain, Mode=TwoWay}" ValueText="{Binding GainText}"
                                                     ArcBrush="{StaticResource Text1Brush}" TrackBrush="{StaticResource Bg3Brush}"
-                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"/>
+                                                    KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
+                                                    ToolTip="This track's volume. Most of the useful cut is in the last bit of travel before silence."/>
                                         </StackPanel>
 
                                         <!-- button row -->
@@ -259,21 +272,22 @@
                                             <Button Content="Match BPM" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                     Command="{Binding DataContext.MatchTempoCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"
-                                                    ToolTip="Stretch this track to the project tempo."/>
+                                                    ToolTip="Stretch this track to the project tempo, pitch untouched. A half- or double-time reading is folded first."/>
                                             <Button Content="Match key" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                     Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"
-                                                    ToolTip="Suggest a semitone shift to sit with the other track."/>
+                                                    ToolTip="Shift this track's pitch to sit with the key of the first other track. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
                                             <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
+                                                    ToolTip="Put tempo, pitch, EQ and volume back to normal. Sections, fades, LINK, mute and solo stay as they are."
                                                     Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                     CommandParameter="{Binding}"/>
                                             <ToggleButton Content="LINK" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
                                                           IsChecked="{Binding LinkPitchToTempo, Mode=TwoWay}"
-                                                          ToolTip="Let pitch follow tempo, like speeding up a record. No phase vocoder, so nothing can smear."/>
+                                                          ToolTip="Let pitch follow tempo, like speeding up a record. Nothing is reconstructed, so nothing can smear; the PITCH knob then just reads along."/>
                                             <ToggleButton Content="M" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
-                                                          IsChecked="{Binding Muted, Mode=TwoWay}" ToolTip="Mute"/>
+                                                          IsChecked="{Binding Muted, Mode=TwoWay}" ToolTip="Mute this track."/>
                                             <ToggleButton Content="S" Style="{StaticResource PillToggle}" Margin="3,0,0,0"
-                                                          IsChecked="{Binding Soloed, Mode=TwoWay}" ToolTip="Solo"/>
+                                                          IsChecked="{Binding Soloed, Mode=TwoWay}" ToolTip="Solo: silence every other track. A muted track stays silent even when soloed."/>
                                         </StackPanel>
                                     </Grid>
                                 </Border>
@@ -338,9 +352,11 @@
                                                       Click="OnLoopModeMenu" InputGestureText="Ctrl+L"/>
                                             <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
                                             <Separator/>
-                                            <MenuItem Header="Split into vocals + instrumental"
-                                                      Command="{Binding DataContext.SplitStemsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                      CommandParameter="{Binding}"
+                                            <!-- A Click handler like every item above, never a Command bound
+                                                 through RelativeSource AncestorType=Window: a ContextMenu is
+                                                 not inside the window, so that binding comes back empty and
+                                                 the item silently does nothing. Until 2026-10-03 this one did. -->
+                                            <MenuItem Header="Split into vocals + instrumental" Click="OnSplitStems"
                                                       ToolTip="Runs on your GPU, about 20 seconds. Downloads a 64 MB model the first time."/>
                                         </ContextMenu>
                                     </Border.ContextMenu>

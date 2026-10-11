@@ -253,6 +253,27 @@ public sealed class SectionTrim
     public string? SnappedTo { get; private set; }
     public double? SnapLineSeconds { get; private set; }
 
+    /// <summary>
+    /// "Clear trim": uncovers as much of the section's song as dragging each end outward could —
+    /// back to the start of the file or the section before, on to the end of the file or the
+    /// section after. The audio stays where it is in time.
+    ///
+    /// <para>
+    /// Until 2026-10-03 it reset the section's source range in place instead. That slid the audio
+    /// to start the song at the section's left edge, and ran the section on over every section
+    /// after it: two sections sounding at once on one track, which is not representable.
+    /// </para>
+    /// </summary>
+    public static void Clear(ProjectSession session, TrackModel track, ClipModel clip)
+    {
+        new SectionTrim(session, track, clip, start: true).DragTo(0, SnapSettings.Off);
+
+        long fileFrames = session.AudioFor(clip)?.FrameCount ?? 0;
+        double beyond = TimelineEditor.TimelineSecondsAt(track,
+            clip.TrackStartSeconds + TimelineEditor.SecondsOf(fileFrames, session)) + 1;
+        new SectionTrim(session, track, clip, start: false).DragTo(beyond, SnapSettings.Off);
+    }
+
     public void DragTo(double proposedEdge, SnapSettings snap)
     {
         double at = Math.Max(0, proposedEdge);

@@ -82,8 +82,8 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode — 58 checks |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, from inside (an outside UI Automation client made Windows activate the hidden window) — 12 checks |
+| `--gesturetest <song>` | pan, double-click-to-play, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips — 80 checks |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 31 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
@@ -104,6 +104,12 @@ These **exit 1 on failure** and also log a `verdict=` line to
 - **Measure a processed track against an unprocessed one**, never a number in isolation. The
   150 ms stretcher delay survived for months because every test checked *what note* came out and
   none checked *when*.
+- **Prove a feature through the control he clicks**, not the method behind it. *Split into vocals
+  + instrumental* did nothing from the day it shipped until 2026-10-03, while every stem test
+  passed — they all called the separator directly. Its right-click menu item was bound through
+  `RelativeSource AncestorType=Window`, which a ContextMenu cannot see (it lives in its own popup),
+  so the command was empty and the item drew as enabled. Menu items use `Click` handlers;
+  `MenuWiringTests` fails on the binding.
 - Where the invariant is exactness, assert `==`, not a tolerance.
 - One regression test per fixed defect, named for the behaviour that was wrong, with an assertion
   message stating the musical consequence.
@@ -120,7 +126,9 @@ These **exit 1 on failure** and also log a `verdict=` line to
 - **An untouched track is bit-identical — with the limiter OFF.** The limiter is on by default and
   does attenuate a loud track. Overstating this is a logged mistake with its own test.
 - **Every editing shortcut is Ctrl-modified**, because a bare key bound on the Window also fires
-  from inside the PROJECT BPM TextBox.
+  from inside the PROJECT BPM TextBox. The one bare key that acts, Delete (2026-10-03), is
+  deliberately **not** a KeyBinding: `OnWindowPreviewKeyDown` runs it only when the keyboard focus
+  is not in a text box, and `--gesturetest` fails if a Delete KeyBinding ever appears.
 - **Nothing touches his own music files without an explicit yes.** Tag write-back is offered, not
   done.
 
@@ -144,4 +152,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-09-24.*
+*Revised 2026-10-03.*

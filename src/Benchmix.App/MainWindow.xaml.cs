@@ -513,6 +513,15 @@ public partial class MainWindow : Window
             _vm.LoopMode = false;
         }
 
+        // --- selecting several sections: Ctrl+click, Shift+click, Delete; and tooltips ---
+        try { RunSelectionGestures(Check, notes); }
+        finally
+        {
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _scriptedFocus = null;
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -532,6 +541,186 @@ public partial class MainWindow : Window
         string untested = notes.Count == 0 ? "" : $", {notes.Count} areas untested";
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks{untested}" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}{untested}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// Selecting more than one section (Daniel, 2026-10-03): Ctrl+click adds or removes one,
+    /// Shift+click takes the range, Delete removes the lot — and every button explains itself on
+    /// hover. Through the real lane handlers with a scripted pointer, like
+    /// <see cref="RunEditingGestures"/>.
+    /// </summary>
+    private void RunSelectionGestures(Action<string, bool> Check, List<string> notes)
+    {
+        // --- every button, knob and slider carries a tooltip ---
+        //
+        // Parts of a control's own template (a scrollbar's arrows, a slider's thumb) are not
+        // buttons the user reads, so they are left out.
+        var silent = new List<string>();
+        int examined = 0;
+        foreach (var el in Descendants(this))
+        {
+            if (el is not (System.Windows.Controls.Primitives.ButtonBase or Controls.Knob or Slider)) continue;
+            if (el is System.Windows.Controls.Primitives.RepeatButton) continue;
+            if (el is FrameworkElement { TemplatedParent: Control }) continue;
+            examined++;
+            if (el is FrameworkElement { ToolTip: string { Length: > 0 } }) continue;
+            silent.Add(el switch
+            {
+                System.Windows.Controls.Primitives.ButtonBase { Content: string s } => s,
+                Controls.Knob k => k.Label,
+                _ => el.GetType().Name,
+            });
+        }
+        Check($"every button has a tooltip ({examined} checked{(silent.Count == 0 ? "" : $"; missing: {string.Join(", ", silent.Distinct())}")})",
+              silent.Count == 0 && examined > 0);
+        if (_vm.Tracks.Count == 0) notes.Add("no track rows, so the per-track buttons and knobs were not checked for tooltips");
+
+        var track = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && !t.IsEmpty);
+        if (track is null) { notes.Add("no loaded track, so multi-selection is untested - pass a file to cover it"); return; }
+        _vm.SelectedTrack = track;
+        _vm.LoopMode = false;
+
+        // Four sections to choose between, cut from the longest one if there are not enough yet.
+        for (int guard = 0; track.Clips.Count < 4 && guard < 6; guard++)
+        {
+            var longest = track.Clips.OrderByDescending(c => c.TimelineLengthSeconds).First();
+            _vm.SeekTo(longest.TimelineStartSeconds + longest.TimelineLengthSeconds / 2);
+            _vm.SplitAtPlayheadCommand.Execute(null);
+        }
+        var ordered = track.Clips.OrderBy(c => c.TimelineStartSeconds).ToList();
+        Check($"there are sections to select between (got {ordered.Count})", ordered.Count >= 4);
+        if (ordered.Count < 4) return;
+
+        UpdateLayout();
+        PumpUntil(() => LaneOf(track) is { ActualHeight: > 0 });
+        var lane = LaneOf(track);
+        if (lane is null) { notes.Add("the lane was not laid out, so multi-selection is untested"); return; }
+        double pps = _vm.PixelsPerSecond;
+
+        Point Mid(ClipViewModel c)
+        {
+            var origin = lane.TranslatePoint(new Point(0, 0), this);
+            double seconds = c.TimelineStartSeconds + c.TimelineLengthSeconds / 2;
+            return new Point(origin.X + (seconds - _vm.ScrollSeconds) * pps, origin.Y + lane.ActualHeight / 2);
+        }
+
+        // A press and a release with no movement between, with exactly these keys held — never
+        // the real keyboard's, which belongs to whoever is using the machine.
+        void Click(ClipViewModel c, ModifierKeys with)
+        {
+            _scriptedModifiers = with;
+            _scriptedWindowPoint = Mid(c);
+            LaneDown(lane, _scriptedWindowPoint.Value);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = ModifierKeys.None;        // the keys go up with the button
+        }
+        int Selected() => _vm.SelectedClips.Count;
+        _scriptedModifiers = ModifierKeys.None;
+
+        Click(ordered[0], ModifierKeys.None);
+        Check($"a plain click selects one section (got {Selected()})", Selected() == 1 && ordered[0].IsSelected);
+
+        Click(ordered[1], ModifierKeys.Control);
+        Check($"Ctrl+click adds a second section to the selection (got {Selected()})",
+              Selected() == 2 && ordered[0].IsSelected && ordered[1].IsSelected);
+        Check("the section Ctrl+click added is the one commands act on", ReferenceEquals(_vm.SelectedClip, ordered[1]));
+
+        Click(ordered[1], ModifierKeys.Control);
+        Check($"Ctrl+click on a selected section takes it out again (got {Selected()})",
+              Selected() == 1 && ordered[0].IsSelected && !ordered[1].IsSelected);
+        Check("commands fall back to a section that is still selected", ReferenceEquals(_vm.SelectedClip, ordered[0]));
+
+        // --- Delete while a section is held under the mouse is refused ---
+        _scriptedWindowPoint = Mid(ordered[0]);
+        LaneDown(lane, _scriptedWindowPoint.Value);
+        int held = track.Clips.Count;
+        bool refused = !PressDelete();
+        LaneUp(lane);
+        _scriptedWindowPoint = null;
+        Check("Delete while a section is held under the mouse is refused", refused && track.Clips.Count == held);
+
+        Click(ordered[0], ModifierKeys.None);
+        Click(ordered[2], ModifierKeys.Shift);
+        Check($"Shift+click selects every section between (got {Selected()})",
+              Selected() == 3 && ordered[0].IsSelected && ordered[1].IsSelected && ordered[2].IsSelected && !ordered[3].IsSelected);
+        Check("after Shift+click the section clicked last is the one commands act on", ReferenceEquals(_vm.SelectedClip, ordered[2]));
+
+        // --- the right-click menu acts on the section right-clicked, not the first selected ---
+        // A right-click on a selected section calls MakePrimary; ClipOf is what every menu item
+        // (fades, trims, move to playhead) reads.
+        _vm.MakePrimary(ordered[0]);
+        Check("the menu acts on the right-clicked section, not the first selected one",
+              ReferenceEquals(ClipOf(lane), ordered[0]) && Selected() == 3);
+        _vm.MakePrimary(ordered[2]);
+        Check("right-clicking another selected section moves the menu's target to it",
+              ReferenceEquals(ClipOf(lane), ordered[2]) && Selected() == 3);
+
+        // --- Delete through the real key handler, with the focus scripted ---
+        int before = track.Clips.Count;
+        var source = PresentationSource.FromVisual(this);
+        if (source is null)
+        {
+            notes.Add("no presentation source, so the Delete key handler was not driven");
+        }
+        else
+        {
+            KeyEventArgs Press() => new(Keyboard.PrimaryDevice, source, 0, Key.Delete) { RoutedEvent = PreviewKeyDownEvent };
+
+            _scriptedFocus = BpmBox;
+            var inBox = Press();
+            OnWindowPreviewKeyDown(this, inBox);
+            Check("Delete with the focus in PROJECT BPM is left to the box", !inBox.Handled && track.Clips.Count == before);
+
+            _scriptedFocus = new ContextMenu();
+            var inMenu = Press();
+            OnWindowPreviewKeyDown(this, inMenu);
+            Check("Delete while a menu is open is left to the menu", !inMenu.Handled && track.Clips.Count == before);
+
+            _scriptedFocus = this;
+            var onTimeline = Press();
+            OnWindowPreviewKeyDown(this, onTimeline);
+            Check($"Delete removes every selected section in one go (got {track.Clips.Count}, was {before})",
+                  onTimeline.Handled && track.Clips.Count == before - 3);
+            _scriptedFocus = null;
+        }
+        if (track.Clips.Count == before) { PressDelete(); }    // no source: at least exercise the path
+        Check($"the status bar counts them (\"{_vm.Status}\")", _vm.Status.Contains("3 sections"));
+
+        var trackId = track.Id;
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == trackId)?.Clips.Count == before);
+        track = _vm.Tracks.FirstOrDefault(t => t.Id == trackId);
+        Check($"one undo brings all three back (got {track?.Clips.Count})", track?.Clips.Count == before);
+
+        // --- Delete is harmless with nothing selected, even with the playhead on a section ---
+        _vm.SelectClip(null);
+        if (track is not null)
+        {
+            _vm.SelectedTrack = track;
+            var under = track.Clips.OrderBy(c => c.TimelineStartSeconds).Skip(1).First();
+            _vm.SeekTo(under.TimelineStartSeconds + under.TimelineLengthSeconds / 2);
+        }
+        int untouched = track?.Clips.Count ?? -1;
+        bool acted = PressDelete();
+        Check("Delete with nothing selected deletes nothing, even with the playhead on a section",
+              !acted && track?.Clips.Count == untouched);
+        Check("Delete inside a text box is left to the text box", !DeleteKeyAppliesTo(new TextBox()));
+        Check("Delete inside a menu is left to the menu", !DeleteKeyAppliesTo(new ContextMenu()) && !DeleteKeyAppliesTo(new MenuItem()));
+        Check("Delete anywhere else is the timeline's", DeleteKeyAppliesTo(lane) && DeleteKeyAppliesTo(this) && DeleteKeyAppliesTo(null));
+        Check("Delete is not a bare KeyBinding, so it cannot fire inside the PROJECT BPM box",
+              !InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Delete));
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        int n = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var d in Descendants(child)) yield return d;
+        }
     }
 
     /// <summary>
@@ -788,10 +977,199 @@ public partial class MainWindow : Window
             Check("same key recognised", Labels().Contains("same key"));
         }
 
+        await CheckSplitThroughMenuAsync(Check, Labels);
+        await CheckUndoResetAndNewAsync(Check, Click, Buttons);
+
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
         foreach (var f in fail) App.Log("buttontest: FAIL - " + f);
         App.Log($"buttontest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// "Split into vocals + instrumental" pressed through the real right-click menu item, on the
+    /// topper, and the result checked against the original.
+    ///
+    /// <para>
+    /// Until 2026-10-03 this item did nothing at all. Its command was bound by looking up the
+    /// window, and a right-click menu is not inside the window, so the binding came back empty and
+    /// a click went nowhere, with nothing on screen to say so. Every check of separation went
+    /// straight to the engine and passed; none went through the menu, which is the only way in.
+    /// </para>
+    /// </summary>
+    private async Task CheckSplitThroughMenuAsync(Action<string, bool> check, Func<string> labels)
+    {
+        var topper = _vm.Tracks.Count == 2 ? _vm.Tracks[1] : null;
+        var lane = topper is null ? null : LaneOf(topper);
+        var item = lane?.ContextMenu?.Items.OfType<MenuItem>()
+                       .FirstOrDefault(m => m.Header as string == "Split into vocals + instrumental");
+        check("the lane's right-click menu offers 'Split into vocals + instrumental'", item is not null);
+        if (topper is null || item is null) return;
+
+        // What the right-click itself does before the menu opens. The bed is selected first so a
+        // split of the wrong track cannot pass.
+        _vm.SelectedTrack = _vm.Tracks[0];
+        _vm.SelectedTrack = topper;
+        var original = topper.Model;
+        var sections = original.Clips.Select(c => (c.TrackStartSeconds, c.SourceStartSeconds, c.SourceEndSeconds)).ToList();
+
+        try
+        {
+            var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer(item);
+            ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        }
+        catch (Exception ex)
+        {
+            check($"the menu item can be clicked ({ex.GetType().Name}: {ex.Message})", false);
+            return;
+        }
+
+        // The peer queues the click. A split that started shows within a moment; one that never
+        // starts must fail now rather than after the long wait for one that did.
+        var deadline = Environment.TickCount64 + 3000;
+        while (!_vm.IsBusy && _vm.Tracks.Count == 2 && Environment.TickCount64 < deadline)
+            await Task.Delay(50);
+        bool started = _vm.IsBusy || _vm.Tracks.Count > 2;
+        check($"clicking it starts separating (status: '{_vm.Status}')", started);
+        if (!started) return;
+
+        deadline = Environment.TickCount64 + 180_000;
+        while (_vm.IsBusy && Environment.TickCount64 < deadline) await Task.Delay(250);
+        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        UpdateLayout();
+
+        var vocals = _vm.Tracks.FirstOrDefault(t => t.Name.EndsWith("— vocals"));
+        var instrumental = _vm.Tracks.FirstOrDefault(t => t.Name.EndsWith("— instrumental"));
+        check($"it finishes with a vocals track and an instrumental track ({_vm.Tracks.Count} tracks; status: '{_vm.Status}')",
+              _vm.Tracks.Count == 4 && vocals is not null && instrumental is not null);
+        check("the status bar reports the split", labels().Contains($"Split {topper.Name} in "));
+        check("the original is muted, not removed", _vm.Tracks.Contains(topper) && topper.Muted);
+        if (vocals is null || instrumental is null) return;
+
+        // Measured against the original, not as a number on its own: a separation that ran but
+        // put nothing in the vocal stem would still leave two tracks behind.
+        static double Db(float[]? x)
+        {
+            if (x is null || x.Length == 0) return -200;
+            double s = 0;
+            foreach (var v in x) s += v * (double)v;
+            double r = Math.Sqrt(s / x.Length);
+            return r <= 1e-12 ? -200 : 20 * Math.Log10(r);
+        }
+        double mixDb = Db(_vm.Session.ClipFor(original)?.Samples);
+        double vocalDb = Db(_vm.Session.ClipFor(vocals.Model)?.Samples);
+        double instDb = Db(_vm.Session.ClipFor(instrumental.Model)?.Samples);
+        App.Log($"buttontest: split levels mix={mixDb:F1}dB vocals={vocalDb:F1}dB instrumental={instDb:F1}dB");
+        check($"the vocal stem carries the voice: {vocalDb - mixDb:F1} dB against the original (a song with no voice measured -44)",
+              vocalDb - mixDb > -20);
+        check($"the instrumental is not silent: {instDb - mixDb:F1} dB against the original", instDb - mixDb > -20);
+
+        // Section for section, frame for frame: the stems must land exactly on the original, or
+        // they play out of time with it and with everything matched to it.
+        foreach (var stem in new[] { vocals, instrumental })
+        {
+            var got = stem.Model.Clips.Select(c => (c.TrackStartSeconds, c.SourceStartSeconds, c.SourceEndSeconds)).ToList();
+            check($"'{stem.Name}' lands exactly on the original's sections", got.SequenceEqual(sections)
+                  && stem.Model.TimelineOffsetSeconds == original.TimelineOffsetSeconds);
+        }
+
+        _vm.UndoCommand.Execute(null);
+        await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        var back = _vm.Tracks.FirstOrDefault(t => t.Model.Id == original.Id);
+        check($"one Ctrl+Z undoes the whole split ({_vm.Tracks.Count} tracks, original muted={back?.Muted})",
+              _vm.Tracks.Count == 2 && back is { Muted: false });
+    }
+
+    /// <summary>
+    /// Undo, Reset and New through the real commands and the real Reset button. Each check is one
+    /// of the defects found on 2026-10-03 while the user guide was being checked against the app,
+    /// and fails without its fix.
+    /// </summary>
+    private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,
+                                                 Func<string, List<Button>> buttons)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        await Settle();
+        if (_vm.Tracks.Count != 2) { check($"two tracks to work on (found {_vm.Tracks.Count})", false); return; }
+        var topperId = _vm.Tracks[1].Id;
+        TrackViewModel Topper() => _vm.Tracks.First(t => t.Id == topperId);
+        string bedPath = _vm.Tracks[0].Model.SourcePath;
+
+        // --- an undo leaves the playhead where it was ---
+        _vm.SelectedTrack = Topper();
+        _vm.SeekTo(37.5);
+        int sections = Topper().Clips.Count;
+        _vm.SplitAtPlayheadCommand.Execute(null);
+        check("a split to undo", Topper().Clips.Count == sections + 1);
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        // The engine's position, not the view-model's: on screen a timer copies the engine's onto
+        // the playhead, and nothing ticks it in a scripted run — reading the view-model passed
+        // against the very bug.
+        double engineAt = _vm.Session.Engine.PositionSeconds;
+        check($"Ctrl+Z leaves the playhead where it was (37.500s; the engine is at {engineAt:0.000}s) — "
+            + "at 0:00 the next split or paste lands at the start of the song",
+              engineAt == 37.5 && _vm.PositionSeconds == 37.5 && Topper().Clips.Count == sections);
+
+        // --- a refused command does not use up a press of Ctrl+Z ---
+        _vm.SelectedTrack = Topper();
+        _vm.SplitAtPlayheadCommand.Execute(null);                 // real: at 37.5
+        _vm.SeekTo(9999);
+        _vm.SplitAtPlayheadCommand.Execute(null);                 // refused: nothing there
+        string refused = _vm.Status;
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        check($"after a refused split ('{refused}'), one Ctrl+Z undoes the split before it ({Topper().Clips.Count} sections, want {sections})",
+              Topper().Clips.Count == sections);
+
+        // --- Reset is one undo step, through the real button ---
+        var t = Topper();
+        t.EqLow = 0.5; _vm.EndGesture();
+        t.Gain = 0.5; _vm.EndGesture();
+        t.Speed = 1.1; _vm.EndGesture();
+        var reset = buttons("Reset");
+        if (reset.Count >= 2)
+        {
+            await click(reset[1]);
+            check("Reset puts the knobs back", Topper() is { EqLow: 1, Gain: 1, Speed: 1 });
+            _vm.UndoCommand.Execute(null);
+            await Settle();
+            var back = Topper();
+            check($"one Ctrl+Z undoes the whole Reset (LOW {back.EqLow}, VOL {back.Gain}, TEMPO {back.Speed}; want 0.5, 0.5, 1.1)",
+                  back is { EqLow: 0.5, Gain: 0.5, Speed: 1.1 });
+        }
+        else check($"Reset buttons for the Reset check (found {reset.Count})", false);
+
+        // --- an undo after saving counts as a change ---
+        var dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "undo-check");
+        try
+        {
+            Directory.CreateDirectory(dir);
+            _vm.SaveTo(Path.Combine(dir, "undo-check.benchmix"));
+            bool clean = !_vm.WindowTitle.EndsWith("*");
+            _vm.UndoCommand.Execute(null);
+            await Settle();
+            check($"an undo after saving marks the project changed (title '{_vm.WindowTitle}') — otherwise closing does not warn",
+                  clean && _vm.WindowTitle.EndsWith("*"));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { } }
+
+        // --- New leaves nothing selected and nothing unsaved ---
+        await _vm.NewCommand.ExecuteAsync(null);
+        await Settle();
+        check($"after New no track is selected (selected: {_vm.SelectedTrack?.Name ?? "none"}) — a paste would go to a track no longer there",
+              _vm.Tracks.Count == 0 && _vm.SelectedTrack is null);
+        check($"after New the project is not marked changed (title '{_vm.WindowTitle}')", !_vm.WindowTitle.EndsWith("*"));
+        await _vm.AddFilesAsync(new[] { bedPath });
+        await Settle();
+        check("a song added after New becomes the selected track",
+              _vm.Tracks.Count == 1 && ReferenceEquals(_vm.SelectedTrack, _vm.Tracks[0]));
     }
 
     /// <summary>Every visual descendant of a given type, in tree order.</summary>
@@ -1042,6 +1420,7 @@ public partial class MainWindow : Window
 
     private void OnRulerMouseDown(object sender, MouseButtonEventArgs e)
     {
+        TakeKeyboardFromText();
         var host = (FrameworkElement)sender;
         double seconds = SecondsAtRulerX(e.GetPosition(host).X);
 
@@ -1096,7 +1475,44 @@ public partial class MainWindow : Window
 
     private void OnTrackHeaderClicked(object sender, MouseButtonEventArgs e)
     {
+        TakeKeyboardFromText();
         if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+    }
+
+    /// <summary>
+    /// Delete removes the selected sections. It is handled here, not as a KeyBinding, because a
+    /// bare key bound on the Window also fires from inside the PROJECT BPM box — so it only acts
+    /// when the keyboard focus is not in a text box, where Delete means a character.
+    /// </summary>
+    private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Delete || Modifiers != ModifierKeys.None) return;
+        if (e.IsRepeat) { e.Handled = true; return; }              // a held key is one press
+
+        // OriginalSource is the element the key was raised on — the focused one, including one
+        // inside an open menu's popup, which Keyboard.FocusedElement does not report.
+        if (!DeleteKeyAppliesTo(e.OriginalSource as IInputElement ?? FocusedForKeys)) return;
+        if (PressDelete()) e.Handled = true;
+    }
+
+    /// <summary>
+    /// Whether a Delete press with this element focused is for the timeline rather than for text
+    /// being typed or a menu being used.
+    /// </summary>
+    public static bool DeleteKeyAppliesTo(IInputElement? focused)
+        => focused is not (System.Windows.Controls.Primitives.TextBoxBase or PasswordBox
+                           or System.Windows.Controls.Primitives.MenuBase or MenuItem);
+
+    /// <summary>
+    /// What the Delete key does: removes every selected section, and nothing when none is selected
+    /// — or while a section is held under the mouse, armed or dragging, because deleting it would
+    /// leave the drag holding a section that is no longer on the track, and the drop would then
+    /// clear whatever is under its ghost.
+    /// </summary>
+    private bool PressDelete()
+    {
+        if (_dragClip is not null) { _vm.Status = "Let go of the section first."; return false; }
+        return _vm.DeleteSelection(fallBackToPlayhead: false);
     }
 
     /// <summary>How close to a section's edge counts as grabbing the edge rather than the body.</summary>
@@ -1107,6 +1523,16 @@ public partial class MainWindow : Window
     private TrackViewModel? _dragTrack;
     private ClipViewModel? _dragClip;
     private DragKind _dragKind;
+
+    /// <summary>
+    /// A Ctrl+click waiting for its release: it flips the section in or out of the selection only
+    /// if the pointer did not move, because Ctrl held through a drag means "place it freely".
+    /// </summary>
+    private ClipViewModel? _pendingToggle;
+
+    /// <summary>The gesture test's stand-in for the focused element; a scripted run never holds the keyboard.</summary>
+    private IInputElement? _scriptedFocus;
+    private IInputElement? FocusedForKeys => _scriptedFocus ?? Keyboard.FocusedElement;
     private Point _dragOrigin;
     private double _dragStartTimelineStart;
     private double _dragStartEdge;
@@ -1190,7 +1616,21 @@ public partial class MainWindow : Window
 
     private void OnLaneMouseDown(object sender, MouseButtonEventArgs e)
     {
+        TakeKeyboardFromText();
         if (LaneDown((FrameworkElement)sender, WindowPoint(e))) e.Handled = true;
+    }
+
+    /// <summary>
+    /// A real press on the timeline takes the keyboard away from a text box, so Delete reaches the
+    /// sections and a tempo typed into PROJECT BPM is committed (its binding updates on LostFocus).
+    /// Only when the focus really is in a text box — a knob that holds focus keeps it — and never
+    /// in a scripted run: the hidden window does not hold the keyboard, and asking Windows for it
+    /// would activate the window, the one thing a scripted run must never do.
+    /// </summary>
+    private void TakeKeyboardFromText()
+    {
+        if (App.IsScriptedRun) return;
+        if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase or PasswordBox) Keyboard.Focus(this);
     }
 
     private void OnLaneMouseMove(object sender, MouseEventArgs e)
@@ -1205,6 +1645,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnLaneLostCapture(object sender, MouseEventArgs e)
     {
+        _pendingToggle = null;                         // losing the mouse is not a click
         if (_dragClip is not null) LaneUp((FrameworkElement)sender);
     }
 
@@ -1223,7 +1664,23 @@ public partial class MainWindow : Window
         }
 
         var clip = ClipAtLaneX(vm, x);
-        _vm.SelectClip(clip);
+
+        // A Ctrl- or Shift-click in a gap selects the track and leaves the selection alone.
+        if (clip is null && (Modifiers.HasFlag(ModifierKeys.Shift) || Modifiers.HasFlag(ModifierKeys.Control))) return true;
+
+        // Shift+click selects the range from the anchor — the section clicked before this — to
+        // this one, and that is all it does: no drag starts from it.
+        if (clip is not null && Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            _vm.SelectClipRange(clip);
+            return true;
+        }
+
+        // Ctrl+click flips this section in or out of the selection — but only if the press is
+        // released without moving, because Ctrl held through a drag means "place it freely" and
+        // that drag must still start from here. The press only arms the toggle.
+        if (clip is not null && Modifiers.HasFlag(ModifierKeys.Control)) _pendingToggle = clip;
+        else _vm.SelectClip(clip);
         if (clip is null) return true;                 // clicking a gap just clears the selection
 
         _dragTrack = vm;
@@ -1310,13 +1767,19 @@ public partial class MainWindow : Window
     {
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
+        var toggle = _pendingToggle;
         _dragTrack = null;
         _dragClip = null;
         _dragging = false;
+        _pendingToggle = null;
 
         if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
         if (dragging) _vm.EndDrag();
-        else _vm.EndGesture();
+        else
+        {
+            if (toggle is not null) _vm.ToggleClipSelection(toggle);   // a Ctrl+click that stayed put
+            _vm.EndGesture();
+        }
     }
 
     /// <summary>
@@ -1328,8 +1791,14 @@ public partial class MainWindow : Window
     {
         var lane = (FrameworkElement)sender;
         if (lane.DataContext is not TrackViewModel vm) return;
+        TakeKeyboardFromText();
         _vm.SelectedTrack = vm;
-        _vm.SelectClip(ClipAtLaneX(vm, e.GetPosition(lane).X));
+        var clip = ClipAtLaneX(vm, e.GetPosition(lane).X);
+
+        // Right-clicking one of several selected sections keeps the selection, so the menu's
+        // Delete can remove them all; anywhere else it selects what is under the pointer.
+        if (clip is not null && clip.IsSelected) _vm.MakePrimary(clip);
+        else _vm.SelectClip(clip);
     }
 
     private void OnLaneContextMenuOpening(object sender, ContextMenuEventArgs e)
@@ -1352,8 +1821,17 @@ public partial class MainWindow : Window
     /// The section a menu item acts on: whichever one is selected on that track, which the
     /// right-click itself just set.
     /// </summary>
+    /// <summary>
+    /// The section a menu item acts on: the one the right-click made primary when it is on this
+    /// track, otherwise whichever one is selected there. With several selected, the first in the
+    /// list is not the one under the pointer.
+    /// </summary>
     private ClipViewModel? ClipOf(object sender)
-        => TrackOf(sender)?.Clips.FirstOrDefault(c => c.IsSelected);
+    {
+        if (TrackOf(sender) is not { } track) return null;
+        if (_vm.SelectedClip is { IsSelected: true } primary && track.Clips.Contains(primary)) return primary;
+        return track.Clips.FirstOrDefault(c => c.IsSelected);
+    }
 
     /// <summary>
     /// Parses a menu Tag invariantly. These are literals in XAML, so they are always written with a
@@ -1415,11 +1893,7 @@ public partial class MainWindow : Window
     private void OnClearTrim(object sender, RoutedEventArgs e)
     {
         if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
-        _vm.PushUndo("clear trim", null);
-        c.SourceStartSeconds = 0;
-        c.SourceEndSeconds = -1;
-        _vm.RecomputeLength();
-        _vm.Status = $"{c.Track.Name}: full length restored.";
+        _vm.ClearTrim(c);
     }
 
     private void OnMoveToPlayhead(object sender, RoutedEventArgs e)
@@ -1438,6 +1912,7 @@ public partial class MainWindow : Window
     private void OnPasteSection(object sender, RoutedEventArgs e) => _vm.PasteClipCommand.Execute(null);
     private void OnDuplicateSection(object sender, RoutedEventArgs e) => _vm.DuplicateClipCommand.Execute(null);
     private void OnDeleteSection(object sender, RoutedEventArgs e) => _vm.DeleteClipCommand.Execute(null);
+    private void OnSplitStems(object sender, RoutedEventArgs e) => _vm.SplitStemsCommand.Execute(TrackOf(sender));
 
     // ---------------- right-drag: pan the timeline ----------------
 

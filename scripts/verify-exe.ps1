@@ -15,14 +15,17 @@
     It refuses to launch an exe older than the source: a build from before scripted runs were
     invisible would open on screen and take focus.
 
-    Usage:  powershell -ExecutionPolicy Bypass -File scripts\verify-exe.ps1 [-Exe <path>] [-ShotDir <dir>]
-    Exit:   0 = every run passed and stayed out of the way
+    Usage:  powershell -ExecutionPolicy Bypass -File scripts\verify-exe.ps1 [-Exe <path>] [-ShotDir <dir>] [-Only <name>]
+            -Only runs just the named runs (e.g. -Only buttontest), still watched from outside. That
+            proves one switch, not the exe: the full set is still the bar.
+    Exit:  0 = every run passed and stayed out of the way
             1 = a run failed, or got in the way, or the exe is out of date
             2 = incomplete: the sample songs are missing, so only --latencycheck ran
 #>
 param(
     [string]$Exe = "$env:LOCALAPPDATA\Benchmix.build\publish\Benchmix.App\release_win-x64\Benchmix.exe",
-    [string]$ShotDir = (Join-Path $env:TEMP 'benchmix-verify')
+    [string]$ShotDir = (Join-Path $env:TEMP 'benchmix-verify'),
+    [string[]]$Only = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +63,11 @@ if ($haveSongs) {
     )
 }
 
+if ($Only.Count -gt 0) {
+    $runs = @($runs | Where-Object { $Only -contains $_.Name })
+    if ($runs.Count -eq 0) { Write-Host "No run is called $($Only -join ', '). Nothing was launched."; exit 1 }
+}
+
 $failed = 0
 foreach ($r in $runs) {
     $before = if (Test-Path $log) { (Get-Content $log).Count } else { 0 }
@@ -84,4 +92,5 @@ foreach ($r in $runs) {
 Write-Host ""
 if ($failed -gt 0) { Write-Host "VERIFY: $failed run(s) failed or got in the way"; exit 1 }
 if (-not $haveSongs) { Write-Host "VERIFY: incomplete - only --latencycheck ran"; exit 2 }
+if ($Only.Count -gt 0) { Write-Host "VERIFY: the selected run(s) passed - $($runs.Count) of the full set, so this is not the whole bar"; exit 0 }
 Write-Host "VERIFY: every run passed and stayed out of the way"; exit 0

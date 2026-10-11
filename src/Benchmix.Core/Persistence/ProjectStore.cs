@@ -29,6 +29,9 @@ public static class ProjectStore
         Converters = { new JsonStringEnumConverter() },
     };
 
+    /// <summary>The project exactly as it would be saved, for telling two states apart.</summary>
+    internal static string Fingerprint(BenchmixProject project) => JsonSerializer.Serialize(project, Options);
+
     public sealed record LoadResult(BenchmixProject Project, string LoadedFrom, bool UsedFallback, string? Note);
 
     public static void Save(BenchmixProject project, string path, string? timestampForBackup = null)
@@ -239,29 +242,52 @@ public sealed class UndoStack
         NextUndoLabel = label;
     }
 
+    /// <summary>
+    /// Steps back to the last state that differs from <paramref name="current"/>.
+    ///
+    /// <para>
+    /// A snapshot is taken before a command knows whether it will change anything, so a refused
+    /// command — a split with nothing under the playhead, a delete with nothing selected — still
+    /// left one behind, identical to the project. Ctrl+Z then restored the same state and seemed
+    /// to do nothing, and the press after it undid the edit actually wanted. Those steps are
+    /// skipped (until 2026-10-03 they were not).
+    /// </para>
+    /// </summary>
     public BenchmixProject? Undo(BenchmixProject current)
     {
-        if (_past.Count == 0) return null;
-        var previous = _past[^1];
-        _past.RemoveAt(_past.Count - 1);
-        var label = _labels[^1];
-        _labels.RemoveAt(_labels.Count - 1);
+        string now = ProjectStore.Fingerprint(current);
+        while (_past.Count > 0)
+        {
+            var previous = _past[^1];
+            _past.RemoveAt(_past.Count - 1);
+            var label = _labels[^1];
+            _labels.RemoveAt(_labels.Count - 1);
+            if (ProjectStore.Fingerprint(previous) == now) continue;
 
-        _future.Add(current.Clone());
-        NextUndoLabel = _labels.Count > 0 ? _labels[^1] : null;
-        RedoLabel = label;
-        return previous;
+            _future.Add(current.Clone());
+            NextUndoLabel = _labels.Count > 0 ? _labels[^1] : null;
+            RedoLabel = label;
+            return previous;
+        }
+        NextUndoLabel = null;
+        return null;
     }
 
     public BenchmixProject? Redo(BenchmixProject current)
     {
-        if (_future.Count == 0) return null;
-        var next = _future[^1];
-        _future.RemoveAt(_future.Count - 1);
-        _past.Add(current.Clone());
-        _labels.Add(RedoLabel ?? "change");
-        NextUndoLabel = _labels[^1];
-        return next;
+        string now = ProjectStore.Fingerprint(current);
+        while (_future.Count > 0)
+        {
+            var next = _future[^1];
+            _future.RemoveAt(_future.Count - 1);
+            if (ProjectStore.Fingerprint(next) == now) continue;
+
+            _past.Add(current.Clone());
+            _labels.Add(RedoLabel ?? "change");
+            NextUndoLabel = _labels[^1];
+            return next;
+        }
+        return null;
     }
 
     public string? RedoLabel { get; private set; }

@@ -354,9 +354,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        PushUndo($"match {track.Name} to {target:F1} BPM");
-        var (speed, from) = Session.MatchTempo(track.Model, target);
-        track.Speed = speed;
+        double speed = 1, from = 0;
+        AsOneUndoStep($"match {track.Name} to {target:F1} BPM", () =>
+        {
+            (speed, from) = Session.MatchTempo(track.Model, target);
+            track.Speed = speed;
+        });
         RecomputeLength();
         MarkDirty();
 
@@ -381,9 +384,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        PushUndo($"match {track.Name} key");
-        track.LinkPitchToTempo = false;
-        track.Semitones = semis.Value;
+        AsOneUndoStep($"match {track.Name} key", () =>
+        {
+            track.LinkPitchToTempo = false;
+            track.Semitones = semis.Value;
+        });
         MarkDirty();
 
         string caveat = track.KeyIsEstimate || reference.KeyIsEstimate
@@ -471,11 +476,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         track ??= SelectedTrack;
         if (track is null) return;
 
-        PushUndo($"reset {track.Name}");
-        track.Speed = 1;
-        track.Semitones = 0;
-        track.EqLow = track.EqMid = track.EqHigh = 1;
-        track.Gain = 1;
+        AsOneUndoStep($"reset {track.Name}", () =>
+        {
+            track.Speed = 1;
+            track.Semitones = 0;
+            track.EqLow = track.EqMid = track.EqHigh = 1;
+            track.Gain = 1;
+        });
         MarkDirty();
         Status = $"{track.Name} back to its original tempo, pitch and EQ.";
     }
@@ -493,13 +500,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // loop still wrapping playback in a project that no longer has one.
         await Session.OpenAsync(new BenchmixProject { SampleRate = Session.SampleRate });
         Tracks.Clear();
+        // The selection goes with the tracks. Left behind, it pointed at a track no longer on
+        // screen: Ctrl+V and Ctrl+I reported success on it while nothing appeared, and songs added
+        // afterwards never became selected because something already was.
+        SelectClip(null);
+        SelectedTrack = null;
         LoopStart = null;
         LoopEnd = null;
         MasterGain = 1.0;
+        ProjectBpm = 0;                 // before _dirty is cleared: setting it marks the project changed
         _projectPath = null;
         _undo.Clear();
         _dirty = false;
-        ProjectBpm = 0;
         RecomputeLength();
         UpdateTitle();
         Status = "New project.";
@@ -579,7 +591,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveTo(dlg.FileName);
     }
 
-    private void SaveTo(string path)
+    internal void SaveTo(string path)
     {
         try
         {
@@ -695,11 +707,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         var keepTrack = SelectedTrack?.Id;
         var keepClip = SelectedClip?.Id;
+        var keepSelected = SelectedClips.Select(c => c.Id).ToHashSet();
+
+        // Undo changes the edit, not where you are listening: the playhead and the listening loop
+        // stay as they are. Reloading rewinds to 0:00, so until 2026-10-03 every Ctrl+Z sent the
+        // next split or paste to the start of the song, and a loop changed since the step being
+        // undone came back in the engine while the band on screen still showed the new one.
+        double at = PositionSeconds;
+        project.LoopStartSeconds = Session.Project.LoopStartSeconds;
+        project.LoopEndSeconds = Session.Project.LoopEndSeconds;
 
         IsBusy = true;
         try
         {
             await Session.OpenAsync(project);
+            SeekTo(at);
             Tracks.Clear();
             foreach (var m in project.Tracks)
             {
@@ -710,9 +732,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
             SelectedTrack = Tracks.FirstOrDefault(t => t.Id == keepTrack) ?? Tracks.FirstOrDefault();
             SelectClip(Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == keepClip));
+            foreach (var c in Tracks.SelectMany(t => t.Clips))
+                if (keepSelected.Contains(c.Id)) c.IsSelected = true;      // the rest of a multi-selection
+            foreach (var t in Tracks) t.NotifyClipsChanged();
             ProjectBpm = project.ProjectBpm;
             MasterGain = project.MasterGain;
             RecomputeLength();
+            MarkDirty();                // an undo after saving is a change from what was saved
             Status = message;
         }
         finally { IsBusy = false; }
@@ -774,7 +800,83 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         if (clip is not null) clip.IsSelected = true;
         SelectedClip = clip;
+        _rangeAnchorId = clip?.Id;
         foreach (var t in Tracks) t.NotifyClipsChanged();
+    }
+
+    /// <summary>Every selected section, on every track. Usually one; Ctrl+click and Shift+click make more.</summary>
+    public IReadOnlyList<ClipViewModel> SelectedClips
+        => Tracks.SelectMany(t => t.Clips).Where(c => c.IsSelected).ToList();
+
+    /// <summary>
+    /// Where a Shift+click measures from: the section last selected by a plain click, a Ctrl+click
+    /// or a right-click. Kept by id, because the view-models are rebuilt after every edit.
+    /// <see cref="SelectedClip"/> is a different thing — the section commands act on, which a
+    /// Shift+click moves to the section just clicked while the anchor stays put.
+    /// </summary>
+    private Guid? _rangeAnchorId;
+
+    /// <summary>
+    /// Ctrl+click: flips one section in or out of the selection, leaving the rest as they are.
+    /// The section just added becomes the target and the anchor; taking the target out hands both
+    /// to another selected section.
+    /// </summary>
+    public void ToggleClipSelection(ClipViewModel clip)
+    {
+        clip.IsSelected = !clip.IsSelected;
+        if (clip.IsSelected) { SelectedClip = clip; _rangeAnchorId = clip.Id; }
+        else if (ReferenceEquals(SelectedClip, clip))
+        {
+            SelectedClip = SelectedClips.LastOrDefault();
+            _rangeAnchorId = SelectedClip?.Id;
+        }
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+        ReportSelection();
+    }
+
+    /// <summary>
+    /// Shift+click: selects every section between the anchor and this one — on every track from
+    /// the one to the other, and only sections wholly inside the time they span, so a whole song
+    /// on a neighbouring track is not swept up by two short pieces. The anchor stays where it was,
+    /// so a further Shift+click measures from the same place; the section just clicked becomes
+    /// the one commands act on. With nothing to measure from it is a plain click.
+    /// </summary>
+    public void SelectClipRange(ClipViewModel target)
+    {
+        var anchor = Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == _rangeAnchorId)
+                     ?? (SelectedClip is { } s && Tracks.Contains(s.Track) ? SelectedClip : null);
+        if (anchor is null) { SelectClip(target); return; }
+
+        var range = SectionSelection.Range(Session.Project.Tracks,
+                                           anchor.Track.Model, anchor.Model,
+                                           target.Track.Model, target.Model, Session);
+        var ids = range.Select(r => r.Clip.Id).ToHashSet();
+        foreach (var t in Tracks)
+            foreach (var c in t.Clips)
+                c.IsSelected = ids.Contains(c.Id);
+        SelectedClip = target;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+        ReportSelection();
+    }
+
+    /// <summary>Makes an already-selected section the one commands act on, keeping the rest selected.</summary>
+    public void MakePrimary(ClipViewModel clip)
+    {
+        if (!clip.IsSelected) { SelectClip(clip); return; }
+        SelectedClip = clip;
+        _rangeAnchorId = clip.Id;
+    }
+
+    private void ReportSelection()
+    {
+        var selected = SelectedClips;
+        int tracks = selected.Select(c => c.Track).Distinct().Count();
+        Status = selected.Count switch
+        {
+            0 => "Nothing selected.",
+            1 => "1 section selected. Ctrl+click adds another; Shift+click selects a range.",
+            _ => $"{selected.Count} sections selected on {tracks} track{(tracks == 1 ? "" : "s")}. Delete removes them; Ctrl+click adds or removes one.",
+        };
     }
 
     /// <summary>The section a command should act on, falling back to the one under the playhead.</summary>
@@ -823,6 +925,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CutClip()
     {
+        if (DragInProgress) { Status = "Let go of the section first."; return; }
         if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
 
         Remember(clip);
@@ -834,13 +937,41 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     [RelayCommand]
-    private void DeleteClip()
-    {
-        if (TargetClip() is not { } clip) { Status = "Click a section to delete it."; return; }
+    private void DeleteClip() => DeleteSelection(fallBackToPlayhead: true);
 
-        var track = clip.Track;
-        PushUndo($"{track.Name}: delete section");
-        AfterClipEdit(track, TimelineEditor.Delete(track.Model, clip.Model));
+    /// <summary>
+    /// Deletes every selected section, as one undo step, leaving the gaps. The menu item falls
+    /// back to the section under the playhead when nothing is selected; the Delete key does not,
+    /// so a stray press with nothing selected removes nothing.
+    /// </summary>
+    public bool DeleteSelection(bool fallBackToPlayhead)
+    {
+        if (_session is null) return false;
+        if (DragInProgress) { Status = "Let go of the section first."; return false; }
+
+        var selected = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
+        if (selected.Count == 0)
+        {
+            if (!fallBackToPlayhead || TargetClip() is not { } under) { Status = "Click a section to delete it."; return false; }
+            selected.Add(under);
+        }
+
+        PushUndo(selected.Count == 1 ? $"{selected[0].Track.Name}: delete section" : $"delete {selected.Count} sections");
+        var result = SectionSelection.DeleteAll(selected.Select(c => (c.Track.Model, c.Model)));
+        if (!result.Changed) { Status = result.Message; return false; }
+
+        foreach (var track in selected.Select(c => c.Track).Distinct())
+        {
+            Session.Apply(track.Model);
+            track.RefreshFromModel();
+            track.RebuildClips();
+        }
+        SelectedClip = null;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
+        return true;
     }
 
     /// <summary>
@@ -1026,6 +1157,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private SectionMove? _move;
     private SectionTrim? _trim;
     private LoopDrag? _loopDrag;
+
+    /// <summary>
+    /// True while a section is being dragged. Removing a section then would leave the drag holding
+    /// one that is no longer on the track, and its drop would clear what is under the ghost.
+    /// </summary>
+    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null;
     private TrackViewModel? _dragHome;
     private Guid _dragClipId;
 
@@ -1061,6 +1198,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         double at = TimelineEditor.TimelineSecondsAt(to.Model, _move.Clip.TrackStartSeconds);
         Status = $"{to.Name}: section at {at:0.00}s{(_move.SnappedTo is { } s ? $" — on {s}" : "")}";
+    }
+
+    /// <summary>
+    /// The menu's "Clear trim": uncovers the section's song as far as dragging each end outward
+    /// could, as one undo step. See <see cref="SectionTrim.Clear"/> for what it used to do.
+    /// </summary>
+    public void ClearTrim(ClipViewModel clip)
+    {
+        if (DragInProgress) { Status = "Let go of the section first."; return; }
+        var track = clip.Track;
+        PushUndo($"{track.Name}: clear trim");
+        SectionTrim.Clear(Session, track.Model, clip.Model);
+        Redraw(track);
+        SelectById(clip.Id);
+        RecomputeLength();
+        MarkDirty();
+        Status = $"{track.Name}: trim cleared, as far as the sections either side allow — the section is {SelectedClip?.LengthSeconds ?? 0:0.0}s.";
     }
 
     public void BeginTrim(ClipViewModel clip, bool start)
@@ -1172,7 +1326,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void PushUndo(string label, string? coalesceKey = null)
     {
-        if (_session is null) return;
+        if (_session is null || _oneUndoStep) return;
         if (coalesceKey is not null && coalesceKey == _lastCoalesceKey) return;
 
         _lastCoalesceKey = coalesceKey;
@@ -1181,6 +1335,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Ends a gesture, so the next one of the same kind starts a fresh undo step.</summary>
     public void EndGesture() => _lastCoalesceKey = null;
+
+    private bool _oneUndoStep;
+
+    /// <summary>
+    /// Runs a command that turns several knobs as one undo step. Each knob snapshots itself before
+    /// it moves, so until 2026-10-03 Reset left six steps behind and Match key two: one Ctrl+Z put
+    /// back only the last knob touched, and undoing Match key left LINK off.
+    /// </summary>
+    private void AsOneUndoStep(string label, Action change)
+    {
+        PushUndo(label);
+        _oneUndoStep = true;
+        try { change(); }
+        finally { _oneUndoStep = false; }
+        EndGesture();
+    }
 
     private string? _lastCoalesceKey;
 
