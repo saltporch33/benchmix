@@ -716,6 +716,33 @@ staged build, because his copy of Benchmix was open.
 
 **Not verified:** by hand.
 
+## 2026-10-12 — typing a knob's exact value
+
+**In the real window.** `--gesturetest` grew from 202 to **214 checks**, through the knobs' own press
+handling and the box's own key handler:
+
+```
+PASS  double-clicking TEMPO's number opens a box over it, filled in with its value (0.00)
+PASS  the box is never given the keyboard in a scripted run
+PASS  typing -4.21 and Enter sets TEMPO to 4.21% slower, exactly, and shows it (-4.21%)
+PASS  typing −2.88 sets PITCH to 2.88 semitones down (-2.88 st)
+PASS  typing -6.5 sets LOW to -6.5 dB (-6.5)
+PASS  typing KILL sets VOL all the way down (-∞ dB)
+PASS  a value past the knob's range is refused, the box stays open and says the range ("TEMPO goes from -50.00% to +50.00%.")
+PASS  Esc keeps the value as it was
+PASS  clicking elsewhere keeps what was typed
+PASS  a double-click on the knob itself still resets it
+PASS  with LINK on, PITCH cannot be typed and the status says why
+PASS  one Ctrl+Z takes back the reset, and the next the typed HIGH — each one undo step
+```
+
+The values are checked with `==` against the arithmetic written in the check. `--demoediting` now
+shows the box open over a TEMPO number; looked at, it sits over the number. **319 tests, 0 failed,
+0 skipped**; `scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way (gesturetest
+214, buttontest 41).
+
+**Not verified:** typing into the box with the real keyboard and real focus.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

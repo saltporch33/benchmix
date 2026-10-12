@@ -127,7 +127,11 @@ it did — but with its own EQ and volume, which is usually why you moved it. Dr
 empty track's lane (or copy one in Explorer and press <kbd>Ctrl</kbd>+<kbd>V</kbd>) and the track
 becomes that song.
 
-Knobs: drag up and down, <kbd>Shift</kbd> for fine, double-click to reset, wheel to nudge.
+Knobs: drag up and down, <kbd>Shift</kbd> for fine, double-click the knob to reset, wheel to nudge.
+**Double-click the number under a knob to type the exact value**, then <kbd>Enter</kbd> (<kbd>Esc</kbd>
+keeps it as it was): TEMPO as a percentage to 0.01 (−4.21 is 4.21% slower), PITCH in semitones to
+0.01 (−2.88), LOW, MID, HIGH and VOL in dB to 0.1 (−6.5, or KILL). A value outside the knob's range is
+refused and the status bar gives the range. Each typed value is one <kbd>Ctrl</kbd>+<kbd>Z</kbd>.
 
 ---
 

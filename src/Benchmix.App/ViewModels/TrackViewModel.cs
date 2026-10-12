@@ -208,10 +208,10 @@ public sealed partial class TrackViewModel : ObservableObject
     public bool KeyIsEstimate => Model.KeySource == nameof(Engine.Analysis.ValueSource.Detected);
     public string KeySourceText => KeyIsEstimate ? "estimated" : "from tag";
 
-    public string SpeedText => $"{(Speed - 1) * 100:+0.0;-0.0;0.0}%";
+    public string SpeedText => $"{(Speed - 1) * 100:+0.00;-0.00;0.00}%";
     public string SemitonesText => LinkPitchToTempo
         ? $"{12 * Math.Log2(Math.Max(0.01, Speed)):+0.00;-0.00;0.00} st (linked)"
-        : $"{Semitones:+0.0;-0.0;0} st";
+        : $"{Semitones:+0.00;-0.00;0} st";
     public string GainText => Gain <= 0.0001 ? "-∞ dB" : $"{20 * Math.Log10(Gain):+0.0;-0.0;0.0} dB";
     public string EqLowText => EqText(EqLow);
     public string EqMidText => EqText(EqMid);

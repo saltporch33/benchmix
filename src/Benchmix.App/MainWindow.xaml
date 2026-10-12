@@ -281,39 +281,39 @@
                                                 <c:Knob Width="58" Height="74" Margin="0,0,4,0"
                                                         Label="TEMPO" Minimum="0.5" Maximum="1.5" DefaultValue="1"
                                                         Value="{Binding Speed, Mode=TwoWay}" ValueText="{Binding SpeedText}"
-                                                        IsBipolar="True"
+                                                        EditUnit="Percent" IsBipolar="True"
                                                         ArcBrush="{StaticResource AccentBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Speed without changing pitch. On a track with a tempo ramp this is the tempo before the first ramp. Drag up/down, Shift for fine, double-click to reset."/>
+                                                        ToolTip="Speed without changing pitch. On a track with a tempo ramp this is the tempo before the first ramp. Drag up/down, Shift for fine; double-click the knob to reset, or the number to type it (-4.21 is 4.21% slower)."/>
                                                 <c:Knob Width="58" Height="74" Margin="0,0,10,0"
                                                         Label="PITCH" Minimum="-12" Maximum="12" DefaultValue="0"
                                                         Value="{Binding Semitones, Mode=TwoWay}" ValueText="{Binding SemitonesText}"
-                                                        IsBipolar="True"
+                                                        EditUnit="Semitones" IsBipolar="True"
                                                         ArcBrush="{StaticResource GoodBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Pitch in semitones, without changing speed. Drag up/down, Shift for fine, double-click to reset."/>
+                                                        ToolTip="Pitch in semitones, without changing speed. Drag up/down, Shift for fine; double-click the knob to reset, or the number to type it (to 0.01 of a semitone)."/>
 
                                                 <c:Knob Width="52" Height="74" Label="LOW" Minimum="0" Maximum="2" DefaultValue="1"
-                                                        Value="{Binding EqLow, Mode=TwoWay}" ValueText="{Binding EqLowText}"
+                                                        Value="{Binding EqLow, Mode=TwoWay}" ValueText="{Binding EqLowText}" EditUnit="Decibels"
                                                         ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Bass, below about 250 Hz. All the way down is a true kill: the usual move on the vocal track."/>
+                                                        ToolTip="Bass, below about 250 Hz. All the way down is a true kill: the usual move on the vocal track. Double-click the number to type it in dB, or KILL."/>
                                                 <c:Knob Width="52" Height="74" Label="MID" Minimum="0" Maximum="2" DefaultValue="1"
-                                                        Value="{Binding EqMid, Mode=TwoWay}" ValueText="{Binding EqMidText}"
+                                                        Value="{Binding EqMid, Mode=TwoWay}" ValueText="{Binding EqMidText}" EditUnit="Decibels"
                                                         ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Middle, about 250 Hz to 2.5 kHz: where vocals and guitars live. All the way down is a true kill."/>
+                                                        ToolTip="Middle, about 250 Hz to 2.5 kHz: where vocals and guitars live. All the way down is a true kill. Double-click the number to type it in dB, or KILL."/>
                                                 <c:Knob Width="52" Height="74" Margin="0,0,10,0" Label="HIGH" Minimum="0" Maximum="2" DefaultValue="1"
-                                                        Value="{Binding EqHigh, Mode=TwoWay}" ValueText="{Binding EqHighText}"
+                                                        Value="{Binding EqHigh, Mode=TwoWay}" ValueText="{Binding EqHighText}" EditUnit="Decibels"
                                                         ArcBrush="{StaticResource WarnBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Treble, above about 2.5 kHz: cymbals and air. All the way down is a true kill."/>
+                                                        ToolTip="Treble, above about 2.5 kHz: cymbals and air. All the way down is a true kill. Double-click the number to type it in dB, or KILL."/>
 
                                                 <c:Knob Width="52" Height="74" Label="VOL" Minimum="0" Maximum="2" DefaultValue="1"
-                                                        Value="{Binding Gain, Mode=TwoWay}" ValueText="{Binding GainText}"
+                                                        Value="{Binding Gain, Mode=TwoWay}" ValueText="{Binding GainText}" EditUnit="Decibels"
                                                         ArcBrush="{StaticResource Text1Brush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="This track's volume. Most of the useful cut is in the last bit of travel before silence."/>
+                                                        ToolTip="This track's volume. Most of the useful cut is in the last bit of travel before silence. Double-click the number to type it in dB."/>
                                             </StackPanel>
 
                                             <!-- button row -->
@@ -504,5 +504,15 @@
                 <TextBlock Text="{Binding Status}" Style="{StaticResource Body}" TextTrimming="CharacterEllipsis"/>
             </DockPanel>
         </Border>
+
+        <!-- Typing a knob's exact value (2026-10-12): one box, moved over whichever knob's number was
+             double-clicked. In the window itself, not a Popup, so a scripted run never puts a window
+             of its own on his screen. The layer has no background, so it takes no clicks itself. -->
+        <Canvas x:Name="KnobEditLayer" Grid.RowSpan="5">
+            <TextBox x:Name="KnobValueBox" Style="{StaticResource DarkBox}" Width="56" Height="19" FontSize="11"
+                     Padding="2,0" TextAlignment="Center" Visibility="Collapsed"
+                     PreviewKeyDown="OnKnobValueKeyDown" LostKeyboardFocus="OnKnobValueLostFocus"
+                     ToolTip="Type the exact value, then press Enter. Esc keeps it as it was."/>
+        </Canvas>
     </Grid>
 </Window>

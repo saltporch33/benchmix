@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
+        AddHandler(Controls.Knob.EditRequestedEvent, new RoutedEventHandler(OnKnobEditRequested));
+        TrackScroller.ScrollChanged += (_, e) => { if (_editingKnob is not null && e.VerticalChange != 0) FinishKnobEdit(); };
         if (App.IsScriptedRun) KeepOutOfTheWay();
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -175,6 +177,14 @@ public partial class MainWindow : Window
                     return;
                 }
                 _vm.SnapLineSeconds = 38;                               // as a drag would show it
+
+                // The box for typing a knob's value, open over the song's TEMPO number.
+                UpdateLayout();
+                if (StripOf(song) is { } strip && Descendants<Controls.Knob>(strip).FirstOrDefault(k => k.Label == "TEMPO") is { } knob)
+                {
+                    BeginKnobEdit(knob);
+                    KnobValueBox.Text = "-4.21";
+                }
                 _vm.SeekTo(60);
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 await Task.Delay(400);
@@ -722,6 +732,10 @@ public partial class MainWindow : Window
             _scriptedModifiers = null;
             _vm.StopCommand.Execute(null);
         }
+
+        // --- typing a knob's value ---
+        try { RunKnobTypingGestures(Check, notes); }
+        finally { if (_editingKnob is not null) CancelKnobEdit(); }
 
         // --- joining sections back together ---
         try { RunJoinGestures(Check, notes); }
@@ -1939,6 +1953,102 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Typing a knob's exact value (Daniel, 2026-10-12), through the knobs' own press handling and the
+    /// box's own key handler. Puts every knob back as it found it, with Ctrl+Z.
+    /// </summary>
+    private void RunKnobTypingGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        var source = PresentationSource.FromVisual(this);
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded);
+        if (source is null || first is null || StripOf(first) is not { } strip0)
+        {
+            notes.Add("no laid-out track strip, so typing a knob's value is untested - pass a file to cover it");
+            return;
+        }
+        var id = first.Id;
+        TrackViewModel Track() => _vm.Tracks.First(t => t.Id == id);
+        Controls.Knob? KnobOf(string label) => StripOf(Track()) is { } st ? Descendants<Controls.Knob>(st).FirstOrDefault(k => k.Label == label) : null;
+        if (new[] { "TEMPO", "PITCH", "LOW", "HIGH", "VOL" }.Any(l => KnobOf(l) is not { ActualHeight: > 0 }))
+        {
+            notes.Add("a knob was not laid out, so typing a knob's value is untested");
+            return;
+        }
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+        Point OnNumber(Controls.Knob k) => new(k.ActualWidth / 2, k.ActualHeight - 4);
+        Point OnDial(Controls.Knob k) => new(k.ActualWidth / 2, (k.ActualHeight - 26) / 2);
+        bool Open() => KnobValueBox.Visibility == Visibility.Visible;
+        void Type(string label, string text)
+        {
+            KnobOf(label)!.Press(OnNumber(KnobOf(label)!), 2);
+            KnobValueBox.Text = text;
+            OnKnobValueKeyDown(KnobValueBox, Press(Key.Enter));
+        }
+        var m = Track().Model;
+        var was = (m.Speed, m.Semitones, m.EqLow, m.EqHigh, m.Gain, Link: Track().LinkPitchToTempo);
+        Track().LinkPitchToTempo = false;
+        _vm.EndGesture();
+
+        var tempo = KnobOf("TEMPO")!;
+        tempo.Press(OnNumber(tempo), 2);
+        Check($"double-clicking TEMPO's number opens a box over it, filled in with its value ({KnobValueBox.Text})",
+              Open() && KnobValueBox.Text == tempo.EditText() && LabelFor(KnobValueBox) == "textbox:knobValue");
+        Check("the box is never given the keyboard in a scripted run", !KnobValueBox.IsKeyboardFocusWithin);
+        KnobValueBox.Text = "-4.21";
+        OnKnobValueKeyDown(KnobValueBox, Press(Key.Enter));
+        Check($"typing -4.21 and Enter sets TEMPO to 4.21% slower, exactly, and shows it ({KnobOf("TEMPO")!.ValueText})",
+              !Open() && m.Speed == 1 + Math.Round(-4.21, 2) / 100 && KnobOf("TEMPO")!.ValueText == "-4.21%");
+
+        Type("PITCH", "\u22122.88");
+        Check($"typing −2.88 sets PITCH to 2.88 semitones down ({KnobOf("PITCH")!.ValueText})", m.Semitones == -2.88 && KnobOf("PITCH")!.ValueText == "-2.88 st");
+        Type("LOW", "-6.5");
+        Check($"typing -6.5 sets LOW to -6.5 dB ({KnobOf("LOW")!.ValueText})", m.EqLow == Math.Pow(10, -6.5 / 20) && KnobOf("LOW")!.ValueText == "-6.5");
+        Type("VOL", "kill");
+        Check($"typing KILL sets VOL all the way down ({KnobOf("VOL")!.ValueText})", m.Gain == 0 && KnobOf("VOL")!.ValueText.Contains('∞'));
+
+        tempo = KnobOf("TEMPO")!;
+        tempo.Press(OnNumber(tempo), 2);
+        KnobValueBox.Text = "60";
+        OnKnobValueKeyDown(KnobValueBox, Press(Key.Enter));
+        Check($"a value past the knob's range is refused, the box stays open and says the range (\"{_vm.Status}\")",
+              Open() && m.Speed == 1 + Math.Round(-4.21, 2) / 100 && _vm.Status.Contains("-50.00%") && _vm.Status.Contains("+50.00%"));
+        OnKnobValueKeyDown(KnobValueBox, Press(Key.Escape));
+        Check("Esc keeps the value as it was", !Open() && m.Speed == 1 + Math.Round(-4.21, 2) / 100);
+
+        var high = KnobOf("HIGH")!;
+        high.Press(OnNumber(high), 2);
+        KnobValueBox.Text = "3";
+        WindowPress(MouseButton.Left, LaneOf(Track()));
+        Check("clicking elsewhere keeps what was typed", !Open() && m.EqHigh == Math.Pow(10, 3.0 / 20));
+
+        tempo = KnobOf("TEMPO")!;
+        tempo.Press(OnDial(tempo), 2);
+        Check("a double-click on the knob itself still resets it", m.Speed == 1 && !Open());
+
+        Track().LinkPitchToTempo = true;
+        var pitch = KnobOf("PITCH")!;
+        pitch.Press(OnNumber(pitch), 2);
+        Check($"with LINK on, PITCH cannot be typed and the status says why (\"{_vm.Status}\")", !Open() && _vm.Status.Contains("LINK"));
+        Track().LinkPitchToTempo = false;
+
+        // Each typed value, and the reset, is one undo step.
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+        Undo(() => Track().Model.Speed != 1);
+        bool resetUndone = Track().Model.Speed == 1 + Math.Round(-4.21, 2) / 100;
+        Undo(() => Track().Model.EqHigh != Math.Pow(10, 3.0 / 20));
+        bool highUndone = Track().Model.EqHigh == was.EqHigh;
+        Check("one Ctrl+Z takes back the reset, and the next the typed HIGH — each one undo step", resetUndone && highUndone);
+        Undo(() => Track().Model.Gain != 0);
+        Undo(() => Track().Model.EqLow == was.EqLow);
+        Undo(() => Track().Model.Semitones == was.Semitones);
+        Undo(() => Track().Model.Speed == was.Speed);
+        var back = Track().Model;
+        if ((back.Speed, back.Semitones, back.EqLow, back.EqHigh, back.Gain) != (was.Speed, was.Semitones, was.EqLow, was.EqHigh, was.Gain))
+            notes.Add("the knob typing checks could not undo back to where they started");
+        Track().LinkPitchToTempo = was.Link;
+    }
+
+    /// <summary>
     /// Joining sections back into one (Daniel, 2026-10-12), as he described it: split out a piece,
     /// move it to another track, then put the song back — through Ctrl+J's command and the lane
     /// menu's own Click handler. Leaves the project as it found it.
@@ -2991,6 +3101,7 @@ public partial class MainWindow : Window
         TextBox { Name: "BpmBox" } => "textbox:projectBpm",
         TextBox { Name: "RenameBox" } => "textbox:rename",
         TextBox { Name: "RampBpmBox" } => "textbox:rampBpm",
+        TextBox { Name: "KnobValueBox" } => "textbox:knobValue",
         TextBox => "textbox",
         Slider => "slider:master",
         TextBlock tb when tb.Text is { Length: > 0 } s && s.Length < 60 => "text:" + s,
@@ -3461,6 +3572,106 @@ public partial class MainWindow : Window
                                System.Windows.Threading.DispatcherPriority.ContextIdle);
     }
 
+    // ---------------- typing a knob's value (Daniel, 2026-10-12) ----------------
+
+    /// <summary>The knob whose value is being typed, or null.</summary>
+    private Controls.Knob? _editingKnob;
+
+    private void OnKnobEditRequested(object sender, RoutedEventArgs e)
+    {
+        if (e.OriginalSource is Controls.Knob k) BeginKnobEdit(k);
+    }
+
+    /// <summary>Opens the box over a knob's number, filled in with its value and selected, so typing replaces it.</summary>
+    private void BeginKnobEdit(Controls.Knob k)
+    {
+        if (k.EditUnit == Controls.KnobUnit.None) return;
+        if (_editingKnob is not null) FinishKnobEdit();
+        if (k.EditUnit == Controls.KnobUnit.Semitones && k.DataContext is TrackViewModel { LinkPitchToTempo: true })
+        {
+            _vm.Status = "LINK is on, so the pitch follows TEMPO. Turn LINK off to set the pitch on its own.";
+            return;
+        }
+        _editingKnob = k;
+        UpdateLayout();
+        var at = k.TranslatePoint(new Point(0, k.ActualHeight), KnobEditLayer);
+        double width = Math.Max(56, k.ActualWidth);
+        KnobValueBox.Width = width;
+        Canvas.SetLeft(KnobValueBox, at.X + (k.ActualWidth - width) / 2);
+        Canvas.SetTop(KnobValueBox, at.Y - KnobValueBox.Height);
+        KnobValueBox.Text = k.EditText();
+        KnobValueBox.Visibility = Visibility.Visible;
+        string how = k.EditUnit switch
+        {
+            Controls.KnobUnit.Percent => "as a percentage (-4.21 is 4.21% slower)",
+            Controls.KnobUnit.Semitones => "in semitones (-2.88 is 2.88 semitones lower)",
+            _ => "in dB (-6.5, or KILL)",
+        };
+        _vm.Status = $"Type the {k.Label} {how}, then press Enter. Esc keeps it as it was.";
+        // Never in a scripted run: asking Windows for the keyboard would activate the hidden window.
+        if (!App.IsScriptedRun)
+            Dispatcher.BeginInvoke(() => { if (KnobValueBox.IsVisible) { KnobValueBox.Focus(); KnobValueBox.SelectAll(); } },
+                                   System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    /// <summary>Enter: sets the knob to what was typed, as one undo step. True when the box closed.</summary>
+    private bool CommitKnobEdit(string? text)
+    {
+        if (_editingKnob is not { } k) return false;
+        if (k.DataContext is TrackViewModel t && !_vm.Tracks.Contains(t)) { CloseKnobEdit(); return false; }   // its track was rebuilt
+        var (ok, value, why) = k.ParseTyped(text);
+        if (!ok) { _vm.Status = why; return false; }
+        CloseKnobEdit();
+        _vm.EndGesture();            // its own undo step, not part of a turn of the same knob just before
+        k.Value = value;
+        _vm.EndGesture();
+        _vm.Status = $"{k.Label} set to {k.ValueText}.";
+        return true;
+    }
+
+    private void CancelKnobEdit()
+    {
+        if (_editingKnob is not { } k) return;
+        CloseKnobEdit();
+        _vm.Status = $"{k.Label} kept at {k.ValueText}.";
+    }
+
+    /// <summary>A click elsewhere: keeps what was typed if the knob can take it, and keeps the old value if not.</summary>
+    private void FinishKnobEdit()
+    {
+        if (_editingKnob is { } k && k.ParseTyped(KnobValueBox.Text).Ok) CommitKnobEdit(KnobValueBox.Text);
+        else CancelKnobEdit();
+    }
+
+    private void CloseKnobEdit()
+    {
+        _editingKnob = null;
+        KnobValueBox.Visibility = Visibility.Collapsed;
+        ReturnKeyboardToTimeline();
+    }
+
+    private void OnKnobValueKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) { CommitKnobEdit(KnobValueBox.Text); e.Handled = true; }
+        else if (e.Key == Key.Escape) { CancelKnobEdit(); e.Handled = true; }
+    }
+
+    /// <summary>As the name box: the keyboard leaving for elsewhere in this window keeps what was typed; leaving the app does not.</summary>
+    private void OnKnobValueLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (_editingKnob is null) return;
+        if (e.NewFocus is not DependencyObject to || to is System.Windows.Controls.Primitives.MenuBase or MenuItem) return;
+        if (!ReferenceEquals(to, this) && !(to is Visual v && v.IsDescendantOf(this))) return;
+        FinishKnobEdit();
+    }
+
+    private static bool IsInside(DependencyObject? d, DependencyObject ancestor)
+    {
+        for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (ReferenceEquals(d, ancestor)) return true;
+        return false;
+    }
+
     private static bool IsInRenameBox(DependencyObject? d)
     {
         for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
@@ -3494,6 +3705,7 @@ public partial class MainWindow : Window
     private bool WindowPress(MouseButton button, DependencyObject? pressedOn, int clickCount = 1)
     {
         if (!IsInRenameBox(pressedOn)) _vm.CommitOpenRenames();
+        if (_editingKnob is not null && !ReferenceEquals(pressedOn, KnobValueBox) && !IsInside(pressedOn, KnobValueBox)) FinishKnobEdit();
 
         // A press anywhere but in a ramp's BPM box keeps the tempo typed there, if the track can
         // reach it, and is used up doing so: it does not also start a new ramp.

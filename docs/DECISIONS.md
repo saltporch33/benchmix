@@ -523,3 +523,19 @@ as its own feature afterwards.
 | **Joining fills any gap between them with the song again**, and pieces that were only split play exactly as before (measured: not one sample changes). The piece that was taken out stays wherever it was put. | "I just want the original song to go back to normal." |
 | **Refused, and the status bar says why**, when they come from different songs, do not line up, or something else has been put in the gap between them. | Joining over something else would delete it without a word. |
 | **The outer fades are kept**; one Ctrl+Z takes the join back. | As for every other edit. |
+
+## 2026-10-12 — typing a knob's exact value
+
+Daniel, 2026-10-12, verbatim: *"Any knobs that have numbered indicators showing the +/- adjustment....
+give mne the ability to manually type in those numbers. will allow me to really fine tune things. Use
+whatever level of granularity you recommend."*
+
+| Decision | Why |
+| --- | --- |
+| **Double-click the number under a knob** to type it; a double-click on the dial still resets it. | The number is what he reads; a reset he already knows stays where it is. |
+| **Granularity:** TEMPO as a percentage to 0.01% (about 0.01 BPM); PITCH in semitones to 0.01 (one cent); LOW, MID, HIGH and VOL in dB to 0.1, or KILL. | His "whatever level of granularity you recommend". A hundredth of a percent of tempo, a cent of pitch and a tenth of a dB are each finer than anyone hears; finer would only be noise in the numbers. |
+| **TEMPO and PITCH now show two decimals** under the knob. | So what he typed is what he reads back. |
+| **Out of range is refused, and the status bar gives the range**; a word is refused with an example. A unit typed after the number, and a Unicode minus, are fine. | A silent clamp would set something he did not type. |
+| **Enter keeps it, Esc keeps the old value, clicking elsewhere keeps what was typed** if the knob can take it; leaving the app does not. Each typed value is one undo step. | As the name and ramp boxes behave. |
+| **With LINK on, PITCH cannot be typed**, and the status bar says why. | Under LINK the pitch follows TEMPO. |
+| **One box for every knob, in the window itself**, not a popup; a scripted run never gives it the keyboard. | A popup is a window of its own, which a verification run would put on his screen. |

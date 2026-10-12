@@ -5,6 +5,19 @@ using System.Windows.Media;
 
 namespace Benchmix.App.Controls;
 
+/// <summary>What a knob's number means when it is typed in (Daniel, 2026-10-12).</summary>
+public enum KnobUnit
+{
+    /// <summary>Not typed in.</summary>
+    None,
+    /// <summary>A speed, typed as a percentage change: -4.21 is 0.9579.</summary>
+    Percent,
+    /// <summary>Semitones, typed as they are: -2.88.</summary>
+    Semitones,
+    /// <summary>A gain, typed in dB: -6.5, or KILL for all the way down.</summary>
+    Decibels,
+}
+
 /// <summary>
 /// A rotary knob in the style of a DJ mixer: a 270° dial with a track arc, a coloured value arc,
 /// a pointer, and two lines of text underneath.
@@ -56,6 +69,23 @@ public sealed class Knob : FrameworkElement
 
     /// <summary>Raised whenever <see cref="Value"/> settles on a new number, with that number.</summary>
     public event EventHandler<double>? ValueChanged;
+
+    /// <summary>
+    /// Raised when the number under the knob is double-clicked, asking the window to open a box
+    /// over it to type the value. A routed event, so one handler on the window serves every knob.
+    /// </summary>
+    public static readonly RoutedEvent EditRequestedEvent = EventManager.RegisterRoutedEvent(
+        "EditRequested", RoutingStrategy.Bubble, typeof(RoutedEventHandler), typeof(Knob));
+
+    /// <summary>What a typed number means; <see cref="KnobUnit.None"/> for a knob that is not typed in.</summary>
+    public static readonly DependencyProperty EditUnitProperty = DependencyProperty.Register(
+        nameof(EditUnit), typeof(KnobUnit), typeof(Knob), new FrameworkPropertyMetadata(KnobUnit.None));
+
+    public KnobUnit EditUnit
+    {
+        get => (KnobUnit)GetValue(EditUnitProperty);
+        set => SetValue(EditUnitProperty, value);
+    }
 
     #region Dependency properties
 
@@ -258,20 +288,81 @@ public sealed class Knob : FrameworkElement
     {
         base.OnMouseLeftButtonDown(e);
         Focus();
-
-        // FrameworkElement has no OnMouseDoubleClick (that lives on Control), so the reset gesture
-        // is read straight off the click count.
-        if (e.ClickCount == 2)
-        {
-            Value = DefaultValue;
-            e.Handled = true;
-            return;
-        }
+        if (Press(e.GetPosition(this), e.ClickCount)) { e.Handled = true; return; }
 
         _lastDragPoint = e.GetPosition(this);
         _dragging = CaptureMouse();
         e.Handled = true;
     }
+
+    /// <summary>
+    /// What a press does, apart from focus and the drag: a double-click on the number underneath
+    /// asks for it to be typed in, and one on the dial resets it. FrameworkElement has no
+    /// OnMouseDoubleClick (that lives on Control), so it is read straight off the click count.
+    /// True when the press was used up. The gesture test calls this with a scripted point.
+    /// </summary>
+    internal bool Press(Point at, int clickCount)
+    {
+        if (clickCount != 2) return false;
+        if (EditUnit != KnobUnit.None && IsOnNumber(at)) RaiseEvent(new RoutedEventArgs(EditRequestedEvent, this));
+        else Value = DefaultValue;
+        return true;
+    }
+
+    /// <summary>Whether a point is on the two lines of text under the dial.</summary>
+    internal bool IsOnNumber(Point at) => at.Y >= ActualHeight - Math.Min(TextBandHeight, ActualHeight * 0.45);
+
+    /// <summary>The value as it is put in the box to be typed over.</summary>
+    public string EditText() => EditUnit switch
+    {
+        KnobUnit.Percent => ((Value - 1) * 100).ToString("0.00", CultureInfo.InvariantCulture),
+        KnobUnit.Semitones => Value.ToString("0.00", CultureInfo.InvariantCulture),
+        KnobUnit.Decibels => Value <= 0.0001 ? "KILL" : (20 * Math.Log10(Value)).ToString("0.0", CultureInfo.InvariantCulture),
+        _ => Value.ToString("0.##", CultureInfo.InvariantCulture),
+    };
+
+    /// <summary>
+    /// Reads a typed value: a percentage to 0.01, semitones to 0.01, or dB to 0.1 (or KILL). It
+    /// must be within the knob's range; a unit typed after the number, and a Unicode minus, are fine.
+    /// </summary>
+    public (bool Ok, double Value, string Why) ParseTyped(string? typed)
+    {
+        string text = (typed ?? "").Trim().Replace('\u2212', '-');
+        foreach (var unit in new[] { "semitones", "st", "db", "%" })
+            if (text.EndsWith(unit, StringComparison.OrdinalIgnoreCase)) { text = text[..^unit.Length].Trim(); break; }
+
+        if (EditUnit == KnobUnit.Decibels && text.ToLowerInvariant() is "kill" or "-inf" or "inf" or "-\u221e" or "off")
+            return (true, Minimum, "");
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double x)
+            && !double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out x)
+            || !double.IsFinite(x))
+            return (false, 0, EditUnit switch
+            {
+                KnobUnit.Percent => $"Type the {Label} as a percentage, like -4.21.",
+                KnobUnit.Semitones => $"Type the {Label} in semitones, like -2.88.",
+                KnobUnit.Decibels => $"Type the {Label} in dB, like -6.5, or KILL.",
+                _ => $"Type a number for {Label}.",
+            });
+
+        double v = EditUnit switch
+        {
+            KnobUnit.Percent => 1 + Math.Round(x, 2) / 100,
+            KnobUnit.Semitones => Math.Round(x, 2),
+            KnobUnit.Decibels => Math.Pow(10, Math.Round(x, 1) / 20),
+            _ => x,
+        };
+        if (v < Minimum - 1e-12 || v > Maximum + 1e-12)
+            return (false, 0, $"{Label} goes from {Describe(Minimum)} to {Describe(Maximum)}.");
+        return (true, Math.Clamp(v, Minimum, Maximum), "");
+    }
+
+    private string Describe(double v) => EditUnit switch
+    {
+        KnobUnit.Percent => ((v - 1) * 100).ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture) + "%",
+        KnobUnit.Semitones => v.ToString("+0.00;-0.00;0.00", CultureInfo.InvariantCulture) + " st",
+        KnobUnit.Decibels => v <= 0.0001 ? "KILL" : (20 * Math.Log10(v)).ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture) + " dB",
+        _ => v.ToString("0.##", CultureInfo.InvariantCulture),
+    };
 
     /// <inheritdoc/>
     protected override void OnMouseMove(MouseEventArgs e)
