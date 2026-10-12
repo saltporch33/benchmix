@@ -14,6 +14,9 @@ mistakes, not by describing the project.
 - **Sections on one track never overlap**, and paste overwrites what is under it. A track is one
   read position, one stretcher and one EQ; two sections sounding at once is not representable.
   Two things at once is a second track.
+- **Dropping a section or a group onto another section trims away what it covered, for good** —
+  drag it off again later and the covered part stays gone (Ctrl+Z is the way back). Daniel wants
+  exactly this. Verbatim, 2026-10-12: *"i actually LOVE the existing functionality when I DO overlap a clip onto another, the clip i’m actively dragging overrides the portion of the clip i dragged it over onto, as proven when I then move the clips apart again and see that the underlying clip is now trimmed. So please, DONT REMOVE THAT…. i was thinking it was an unintentional function you created, so if you ever flag it as a bug, do not “fix” it or recommend fixing it."* Never flag it as a bug, and never recommend changing it.
 - **Splitting a section and moving neither half changes not one sample.** That is the *seam rule*
   (`VoiceClip.JoinsSeamlesslyTo`) and it is load-bearing — it is why hand-built loops do not tick.
   It rests on an **exact** equality between one section's `SourceEnd` and the next one's

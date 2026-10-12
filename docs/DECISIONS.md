@@ -480,3 +480,11 @@ goes up. Everything else here is a default he can change.
 | **One undo step** for each new ramp, each dot drag, each retyped tempo and each removal. **Reset** removes the track's ramps in its own one step. **Match BPM** sets TEMPO — the tempo before the first ramp — and keeps the ramps, and the status bar says where they still go. | As for every other edit. |
 | **While a dot is held** — from the press — Ctrl+R, Ctrl+L and every other edit wait, as for a held section. | The same rule, for the same reason. |
 | **The BPM on the strip is unchanged**: the tempo before the first ramp. | "Keep the bpm info exactly as it is." |
+
+## 2026-10-12 — a dropped section overwrites what it lands on: his choice
+
+Trying out the 2026-10-11 features, Daniel, verbatim: *"i actually LOVE the existing functionality when I DO overlap a clip onto another, the clip i’m actively dragging overrides the portion of the clip i dragged it over onto, as proven when I then move the clips apart again and see that the underlying clip is now trimmed. So please, DONT REMOVE THAT…. i was thinking it was an unintentional function you created, so if you ever flag it as a bug, do not “fix” it or recommend fixing it."*
+
+| Decision | Why |
+| --- | --- |
+| **A section or group dropped onto another section trims away the part it covered, permanently.** Dragging it off again later leaves the covered part trimmed; Ctrl+Z is the way back. | His words. It was built on purpose (2026-09-24: "the drop overwrites what is under it", because sections on one track never overlap), and he has now confirmed it is what he wants. It is not to be reported as a defect or changed. |
