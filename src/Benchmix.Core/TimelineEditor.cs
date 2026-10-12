@@ -107,11 +107,38 @@ public static class TimelineEditor
 
     /// <summary>Converts a timeline position into the track's own unstretched timebase.</summary>
     public static double TrackSecondsAt(TrackModel track, double timelineSeconds)
-        => (timelineSeconds - track.TimelineOffsetSeconds) * Math.Max(0.01, track.Speed);
+        => SecondsMapOf(track) is { } map
+            ? map.PositionAt(timelineSeconds - track.TimelineOffsetSeconds)
+            : (timelineSeconds - track.TimelineOffsetSeconds) * Math.Max(0.01, track.Speed);
 
     /// <summary>Converts a position in the track's own timebase back onto the timeline.</summary>
     public static double TimelineSecondsAt(TrackModel track, double trackSeconds)
-        => track.TimelineOffsetSeconds + trackSeconds / Math.Max(0.01, track.Speed);
+        => SecondsMapOf(track) is { } map
+            ? track.TimelineOffsetSeconds + map.RelAt(trackSeconds)
+            : track.TimelineOffsetSeconds + trackSeconds / Math.Max(0.01, track.Speed);
+
+    /// <summary>How long on the timeline a stretch of the track takes, from <paramref name="trackStartSeconds"/> on.</summary>
+    public static double TimelineLength(TrackModel track, double trackStartSeconds, double lengthSeconds)
+        => SecondsMapOf(track) is { } map
+            ? map.DurationOf(trackStartSeconds, lengthSeconds)
+            : lengthSeconds / Math.Max(0.01, track.Speed);
+
+    /// <summary>The speed the track plays at at a point of the timeline.</summary>
+    public static double SpeedAt(TrackModel track, double timelineSeconds)
+        => SecondsMapOf(track) is { } map
+            ? map.SpeedAt(timelineSeconds - track.TimelineOffsetSeconds)
+            : Math.Max(0.01, track.Speed);
+
+    /// <summary>
+    /// The track's tempo map in seconds from its origin, for a track with tempo ramps; null for one
+    /// without, whose conversions keep their own arithmetic exactly. The same map the engine plays,
+    /// in another unit. Built leniently, so a slip in a project file can never throw while drawing.
+    /// </summary>
+    public static TempoMap? SecondsMapOf(TrackModel track)
+        => track.Ramps.Count == 0
+            ? null
+            : TempoMap.Lenient(track.Speed, track.Ramps.Select(r => new TempoMap.Ramp(
+                  r.StartSeconds - track.TimelineOffsetSeconds, r.EndSeconds - track.TimelineOffsetSeconds, r.ToSpeed)));
 
     // ---------------------------------------------------------------- split, copy, delete
 
@@ -210,7 +237,9 @@ public static class TimelineEditor
         Normalise(track);
 
         string note = adopted
-            ? " The track takes that song's tempo and pitch, so it plays as it did."
+            ? copiedFrom is { Ramps.Count: > 0 }
+                ? " The track takes that song's tempo, its tempo ramps and pitch."
+                : " The track takes that song's tempo and pitch, so it plays as it did."
             : placed.SourcePath.Equals(track.SourcePath, StringComparison.OrdinalIgnoreCase)
                 ? ""
                 : " It takes this track's tempo, pitch and EQ.";
@@ -275,17 +304,29 @@ public static class TimelineEditor
     {
         frames = Math.Min(frames, OriginRoomFrames(track, session));
         if (frames <= 0) return 0;
+        var map = SecondsMapOf(track);                     // before the origin moves: it is measured from it
         foreach (var c in track.Clips)
             c.TrackStartSeconds = SecondsOf(StartFrameOf(c, session) + frames, session);
 
-        double speed = Math.Max(0.01, track.Speed);
-        track.TimelineOffsetSeconds = Math.Max(0, track.TimelineOffsetSeconds - SecondsOf(frames, session) / speed);
+        if (map is null)
+        {
+            double speed = Math.Max(0.01, track.Speed);
+            track.TimelineOffsetSeconds = Math.Max(0, track.TimelineOffsetSeconds - SecondsOf(frames, session) / speed);
+        }
+        else
+        {
+            // Under tempo ramps the origin goes back by as much timeline as those frames take at the
+            // tempo there. The ramps themselves sit on the timeline and do not move.
+            track.TimelineOffsetSeconds = Math.Max(0, track.TimelineOffsetSeconds + map.RelAt(-SecondsOf(frames, session)));
+        }
         return frames;
     }
 
     /// <summary>How far, in the track's own frames, its origin can move back before reaching 0:00.</summary>
     public static long OriginRoomFrames(TrackModel track, ProjectSession session)
-        => (long)Math.Floor(track.TimelineOffsetSeconds * session.SampleRate * Math.Max(0.01, track.Speed) + 1e-6);
+        => SecondsMapOf(track) is { } map
+            ? (long)Math.Floor(-map.PositionAt(-track.TimelineOffsetSeconds) * session.SampleRate + 1e-6)
+            : (long)Math.Floor(track.TimelineOffsetSeconds * session.SampleRate * Math.Max(0.01, track.Speed) + 1e-6);
 
     /// <summary>
     /// Makes sure a section can be placed at <paramref name="timelineSeconds"/> on this track —
@@ -316,11 +357,17 @@ public static class TimelineEditor
     /// </summary>
     public sealed record DeckSettings(
         string Name, string SourcePath, double Speed, double Semitones, StretchMode Mode,
-        bool PreserveFormants, double Bpm, string? BpmSource, string? Key, string? Camelot, string? KeySource);
+        bool PreserveFormants, double Bpm, string? BpmSource, string? Key, string? Camelot, string? KeySource,
+        IReadOnlyList<TempoRamp> Ramps)
+    {
+        /// <summary>The same tempo, pitch and tempo ramps: a section moved between the two plays at the same feel.</summary>
+        public bool SameFeelAs(TrackModel t)
+            => t.Speed == Speed && t.Semitones == Semitones && t.Mode == Mode && t.Ramps.SequenceEqual(Ramps);
+    }
 
     public static DeckSettings SettingsOf(TrackModel t) => new(
         t.Name, t.SourcePath, t.Speed, t.Semitones, t.Mode, t.PreserveFormants,
-        t.Bpm, t.BpmSource, t.Key, t.Camelot, t.KeySource);
+        t.Bpm, t.BpmSource, t.Key, t.Camelot, t.KeySource, t.Ramps.ToArray());
 
     /// <summary>A track with no song of its own and nothing on it — one made with "empty track".</summary>
     public static bool IsEmptyDeck(TrackModel t) => t.Clips.Count == 0 && string.IsNullOrEmpty(t.SourcePath);
@@ -350,6 +397,9 @@ public static class TimelineEditor
         target.Key = from.Key;
         target.Camelot = from.Camelot;
         target.KeySource = from.KeySource;
+        // Its tempo ramps too: they are spans of the timeline, so the empty track then plays the very
+        // speed profile the section was playing under.
+        target.Ramps = from.Ramps.ToList();
         // The name stays. A second deck holding part of a song is still a second deck, and two
         // tracks both called after the song would make every status message ambiguous.
         return true;
@@ -369,6 +419,7 @@ public static class TimelineEditor
         target.Key = before.Key;
         target.Camelot = before.Camelot;
         target.KeySource = before.KeySource;
+        target.Ramps = before.Ramps.ToList();
     }
 
     // ---------------------------------------------------------------- making room

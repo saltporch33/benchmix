@@ -16,8 +16,10 @@ public sealed class BenchmixProject
     /// 2 added <see cref="TrackModel.Clips"/>: a track holds a list of sections rather than one.
     /// A version 1 file migrates to a single clip covering what the track used to cover, which is
     /// arithmetically identical, so old projects open and sound the same.
+    /// 3 added <see cref="TrackModel.Ramps"/>, tempo ramps (2026-10-11). An older build refuses a
+    /// version 3 file rather than opening it, dropping its ramps without a word and saving over them.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -61,7 +63,8 @@ public sealed class BenchmixProject
 /// <para>
 /// <see cref="TrackStartSeconds"/> is measured in the track's <b>own, unstretched</b> timebase,
 /// not on the timeline. A clip's real timeline position is
-/// <c>track.TimelineOffsetSeconds + TrackStartSeconds / track.Speed</c>. Holding it this way means
+/// <c>track.TimelineOffsetSeconds + TrackStartSeconds / track.Speed</c> on a track with no tempo ramp,
+/// and in general <c>TimelineEditor.TimelineSecondsAt</c>. Holding it this way means
 /// changing a track's tempo rescales its whole arrangement together — a loop cut on bar lines is
 /// still a loop afterwards — and it keeps <c>Speed</c> out of the structural path entirely, so
 /// turning the TEMPO knob never rebuilds the clip list.
@@ -113,6 +116,15 @@ public sealed class TrackModel
     /// <summary>The sections this track plays, in order and never overlapping.</summary>
     public List<ClipModel> Clips { get; set; } = new();
 
+    /// <summary>
+    /// Tempo ramps (Daniel, 2026-10-11): spans of the timeline over which the track's tempo goes in a
+    /// straight line, in BPM, from whatever it plays at the start to <see cref="TempoRamp.ToSpeed"/>,
+    /// and holds there after. In order, never overlapping. A ramp sits on the timeline, not on the
+    /// audio: moving a section under it changes the tempo it plays at, and editing a ramp moves every
+    /// later section on the track, as turning TEMPO does.
+    /// </summary>
+    public List<TempoRamp> Ramps { get; set; } = new();
+
     // ---- version 1 fields, read on load and then folded into Clips ----
     // Nullable so that once migrated they are omitted from the file rather than written as zeros.
 
@@ -122,7 +134,7 @@ public sealed class TrackModel
     /// <summary>Version 1 only. Superseded by <see cref="ClipModel.SourceEndSeconds"/>.</summary>
     public double? SourceEndSeconds { get; set; }
 
-    /// <summary>1.0 is the original tempo.</summary>
+    /// <summary>1.0 is the original tempo. On a track with tempo ramps, the tempo before the first one — the TEMPO knob.</summary>
     public double Speed { get; set; } = 1.0;
 
     /// <summary>Pitch offset in semitones, independent of speed.</summary>
@@ -155,7 +167,7 @@ public sealed class TrackModel
     public string? Camelot { get; set; }
     public string? KeySource { get; set; }
 
-    /// <summary>Original tempo before any speed change — what the match maths works from.</summary>
+    /// <summary>The tempo it plays at before any tempo ramp: the song's own BPM times the TEMPO knob.</summary>
     [JsonIgnore]
     public double EffectiveBpm => Bpm * Speed;
 
@@ -191,6 +203,15 @@ public sealed class TrackModel
     {
         var copy = (TrackModel)MemberwiseClone();
         copy.Clips = Clips.Select(c => c.Clone()).ToList();
+        copy.Ramps = new List<TempoRamp>(Ramps);           // records: copying the list is deep enough
         return copy;
     }
 }
+
+/// <summary>
+/// One tempo ramp (Daniel, 2026-10-11): from whatever the track plays at <paramref name="StartSeconds"/>
+/// to <paramref name="ToSpeed"/> at <paramref name="EndSeconds"/>, in a straight line — straight in
+/// BPM, since BPM is the song's tempo times the speed — then holding there. Timeline seconds, on
+/// whole frames. The start's tempo is never stored, so the tempo can never jump where a ramp begins.
+/// </summary>
+public sealed record TempoRamp(double StartSeconds, double EndSeconds, double ToSpeed);

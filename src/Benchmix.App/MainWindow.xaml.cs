@@ -269,6 +269,13 @@ public partial class MainWindow : Window
     /// Synthetic audio, no file needed: half a second of silence then a tone, rendered twice —
     /// once straight through, once through the phase vocoder. The onset of each is unambiguous,
     /// and the gap between them is the thing that was 7200 frames wrong.
+    ///
+    /// <para>
+    /// Then the same for a tempo ramp (2026-10-11): seven short 431 Hz bursts, played untouched
+    /// and through the phase vocoder speeding up from 1.0 to 1.08 over 17.5 s. Each burst must
+    /// come out where the ramp puts it. Native interop and timing are proved here, in the exe
+    /// itself, because that is where they can fail when the tests pass.
+    /// </para>
     /// </summary>
     private static bool RunLatencyCheck()
     {
@@ -284,8 +291,8 @@ public partial class MainWindow : Window
         }
         var clip = Benchmix.Engine.Audio.AudioClip.FromSamples("latency", samples, Rate);
 
-        static int Onset(Action<Benchmix.Engine.Audio.TrackVoice> configure,
-                         Benchmix.Engine.Audio.AudioClip clip, int frames)
+        static float[] RenderOf(Action<Benchmix.Engine.Audio.TrackVoice> configure,
+                                Benchmix.Engine.Audio.AudioClip clip, int frames)
         {
             using var graph = new Benchmix.Engine.Audio.MixGraph(Rate);
             var t = graph.AddTrack();
@@ -302,9 +309,15 @@ public partial class MainWindow : Window
                 graph.Render(buf.AsSpan(done * 2, n * 2), n);
                 done += n;
             }
-            for (int f = 0; f < frames; f++) if (Math.Abs(buf[f * 2]) > 0.05f) return f;
+            return buf;
+        }
+        static int OnsetFrom(float[] buf, int from)
+        {
+            for (int f = Math.Max(0, from); f < buf.Length / 2; f++) if (Math.Abs(buf[f * 2]) > 0.05f) return f;
             return -1;
         }
+        static int Onset(Action<Benchmix.Engine.Audio.TrackVoice> configure,
+                         Benchmix.Engine.Audio.AudioClip clip, int frames) => OnsetFrom(RenderOf(configure, clip, frames), 0);
 
         try
         {
@@ -319,8 +332,47 @@ public partial class MainWindow : Window
             App.Log($"latencycheck: untouched onset={plain} pitched onset={pitched} "
                   + $"drift={drift} frames ({drift * 1000.0 / Rate:F1} ms)");
             bool aligned = Math.Abs(drift) < 256 && plain > 0;
-            App.Log($"latencycheck: verdict={(aligned ? "PASS - the two land together in the published exe" : $"FAIL - {drift} frames apart")}");
-            return aligned;
+
+            // --- a tempo ramp ---
+            var bursts = new float[Rate * 20 * 2];
+            for (int k = 0; k < 7; k++)
+            {
+                int at = (int)((1.0 + 2.5 * k) * Rate);
+                for (int f = 0; f < Rate / 4; f++)
+                {
+                    float v = (float)(0.7 * Math.Sin(2 * Math.PI * 431 * f / Rate));
+                    bursts[(at + f) * 2] = v;
+                    bursts[(at + f) * 2 + 1] = v;
+                }
+            }
+            var burstClip = Benchmix.Engine.Audio.AudioClip.FromSamples("ramp bursts", bursts, Rate);
+            var map = Benchmix.Engine.Audio.TempoMap.Build(1.0, new[] { new Benchmix.Engine.Audio.TempoMap.Ramp(0.5 * Rate, 18.0 * Rate, 1.08) });
+            var untouched = RenderOf(_ => { }, burstClip, Rate * 20);
+            var ramped = RenderOf(t =>
+            {
+                t.Mode = Benchmix.Engine.Audio.StretchMode.Independent;
+                t.Tempo = map;
+            }, burstClip, Rate * 20);
+
+            bool rampAligned = true;
+            int from = 0;
+            for (int k = 0; k < 7; k++)
+            {
+                int source = OnsetFrom(untouched, from);
+                if (source < 0) { rampAligned = false; break; }
+                from = source + Rate;                                   // past this burst
+                double expected = map.RelAt(source);
+                int heard = OnsetFrom(ramped, (int)expected - 2400);
+                double off = heard - expected;
+                App.Log($"latencycheck: tempo ramp burst {k + 1} untouched={source} expected={expected:F0} ramped={heard} drift={off:F0} frames");
+                rampAligned &= heard >= 0 && Math.Abs(off) < 256;
+            }
+
+            bool passed = aligned && rampAligned;
+            App.Log($"latencycheck: verdict={(passed ? "PASS - the two land together in the published exe, and so does a track through a tempo ramp"
+                                                     : aligned ? "FAIL - a track through a tempo ramp lands out of time"
+                                                               : $"FAIL - {drift} frames apart")}");
+            return passed;
         }
         catch (Exception ex)
         {

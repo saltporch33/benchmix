@@ -46,7 +46,21 @@ public class SectionFuzzTests : IDisposable
     [InlineData(2)]
     [InlineData(3)]
     [InlineData(4)]
-    public async Task NoSequenceOfEditsLeavesATrackBroken(int seed)
+    public Task NoSequenceOfEditsLeavesATrackBroken(int seed) => RunEdits(seed, 250, tempoRamps: false);
+
+    /// <summary>
+    /// The same, with tempo ramps (2026-10-11) on two of the tracks — one of them empty, so moves
+    /// onto it adopt and give back ramps. On top: every track's ramps stay playable and the engine
+    /// starts every section on the frame the lane draws it at.
+    /// </summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public Task NoSequenceOfEditsUnderTempoRampsLeavesATrackBroken(int seed) => RunEdits(seed, 150, tempoRamps: true);
+
+    private async Task RunEdits(int seed, int steps, bool tempoRamps)
     {
         var rng = new Random(seed);
         using var session = ProjectSession.CreateOffline(Rate);
@@ -54,7 +68,13 @@ public class SectionFuzzTests : IDisposable
         var b = await session.AddTrackAsync(_wav, 11.25);
         b.Speed = 0.93;
         session.AddEmptyTrack();
-        session.AddEmptyTrack().Speed = 1.07;
+        var d = session.AddEmptyTrack();
+        d.Speed = 1.07;
+        if (tempoRamps)
+        {
+            b.Ramps.Add(new TempoRamp(20, 50, 1.04));
+            d.Ramps.Add(new TempoRamp(30, 45, 0.95));
+        }
         session.ApplyAll();
 
         double R(double lo, double hi) => lo + rng.NextDouble() * (hi - lo);
@@ -72,7 +92,7 @@ public class SectionFuzzTests : IDisposable
             return snap;
         }
 
-        for (int step = 0; step < 250; step++)
+        for (int step = 0; step < steps; step++)
         {
             string what;
             int op = rng.Next(7);
@@ -129,7 +149,15 @@ public class SectionFuzzTests : IDisposable
             }
 
             session.ApplyAll();
-            foreach (var t in session.Project.Tracks) CheckTrack(session, t, seed, step, what);
+            foreach (var t in session.Project.Tracks)
+            {
+                CheckTrack(session, t, seed, step, what);
+                if (!tempoRamps) continue;
+                string where = $"seed {seed}, step {step} ({what}), track '{t.Name}'";
+                for (int i = 0; i + 1 < t.Ramps.Count; i++)
+                    Assert.True(t.Ramps[i].EndSeconds <= t.Ramps[i + 1].StartSeconds, $"{where}: two tempo ramps overlap");
+                TempoRampEditingTests.AssertEnginePlacesSectionsWhereCoreDoes(session, t, where);
+            }
         }
     }
 

@@ -34,7 +34,7 @@ public class JoinTests
     private readonly ITestOutputHelper _out;
     public JoinTests(ITestOutputHelper output) => _out = output;
 
-    public enum Path { Untouched, Linked, LinkedFaster, LinkedSlower, Pitched, PitchedSlightly, Stretched, StretchedFaster }
+    public enum Path { Untouched, Linked, LinkedFaster, LinkedSlower, Pitched, PitchedSlightly, Stretched, StretchedFaster, RampedStretched, RampedLinked }
 
     static AudioClip Sine(int frames)
     {
@@ -56,27 +56,37 @@ public class JoinTests
         SourceEndFrame = LoopStart + LoopLength,
     };
 
-    static double Configure(TrackVoice v, Path path)
+    /// <summary>Sets the path up and returns its tempo map, which says where on the timeline a track frame lands.</summary>
+    static TempoMap Configure(TrackVoice v, Path path)
     {
         switch (path)
         {
-            case Path.Linked: v.Mode = StretchMode.Linked; return 1.0;
-            case Path.LinkedFaster: v.Mode = StretchMode.Linked; v.Speed = 1.05; return 1.05;
-            case Path.LinkedSlower: v.Mode = StretchMode.Linked; v.Speed = 0.7; return 0.7;
-            case Path.Pitched: v.Mode = StretchMode.Independent; v.Semitones = 2; return 1.0;
-            case Path.PitchedSlightly: v.Mode = StretchMode.Independent; v.Semitones = 0.5; return 1.0;
-            case Path.Stretched: v.Mode = StretchMode.Independent; v.Speed = 0.93; return 0.93;
-            case Path.StretchedFaster: v.Mode = StretchMode.Independent; v.Speed = 1.25; return 1.25;
-            default: return 1.0;
+            case Path.Linked: v.Mode = StretchMode.Linked; break;
+            case Path.LinkedFaster: v.Mode = StretchMode.Linked; v.Speed = 1.05; break;
+            case Path.LinkedSlower: v.Mode = StretchMode.Linked; v.Speed = 0.7; break;
+            case Path.Pitched: v.Mode = StretchMode.Independent; v.Semitones = 2; break;
+            case Path.PitchedSlightly: v.Mode = StretchMode.Independent; v.Semitones = 0.5; break;
+            case Path.Stretched: v.Mode = StretchMode.Independent; v.Speed = 0.93; break;
+            case Path.StretchedFaster: v.Mode = StretchMode.Independent; v.Speed = 1.25; break;
+            // A tempo ramp (2026-10-11) running through the whole loop, join included.
+            case Path.RampedStretched:
+                v.Mode = StretchMode.Independent;
+                v.Tempo = TempoMap.Build(0.93, new[] { new TempoMap.Ramp(2000, 2 * LoopLength, 1.07) });
+                break;
+            case Path.RampedLinked:
+                v.Mode = StretchMode.Linked;
+                v.Tempo = TempoMap.Build(0.95, new[] { new TempoMap.Ramp(2000, 2 * LoopLength, 1.05) });
+                break;
         }
+        return v.Tempo;
     }
 
-    static float[] Render(ClipTimeline timeline, Path path, int frames, int block, out double speed)
+    static float[] Render(ClipTimeline timeline, Path path, int frames, int block, out TempoMap map)
     {
         using var graph = new MixGraph(Rate);
         var v = graph.AddTrack();
         v.SetTimeline(timeline);
-        speed = Configure(v, path);
+        map = Configure(v, path);
         graph.LimiterEnabled = false;
         graph.Seek(0);
         graph.SnapParameters();
@@ -107,13 +117,15 @@ public class JoinTests
     [InlineData(Path.PitchedSlightly)]
     [InlineData(Path.Stretched)]
     [InlineData(Path.StretchedFaster)]
+    [InlineData(Path.RampedStretched)]
+    [InlineData(Path.RampedLinked)]
     public void ALoopRepeatDoesNotClickWhereTheTwoCutsDoNotMatch(Path path)
     {
         var audio = Sine(Rate * 3);
         var timeline = new ClipTimeline(new[] { Repeat(audio, 0), Repeat(audio, LoopLength) });
 
-        var buf = Render(timeline, path, LoopLength * 2, 1000, out double speed);
-        int join = (int)Math.Round(LoopLength / speed);
+        var buf = Render(timeline, path, LoopLength * 2, 1000, out var map);
+        int join = (int)Math.Round(map.RelAt(LoopLength));
 
         // The same render, well away from any edge, is the yardstick — not a number from outside.
         float steady = WorstStep(buf, 3000, join - 1500);
@@ -134,6 +146,8 @@ public class JoinTests
     [InlineData(Path.PitchedSlightly)]
     [InlineData(Path.Stretched)]
     [InlineData(Path.StretchedFaster)]
+    [InlineData(Path.RampedStretched)]
+    [InlineData(Path.RampedLinked)]
     public void TheCrossfadeDoesNotMoveTheSectionAfterTheJoin(Path path)
     {
         var audio = Sine(Rate * 3);
@@ -142,11 +156,11 @@ public class JoinTests
         // the joined render must be exactly it. A fade that shifted or smeared the incoming section
         // would pass a click test and still put the loop out of time.
         var joined = Render(new ClipTimeline(new[] { Repeat(audio, 0), Repeat(audio, LoopLength) }),
-                            path, LoopLength * 2, 1000, out double speed);
+                            path, LoopLength * 2, 1000, out var map);
         var alone = Render(new ClipTimeline(new[] { Repeat(audio, LoopLength) }),
                            path, LoopLength * 2, 1000, out _);
 
-        int join = (int)Math.Ceiling(LoopLength / speed);
+        int join = (int)Math.Ceiling(map.RelAt(LoopLength));
         int fade = (int)(TrackVoice.DeclickSeconds * Rate);
         int differing = 0;
         for (int i = (join + fade + 1) * 2; i < joined.Length; i++)
@@ -243,6 +257,53 @@ public class JoinTests
             $"the join jumped by {atJoin:F4} against {steady:F4} elsewhere — it was not crossfaded");
     }
 
+    [Fact]
+    public void AJoinInsideATempoRampOnAFrameThatRoundsAwkwardlyIsStillCrossfaded()
+    {
+        // The same trap as at 0.7×, under a tempo ramp: a join on a track frame whose inverse, taken
+        // alone, disagrees with the render loop's floor. Found by search, and the search must find
+        // one, or this test would prove nothing.
+        var ramp = TempoMap.Build(0.7, new[] { new TempoMap.Ramp(0, 400000, 0.8) });
+        int join = -1;
+        for (int t = 12000; t < 120000 && join < 0; t++)
+        {
+            long guess = (long)Math.Ceiling(ramp.RelAt(t));
+            if (ramp.TrackFrameAt(guess) < t || ramp.TrackFrameAt(guess - 1) >= t) join = t;
+        }
+        Assert.True(join > 0, "no awkwardly rounding frame between 12000 and 120000 under this ramp — widen the search");
+
+        var audio = Sine(Rate * 3);
+        var timeline = new ClipTimeline(new[]
+        {
+            new VoiceClip { Audio = audio, TrackStartFrame = 0, SourceStartFrame = LoopStart, SourceEndFrame = LoopStart + join },
+            new VoiceClip { Audio = audio, TrackStartFrame = join, SourceStartFrame = LoopStart, SourceEndFrame = LoopStart + join },
+        });
+
+        using var graph = new MixGraph(Rate);
+        var v = graph.AddTrack();
+        v.SetTimeline(timeline);
+        v.Mode = StretchMode.Linked;
+        v.Tempo = ramp;
+        graph.LimiterEnabled = false;
+        graph.Seek(0);
+        graph.SnapParameters();
+        int frames = (int)(join * 2 / 0.7);
+        var buf = new float[frames * 2];
+        for (int done = 0; done < frames;)
+        {
+            int n = Math.Min(1000, frames - done);
+            graph.Render(buf.AsSpan(done * 2, n * 2), n);
+            done += n;
+        }
+
+        int at = (int)ramp.FirstRelAt(join);
+        float steady = WorstStep(buf, 3000, at - 1500);
+        float atJoin = WorstStep(buf, at - 480, at + 480);
+        _out.WriteLine($"join at track frame {join} under a 0.7→0.8 ramp: worst step {atJoin:F4}, elsewhere {steady:F4}");
+        Assert.True(atJoin <= steady * 1.5f,
+            $"under a tempo ramp the join at an awkward frame jumped by {atJoin:F4} against {steady:F4} — it was not crossfaded");
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
@@ -277,6 +338,7 @@ public class JoinTests
     [InlineData(Path.Linked)]
     [InlineData(Path.LinkedFaster)]
     [InlineData(Path.LinkedSlower)]
+    [InlineData(Path.RampedLinked)]
     public void AJoinNearTheEndOfABlockSoundsTheSameAsOneInTheMiddle(Path path)
     {
         // Not the vocoder paths: the stretcher itself comes out slightly differently for different

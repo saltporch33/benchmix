@@ -425,3 +425,35 @@ they should just be able to be dragged left or right."*
 | **Ctrl held as a group is dragged frees it from snapping**; Ctrl+click without moving still adds or takes one away. | Ctrl means "place it freely" everywhere. |
 | **While a section, a box or a track's name is held under the mouse — from the press, not only once it moves — Ctrl+I, Ctrl+V, Ctrl+D, Ctrl+X, Ctrl+Z, Ctrl+Y, Delete, Clear trim and removing a track wait** ("Let go of the section first."). A group drag waits while a file is loading or a song is being split. | A group drag puts the picture back before every pointer move, so an edit made meanwhile would be silently undone by the next move; an undo would rebuild every row under a press that is about to become a drag. |
 | **A double-click on one of several selected sections — its edges included — plays and keeps them all selected**; so does a double-click on empty space. | The first click's release had collapsed the group (or let go of the selection); the second press puts that back. Double-clicking to listen should not throw away a selection. |
+
+## 2026-10-11 — tempo ramps, part 1: the sound engine
+
+Daniel, 2026-10-11, verbatim: *"7. This one may be more difficult: I want to be able to have a
+track's tempo change over a span of time. THis would allow me to, for example, mix two songs that
+are 110 vs 120bpm. I'd slowly increase the first song to 115bpm, then mix into the next song which I
+have start at 115, and then slowly increase that song up to its true bp[m of 120."*
+
+And, asked how he wants to make one, verbatim: *"I don't want any project bpm I want to keep full
+independence. Keep the bpm info exactly as it is. [...] As for how to change bpm, I'd like to just
+click within the track, first click puts a dot indicating start of ramp, second click puts the end
+point, and a yellow line connects them indicating up or down. Setting bpm should have my type it
+in. Whatever the current bpm of the clip is will be filled in automatically at the start point of
+the ramp. Then I'll type in the bpm for the end point. If it goes down, then first point goes on top
+line of track and second point on bottom with yellow line connecting and vice versa"*.
+
+He asked for it to be built and approved one piece at a time; this is the engine and the project
+file. Clicking, typing and drawing ramps is part 2. Until then the app has no way to make one.
+
+| Decision | Why |
+| --- | --- |
+| **"No automation curves" is reopened, by his request, for tempo only.** A track's tempo can change in straight lines between points; nothing else moves on its own. | His item 7. Nothing else was asked for, and this is still not a DAW. |
+| **A ramp belongs to one track and sits on the timeline, not on the song.** It runs from one moment to another; a section moved under it plays at the tempo there. | He clicks *within the track* at a point in the mix. Each track keeps its own tempo, as he asked ("full independence"); nothing uses PROJECT BPM. |
+| **The tempo goes in a straight line in BPM over the span, then holds** until the next ramp. | His example: "slowly increase" to 115 and stay there to mix into the next song. BPM is the song's tempo times the speed, so straight in speed is straight in BPM. |
+| **The tempo at a ramp's start is never stored**: it is whatever the track plays there. Only the end tempo is. | His words: the current BPM "will be filled in automatically at the start point". Storing it would let the tempo jump where a ramp begins. |
+| **The TEMPO knob, and the BPM on the strip, are the tempo before the first ramp.** The strip text is unchanged. | "Keep the bpm info exactly as it is." What the strip shows under a ramp is part 2's to settle with him. |
+| **A track with any ramp goes through the stretcher (or LINK's resampler) for its whole length**, even where it plays at 1.0. | Switching between the untouched copy and the stretcher partway through would restart the stretcher, and its delay, mid-song. Consequence: such a track is no longer bit-identical to its file anywhere, ramp or not. A track without ramps is exactly as before. |
+| **Positions under a ramp are worked out in closed form**, never by adding up speeds block by block. | A running sum drifts with the block size, so preview and export would place the audio differently. |
+| **Ramps never overlap, are at least 0.1 s long, on whole frames, after 0:00, at 0.25×–4×.** Loading a project drops anything else. | A hand-edited or damaged file must neither crash the app nor play a tempo change nobody set up. |
+| **Project files are now version 3.** Every save writes 3, so an older Benchmix refuses a file saved from now on rather than opening it. | An older build would open a ramped project, drop its ramps without a word and save over them. |
+| **Ramps travel with the tempo**: an empty track that takes a dragged section's tempo and pitch takes its ramps too (and gives them back when only passed over); a paste onto an empty track takes them; the vocal and instrumental tracks from *Split* take their song's. | They are part of how that song plays. A stem without its song's ramp would drift out of time with it. |
+| **Moving a track's origin leaves its ramps where they are** on the timeline. | Nothing he placed should move. |

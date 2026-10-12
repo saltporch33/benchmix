@@ -345,7 +345,7 @@ public class TimelineEditorTests : IDisposable
         var loaded = ProjectStore.Load(path).Project;
         var t = loaded.Tracks[0];
 
-        Assert.Equal(2, loaded.SchemaVersion);
+        Assert.Equal(BenchmixProject.CurrentSchemaVersion, loaded.SchemaVersion);
         Assert.Single(t.Clips);
         Assert.Equal(0, t.Clips[0].TrackStartSeconds);
         Assert.Equal(0.907236846880194, t.Clips[0].SourceStartSeconds, 9);

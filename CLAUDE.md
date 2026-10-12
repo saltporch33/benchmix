@@ -40,6 +40,14 @@ mistakes, not by describing the project.
 - **A track's origin (`TimelineOffsetSeconds`) moves.** Paste, drag or loop before it and it moves
   back, with every section moving forward by the same whole frames. It is not a wall; do not clamp
   to it.
+- **A tempo ramp sits on the timeline, not on the audio** (`TrackModel.Ramps`, timeline seconds).
+  Sections stay in track frames; the track's `TempoMap` turns one into the other. Moving a section
+  under a ramp changes the tempo it plays at. A ramp stores only its end speed: the start is
+  whatever is in effect there, so the tempo cannot jump. Never multiply or divide by `Speed` to
+  place anything on a track that may have ramps — ask `TimelineEditor` or the map.
+- **A track with any tempo ramp goes through the stretcher for its whole length**, even where it
+  plays at 1.0, so it is not bit-identical anywhere. That is deliberate: dropping in and out of the
+  stretcher would restart it, and its delay, mid-song.
 - **Build output goes to `%LOCALAPPDATA%\Benchmix.build\`** on purpose, to keep bin/obj out of
   OneDrive *and* because the native `SignalsmithStretch.dll` fails to load from a deep path
   (MAX_PATH). Do not "fix" it.
@@ -63,6 +71,8 @@ mistakes, not by describing the project.
   does X" is ambiguous — ask.
 - A **repeat is not a seam.** The seam rule needs the source to continue; a repeat jumps the source
   backwards. Every seam test is about splitting and *not* moving. They do not cover loops.
+- A **ramp** in a test is a source signal whose value is its own position. A **tempo ramp** is a
+  change of tempo over time. The tempo-ramp tests use both.
 
 ## How to prove a change
 
@@ -89,7 +99,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 
 | Switch | Proves |
 | --- | --- |
-| `--latencycheck` | a pitched track lands with an untouched one (no file needed) |
+| `--latencycheck` | a pitched track lands with an untouched one, and so does a track through a tempo ramp (no file needed) |
 | `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space, dragging a track up or down, the selection box, dragging a group — 158 checks |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 36 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
@@ -118,6 +128,8 @@ These **exit 1 on failure** and also log a `verdict=` line to
   `RelativeSource AncestorType=Window`, which a ContextMenu cannot see (it lives in its own popup),
   so the command was empty and the item drew as enabled. Menu items use `Click` handlers;
   `MenuWiringTests` fails on the binding.
+- **Check a tempo ramp's positions against an integral written out in the test**, never against
+  `TempoMap` itself — a test that asks the map where audio should land agrees with the map's bugs.
 - Where the invariant is exactness, assert `==`, not a tolerance.
 - One regression test per fixed defect, named for the behaviour that was wrong, with an assertion
   message stating the musical consequence.
@@ -128,6 +140,8 @@ These **exit 1 on failure** and also log a `verdict=` line to
 
 - **Not an Audacity fork or wrapper.** Investigated and rejected with five reasons.
 - **Offline editor, not a live DJ app and not a DAW.** No effects, plugins, automation or MIDI.
+  The one exception is a track's tempo ramps (2026-10-11, his request): straight lines in tempo,
+  nothing else automated.
 - **Stems are an option beside the EQ, never a replacement** — *"But not Asa a replacement for the
   eq knobs."*
 - **One signal path** for preview and render. A second implementation is not permitted.

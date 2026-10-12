@@ -145,6 +145,17 @@ public sealed class SectionMove
         double length = TimelineEditor.SecondsOf(LengthFrames, _s) / Math.Max(0.01, track.Speed);
         double start = Math.Max(0, proposedStart);
 
+        // Where the section ends if it starts at s, and where it must start to end at e. Under a
+        // tempo ramp its timeline length depends on where it sits, so both go through the map.
+        bool ramped = track.Ramps.Count > 0;
+        double lengthSeconds = TimelineEditor.SecondsOf(LengthFrames, _s);
+        double EndFrom(double s) => ramped
+            ? TimelineEditor.TimelineSecondsAt(track, TimelineEditor.TrackSecondsAt(track, s) + lengthSeconds)
+            : s + length;
+        double StartForEnd(double e) => ramped
+            ? TimelineEditor.TimelineSecondsAt(track, TimelineEditor.TrackSecondsAt(track, e) - lengthSeconds)
+            : e - length;
+
         SnappedTo = null;
         SnapLineSeconds = null;
         SnapEdge? edge = null;
@@ -162,13 +173,13 @@ public sealed class SectionMove
                 // Its end on this edge only if the whole section then fits after 0:00. Otherwise the
                 // start would land before the timeline begins and the only way to honour the snap
                 // would be to push the track's other sections later, which is not what was asked.
-                d = Math.Abs(start + length - e.TimelineSeconds);
-                if (d < best && e.TimelineSeconds - length >= 0) { best = d; edge = e; endOnEdge = true; }
+                d = Math.Abs(EndFrom(start) - e.TimelineSeconds);
+                if (d < best && StartForEnd(e.TimelineSeconds) >= 0) { best = d; edge = e; endOnEdge = true; }
             }
 
             if (edge is { } hit)
             {
-                start = Math.Max(0, endOnEdge ? hit.TimelineSeconds - length : hit.TimelineSeconds);
+                start = Math.Max(0, endOnEdge ? StartForEnd(hit.TimelineSeconds) : hit.TimelineSeconds);
                 SnappedTo = "a section";
                 SnapLineSeconds = hit.TimelineSeconds;
             }
@@ -222,9 +233,8 @@ public sealed class SectionMove
         string how = "";
         if (!ReferenceEquals(Current, Origin))
         {
-            bool sameFeel = Current.Speed == _playedAs.Speed && Current.Semitones == _playedAs.Semitones
-                         && Current.Mode == _playedAs.Mode;
-            how = CurrentAdopted ? " The empty track took its tempo and pitch."
+            bool sameFeel = _playedAs.SameFeelAs(Current);
+            how = CurrentAdopted ? (_playedAs.Ramps.Count > 0 ? " The empty track took that track's tempo, its tempo ramps and pitch." : " The empty track took its tempo and pitch.")
                 : sameFeel ? ""
                 : " It now plays at this track's tempo and pitch.";
         }
@@ -355,7 +365,14 @@ public sealed class GroupMove
             }
             if (hit is { } h)
             {
-                delta += shift;
+                // The move is worked back from the very frame the snapped edge lands on. Under a
+                // tempo ramp the group's sections do not all move by the same time — they move by
+                // the same frames — so adding the gap to the grabbed section's start would leave a
+                // member's edge short of the line it snapped to.
+                var on = Dest(h.M);
+                long at = Snapping.FrameOn(on, h.E, _s);
+                long anchor = (h.End ? at - h.M.Length : at) - FromRef(h.M);
+                delta = TimelineEditor.TimelineSecondsOfFrame(on, anchor, _s) - RefStart(on);
                 SnappedTo = "a section";
                 SnapLineSeconds = h.E.TimelineSeconds;
             }
@@ -371,9 +388,10 @@ public sealed class GroupMove
             // Room before the track's origin is made by moving the origin back, never by squeezing.
             TimelineEditor.EnsureOriginAtOrBefore(dest, Math.Max(0, here.Min(m => StartAt(m, delta))), _s);
             long anchor = AnchorFrame(dest, delta);
-            if (hit is { } h && ReferenceEquals(Dest(h.M), dest) && ReferenceEquals(h.E.Track, dest))
+            if (hit is { } h && ReferenceEquals(Dest(h.M), dest))
             {
-                // An edge on the same track is taken to its exact frame: a true butt join, not a near miss.
+                // The snapped edge is taken to its exact frame: on the same track a true butt join,
+                // not a near miss; on another, the nearest frame to the line, ramp or not.
                 long at = Snapping.FrameOn(dest, h.E, _s);
                 anchor = (h.End ? at - h.M.Length : at) - FromRef(h.M);
             }
@@ -418,8 +436,8 @@ public sealed class GroupMove
         if (CanChangeTrack && !ReferenceEquals(Destination, Origin) && _playedAs is not null)
         {
             var dest = Destination!;
-            bool sameFeel = dest.Speed == _playedAs.Speed && dest.Semitones == _playedAs.Semitones && dest.Mode == _playedAs.Mode;
-            how = DestinationAdopted ? " The empty track took their tempo and pitch."
+            bool sameFeel = _playedAs.SameFeelAs(dest);
+            how = DestinationAdopted ? (_playedAs.Ramps.Count > 0 ? " The empty track took that track's tempo, its tempo ramps and pitch." : " The empty track took their tempo and pitch.")
                 : sameFeel ? "" : " They now play at this track's tempo and pitch.";
         }
         return new EditResult(true, $"{what}{snapped}.{over}{how}", _grabbed.Clip);
@@ -778,11 +796,12 @@ public sealed class LoopDrag
         Repeats = (int)copies;
         Partial = partial;
 
-        double each = TimelineEditor.SecondsOf(length, _s) / Math.Max(0.01, _track.Speed);
+        double each = TimelineEditor.TimelineLength(_track, b.TrackStartSeconds, TimelineEditor.SecondsOf(length, _s));
         int plays = (int)copies + 1;
+        string about = _track.Ramps.Count > 0 ? "about " : "";            // under a ramp each repeat takes its own time
         string message = copies == 0 && !partial
             ? "Loop: just the section itself — drag further to repeat it."
-            : $"Loop: {plays} × {each:0.00}s{(partial ? " and a part" : "")}.";
+            : $"Loop: {plays} × {about}{each:0.00}s{(partial ? " and a part" : "")}.";
         return new EditResult(true, message, b);
     }
 

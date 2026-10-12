@@ -57,16 +57,31 @@ public sealed class TrackVoice : IDisposable
     private int _xfadeDone;
     private VoiceClip? _xfadeInto;
 
-    // Published by reference swap, like MixGraph's voice array: the render thread sees either the
-    // whole old arrangement or the whole new one, never a half-applied edit.
-    private volatile ClipTimeline _timeline = ClipTimeline.Empty;
+    // Where the track's audio sits — its origin, its sections and its tempo — published together by
+    // one reference swap, like MixGraph's voice array: the render thread sees either the whole old
+    // placement or the whole new one, never a half-applied edit. Together, because a ramped track's
+    // tempo map is measured from its origin: a block that saw a moved origin with the old map, or
+    // with the old sections, would play the wrong part of the song and then jump back.
+    private sealed record Placement(long Origin, ClipTimeline Timeline, TempoMap Tempo);
+    private volatile Placement _placed = new(0, ClipTimeline.Empty, TempoMap.Constant(1.0));
+
+    /// <summary>How many times a placement has been published. Tests: one edit publishes once.</summary>
+    internal int PlacementsPublished;
 
     private VoiceClip? _bound;          // the section currently feeding the read position
     private double _sourcePos;          // fractional source frame the next output frame reads from
     private double _inCarry;            // fractional input frames owed to the stretcher
     private bool _needsPrime = true;
 
-    private double _speed = 1.0;
+    // The tempo for the block being rendered: one speed, or a map with tempo ramps (Daniel,
+    // 2026-10-11), taken from the placement once per block, so a change lands between blocks and
+    // never part-way through one.
+    private TempoMap _map = TempoMap.Constant(1.0);
+    private int _stretchInLatency, _stretchOutLatency;
+
+    /// <summary>How many times the read position has been re-primed. Tests: a tempo ramp must never restart it.</summary>
+    internal int RepositionCount;
+
     private double _semitones;
     private StretchMode _mode = StretchMode.Independent;
     private bool _preserveFormants = true;
@@ -88,14 +103,38 @@ public sealed class TrackVoice : IDisposable
     public ThreeBandEq Eq { get; }
 
     /// <summary>This track's sections. Replaced wholesale; never edited in place.</summary>
-    public ClipTimeline Timeline => _timeline;
+    public ClipTimeline Timeline => _placed.Timeline;
 
     /// <summary>
     /// Swaps in a new arrangement. Cheap, but not free — it is gated by the caller so that turning
     /// a knob, which changes nothing structural, does not rebind the section being played.
     /// </summary>
-    public void SetTimeline(ClipTimeline timeline)
+    public void SetTimeline(ClipTimeline timeline) { var p = _placed; Place(p.Origin, timeline, p.Tempo); }
+
+    /// <summary>Where this track's origin sits on the timeline, in engine frames.</summary>
+    public long TimelineOffsetFrames
     {
+        get => _placed.Origin;
+        set { var p = _placed; Place(value, p.Timeline, p.Tempo); }
+    }
+
+    /// <summary>
+    /// Sets where the track's audio sits — its origin, its sections and its tempo — in one step, so
+    /// no block ever plays half of an edit. Each part is changed only if it differs.
+    /// </summary>
+    public void Place(long originFrames, ClipTimeline timeline, TempoMap tempo)
+    {
+        if (tempo.MinSpeed < TempoMap.LowestSpeed || tempo.MaxSpeed > TempoMap.HighestSpeed)
+            throw new ArgumentOutOfRangeException(nameof(tempo), "A tempo map's speeds must be ones the engine can play.");
+        var was = _placed;
+        bool newTempo = !tempo.SameAs(was.Tempo);
+        bool newTimeline = !ReferenceEquals(timeline, was.Timeline);
+        if (!newTempo && !newTimeline && originFrames == was.Origin) return;
+
+        // A ramp asks the resampler for kernels as it speeds up; build them here, on this
+        // thread, so the render thread only ever finds them.
+        if (newTempo && !tempo.IsConstant) SincResampler.Prewarm(tempo.MinSpeed, tempo.MaxSpeed);
+
         // The bound section is about to be a stale object from the old list. If the new list has
         // the very same section — same audio, same place, same cut, same fades — the binding
         // carries straight over, and playback continues as if nothing happened: an edit somewhere
@@ -103,14 +142,16 @@ public sealed class TrackVoice : IDisposable
         // dropped, and the next block rebinds against the new list by position.
         var bound = _bound;
         var into = _xfadeInto;
-        _timeline = timeline;
-        _bound = timeline.Equivalent(bound);
-        _xfadeInto = timeline.Equivalent(into);
-        if (_xfadeInto is null) _xfadeLength = 0;
+        _placed = new Placement(originFrames, timeline, newTempo ? tempo : was.Tempo);
+        PlacementsPublished++;
+        if (newTimeline)
+        {
+            _bound = timeline.Equivalent(bound);
+            _xfadeInto = timeline.Equivalent(into);
+            if (_xfadeInto is null) _xfadeLength = 0;
+        }
+        if (newTempo) _dirty = true;
     }
-
-    /// <summary>Where this track's origin sits on the timeline, in engine frames.</summary>
-    public long TimelineOffsetFrames { get; set; }
 
     public bool Muted { get; set; }
 
@@ -195,11 +236,21 @@ public sealed class TrackVoice : IDisposable
 
     // ---------------------------------------------------------------- parameters
 
-    /// <summary>1.0 = original tempo, 1.08 = 8% faster.</summary>
+    /// <summary>
+    /// 1.0 = original tempo, 1.08 = 8% faster. On a track with tempo ramps this is the tempo before
+    /// the first one; setting it replaces the whole map with that one speed.
+    /// </summary>
     public double Speed
     {
-        get => _speed;
-        set { var v = Math.Clamp(value, 0.25, 4.0); if (v != _speed) { _speed = v; _dirty = true; } }
+        get => _placed.Tempo.BaseSpeed;
+        set => Tempo = TempoMap.Constant(Math.Clamp(value, TempoMap.LowestSpeed, TempoMap.HighestSpeed));
+    }
+
+    /// <summary>The track's speed over the timeline, tempo ramps included, measured from its origin in engine frames.</summary>
+    public TempoMap Tempo
+    {
+        get => _placed.Tempo;
+        set { var p = _placed; Place(p.Origin, p.Timeline, value); }
     }
 
     /// <summary>Pitch offset in semitones. Ignored in <see cref="StretchMode.Linked"/>, where speed sets it.</summary>
@@ -223,7 +274,7 @@ public sealed class TrackVoice : IDisposable
     }
 
     /// <summary>Effective pitch change in semitones, including what Linked mode implies.</summary>
-    public double EffectiveSemitones => _mode == StretchMode.Linked ? 12 * Math.Log2(_speed) : _semitones;
+    public double EffectiveSemitones => _mode == StretchMode.Linked ? 12 * Math.Log2(_placed.Tempo.BaseSpeed) : _semitones;
 
     /// <summary>
     /// True when this track asks for no speed and no pitch change at all. The stretcher is then
@@ -231,7 +282,17 @@ public sealed class TrackVoice : IDisposable
     /// through a phase vocoder just to come out the same, which is both faster and, more
     /// importantly, exact.
     /// </summary>
-    public bool IsUnprocessed => _speed == 1.0 && (_mode == StretchMode.Linked || _semitones == 0);
+    public bool IsUnprocessed
+    {
+        get { var t = _placed.Tempo; return t.IsConstant && t.BaseSpeed == 1.0 && (_mode == StretchMode.Linked || _semitones == 0); }
+    }
+
+    /// <summary>
+    /// The same, for the block being rendered. A track with any tempo ramp goes through the
+    /// stretcher or the resampler for its whole length: switching to a straight copy where a ramp
+    /// reaches 1.0 would drop the stretcher's look-ahead and jump 150 ms.
+    /// </summary>
+    private bool Unprocessed => _map.IsConstant && _map.BaseSpeed == 1.0 && (_mode == StretchMode.Linked || _semitones == 0);
 
     public double Gain
     {
@@ -250,7 +311,10 @@ public sealed class TrackVoice : IDisposable
     /// Measured from the track's origin, so a gap in the middle costs nothing and audio after it
     /// still counts.
     /// </summary>
-    public long TimelineLengthFrames => (long)(_timeline.TrackEndFrame / _speed);
+    public long TimelineLengthFrames
+    {
+        get { var p = _placed; return (long)p.Tempo.RelAt(p.Timeline.TrackEndFrame); }
+    }
 
     public void SnapParameters()
     {
@@ -273,9 +337,10 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     public void Seek(long timelineFrame)
     {
-        long rel = timelineFrame - TimelineOffsetFrames;
-        int idx = _timeline.IndexAt(TrackFrameAt(rel));
-        _bound = idx >= 0 ? _timeline[idx] : null;
+        var p = _placed;
+        long rel = timelineFrame - p.Origin;
+        int idx = p.Timeline.IndexAt(p.Tempo.TrackFrameAt(rel));
+        _bound = idx >= 0 ? p.Timeline[idx] : null;
         _xfadeLength = 0;
         _repositionPending = true;
     }
@@ -283,8 +348,7 @@ public sealed class TrackVoice : IDisposable
     private bool _repositionPending = true;
 
     /// <summary>The track's own unstretched frame at a timeline frame relative to its origin.</summary>
-    private long TrackFrameAt(long relTimelineFrame)
-        => (long)Math.Floor(relTimelineFrame * _speed);
+    private long TrackFrameAt(long relTimelineFrame) => _map.TrackFrameAt(relTimelineFrame);
 
     /// <summary>
     /// Source frame to read for a section at a given timeline offset, looking the EQ's and the
@@ -299,9 +363,24 @@ public sealed class TrackVoice : IDisposable
     /// </para>
     /// </summary>
     private double SourceReadFor(VoiceClip c, long relTimelineFrame)
-        => c.SourceStartFrame
-         + (relTimelineFrame * _speed - c.TrackStartFrame)
-         + (Eq.LatencySamples + StretchLatencyFrames) * _speed;
+    {
+        var m = _map;
+        if (m.IsConstant)
+        {
+            double v = m.BaseSpeed;
+            return c.SourceStartFrame
+                 + (relTimelineFrame * v - c.TrackStartFrame)
+                 + (Eq.LatencySamples + StretchLatencyFrames) * v;
+        }
+
+        // Under a tempo ramp. The frame heard at rel left the EQ its latency after it entered, and
+        // left the stretcher's output side its output latency before that; the stretcher's input
+        // side holds its input latency, in input frames, on top. With one speed v this is exactly the
+        // line above: (EqLat + InLat/v + OutLat)·v = InLat + (EqLat + OutLat)·v.
+        double inLat = 0, outLat = 0;
+        if (_mode == StretchMode.Independent && _stretch is not null) { inLat = _stretchInLatency; outLat = _stretchOutLatency; }
+        return (double)(c.SourceStartFrame - c.TrackStartFrame) + m.PositionAt(relTimelineFrame + Eq.LatencySamples + outLat) + inLat;
+    }
 
     /// <summary>
     /// Output frames the phase vocoder delays by, or zero when it is bypassed.
@@ -322,9 +401,9 @@ public sealed class TrackVoice : IDisposable
     {
         get
         {
-            if (IsUnprocessed || _mode != StretchMode.Independent) return 0;
+            if (Unprocessed || _mode != StretchMode.Independent) return 0;
             var st = _stretch;
-            return st is null ? 0 : st.InputLatency() / _speed + st.OutputLatency();
+            return st is null ? 0 : st.InputLatency() / _map.BaseSpeed + st.OutputLatency();
         }
     }
 
@@ -338,7 +417,7 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     private void EnsureStretchIfNeeded()
     {
-        if (_mode == StretchMode.Independent && !IsUnprocessed) _stretch ??= CreateStretch();
+        if (_mode == StretchMode.Independent && !Unprocessed) _stretch ??= CreateStretch();
     }
 
     /// <summary>
@@ -357,8 +436,10 @@ public sealed class TrackVoice : IDisposable
     /// exactly the samples it always did, so bit-exact passthrough is unchanged.
     /// </para>
     /// </summary>
-    private void Reposition(VoiceClip? clip, double wanted)
+    private void Reposition(VoiceClip? clip, long rel)
     {
+        RepositionCount++;
+        double wanted = clip is null ? 0 : SourceReadFor(clip, rel);
         _inCarry = 0;
         _needsPrime = true;
         Eq.Reset();
@@ -367,17 +448,18 @@ public sealed class TrackVoice : IDisposable
         if (clip?.Audio is null || lat <= 0) { _sourcePos = wanted; return; }
 
         // Back off by the EQ's share of the look-ahead and play that much into the EQ: the read
-        // position ends up at `wanted`, and the EQ holds what belongs just before it.
-        _sourcePos = wanted - lat * _speed;
+        // position ends up at `wanted`, and the EQ holds what belongs just before it. Under a tempo
+        // ramp the backing off is along the ramp itself.
+        _sourcePos = _map.IsConstant ? wanted - lat * _map.BaseSpeed : SourceReadFor(clip, rel - lat);
         int need = lat * _channels;
         if (_primeScratch.Length < need) _primeScratch = new float[need];
         var fill = _primeScratch.AsSpan(0, need);
         fill.Clear();
 
         long end = clip.Audio.FrameCount;
-        if (IsUnprocessed) RenderDirect(fill, lat, clip, end);
-        else if (_mode == StretchMode.Linked) RenderLinked(fill, lat, clip, end);
-        else RenderIndependent(fill, lat, clip, end);
+        if (Unprocessed) RenderDirect(fill, lat, clip, end, rel - lat);
+        else if (_mode == StretchMode.Linked) RenderLinked(fill, lat, clip, end, rel - lat);
+        else RenderIndependent(fill, lat, clip, end, rel - lat);
         Eq.Process(fill);
     }
 
@@ -390,13 +472,7 @@ public sealed class TrackVoice : IDisposable
     /// next one's time, the join was not recognised, and it switched without a crossfade.
     /// </para>
     /// </summary>
-    private long FirstRelAt(long trackFrame)
-    {
-        long r = (long)Math.Ceiling(trackFrame / _speed);
-        while (TrackFrameAt(r) < trackFrame) r++;
-        while (TrackFrameAt(r - 1) >= trackFrame) r--;
-        return r;
-    }
+    private long FirstRelAt(long trackFrame) => _map.FirstRelAt(trackFrame);
 
     // ---------------------------------------------------------------- render
 
@@ -407,14 +483,16 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     public int Render(Span<float> output, long timelineFrame, int frames)
     {
-        var timeline = _timeline;    // one read for the whole block
+        var placed = _placed;        // one read for the whole block: origin, sections and tempo together
+        var timeline = placed.Timeline;
+        var map = _map = placed.Tempo;
 
         // Mute ramps like everything else rather than cutting in one sample. Only stop rendering
         // once the ramp has actually reached silence, or muting a playing track is a click.
         if (timeline.Count == 0 || (Muted && _muteGain <= 0)) { StepGainOnly(frames); return 0; }
 
-        long relStart = timelineFrame - TimelineOffsetFrames;
-        if (relStart + frames <= 0 || relStart >= TimelineLengthFrames) { StepGainOnly(frames); return 0; }
+        long relStart = timelineFrame - placed.Origin;
+        if (relStart + frames <= 0 || relStart >= (long)map.RelAt(timeline.TrackEndFrame)) { StepGainOnly(frames); return 0; }
 
         EnsureBuffers(frames);
         EnsureStretchIfNeeded();
@@ -425,7 +503,7 @@ public sealed class TrackVoice : IDisposable
         if (_repositionPending)
         {
             _repositionPending = false;
-            Reposition(_bound, _bound is null ? 0 : SourceReadFor(_bound, relStart));
+            Reposition(_bound, relStart);
         }
 
         var work = _outScratch.AsSpan(0, frames * _channels);
@@ -507,15 +585,15 @@ public sealed class TrackVoice : IDisposable
             if (!continuous && idx > 0 && timeline.ButtJoinAfter(idx - 1) && rel == FirstFrameOf(clip))
             {
                 var outgoing = timeline[idx - 1];
-                if (!ReferenceEquals(_bound, outgoing)) Reposition(outgoing, SourceReadFor(outgoing, rel));
-                CaptureHandle(outgoing, clip);
+                if (!ReferenceEquals(_bound, outgoing)) Reposition(outgoing, rel);
+                CaptureHandle(outgoing, clip, rel);
             }
 
             _bound = clip;
             // The EQ's delay line still holds whatever came before, and without re-priming it the
             // first LatencySamples of the section come out as that instead of as the section. On
             // a clip whose opening IS the transient, those samples are the point.
-            if (!continuous) Reposition(clip, wanted);
+            if (!continuous) Reposition(clip, rel);
         }
 
         // How far this section is allowed to read. Normally its own end — but the read position
@@ -533,9 +611,9 @@ public sealed class TrackVoice : IDisposable
         if (last + 1 < timeline.Count && timeline.ButtJoinAfter(last) && clip.Audio is not null)
             sourceEnd = clip.Audio.FrameCount;
 
-        if (IsUnprocessed) RenderDirect(work, frames, clip, sourceEnd);
-        else if (_mode == StretchMode.Linked) RenderLinked(work, frames, clip, sourceEnd);
-        else RenderIndependent(work, frames, clip, sourceEnd);
+        if (Unprocessed) RenderDirect(work, frames, clip, sourceEnd, rel);
+        else if (_mode == StretchMode.Linked) RenderLinked(work, frames, clip, sourceEnd, rel);
+        else RenderIndependent(work, frames, clip, sourceEnd, rel);
 
         Eq.Process(work);
         ApplyCrossfade(work, clip, frames);
@@ -561,7 +639,7 @@ public sealed class TrackVoice : IDisposable
     /// discontinuity into two.
     /// </para>
     /// </summary>
-    private void CaptureHandle(VoiceClip outgoing, VoiceClip incoming)
+    private void CaptureHandle(VoiceClip outgoing, VoiceClip incoming, long rel)
     {
         int n = (int)(DeclickSeconds * _sampleRate);
         if (n <= 0 || outgoing.Audio is null) return;
@@ -572,9 +650,9 @@ public sealed class TrackVoice : IDisposable
         handle.Clear();
 
         long end = outgoing.Audio.FrameCount;
-        if (IsUnprocessed) RenderDirect(handle, n, outgoing, end);
-        else if (_mode == StretchMode.Linked) RenderLinked(handle, n, outgoing, end);
-        else RenderIndependent(handle, n, outgoing, end);
+        if (Unprocessed) RenderDirect(handle, n, outgoing, end, rel);
+        else if (_mode == StretchMode.Linked) RenderLinked(handle, n, outgoing, end, rel);
+        else RenderIndependent(handle, n, outgoing, end, rel);
         Eq.Process(handle);
 
         _xfadeLength = n;
@@ -633,8 +711,8 @@ public sealed class TrackVoice : IDisposable
     private void FillEnvelope(Span<float> env, ClipTimeline timeline, int idx, long rel, int frames)
     {
         var clip = timeline[idx];
-        long lengthOut = (long)(clip.LengthFrames / _speed);
-        long startRel = (long)(clip.TrackStartFrame / _speed);
+        long lengthOut = (long)_map.DurationOf(clip.TrackStartFrame, clip.LengthFrames);
+        long startRel = (long)_map.RelAt(clip.TrackStartFrame);
 
         bool joinedIn = idx > 0 && (timeline.SeamBefore(idx) || timeline.ButtJoinAfter(idx - 1));
         bool joinedOut = idx + 1 < timeline.Count && (timeline.SeamAfter(idx) || timeline.ButtJoinAfter(idx));
@@ -652,29 +730,59 @@ public sealed class TrackVoice : IDisposable
     }
 
     /// <summary>Straight copy for a track with no speed or pitch change — no DSP in the path at all.</summary>
-    private void RenderDirect(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
+    private void RenderDirect(Span<float> work, int frames, VoiceClip clip, long sourceEnd, long rel)
     {
         long start = (long)Math.Round(_sourcePos);
         CopySource(clip, start, frames, work, sourceEnd);
         _sourcePos = start + frames;
     }
 
-    private void RenderLinked(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
+    /// <summary>Under a tempo ramp the resampler's kernel changes only on this fixed grid of timeline frames.</summary>
+    private const int KernelCellFrames = 1024;
+
+    private void RenderLinked(Span<float> work, int frames, VoiceClip clip, long sourceEnd, long rel)
     {
-        var kernel = SincResampler.KernelFor(_speed);
         var src = clip.Audio!.Samples.AsSpan();
         long count = clip.Audio.FrameCount;
 
-        for (int f = 0; f < frames; f++)
+        if (_map.IsConstant)
         {
-            if (_sourcePos >= sourceEnd) break;
-            for (int c = 0; c < _channels; c++)
-                work[f * _channels + c] = (float)SincResampler.Sample(src, count, _channels, c, _sourcePos, kernel);
-            _sourcePos += _speed;
+            double speed = _map.BaseSpeed;
+            var kernel = SincResampler.KernelFor(speed);
+            for (int f = 0; f < frames; f++)
+            {
+                if (_sourcePos >= sourceEnd) break;
+                for (int c = 0; c < _channels; c++)
+                    work[f * _channels + c] = (float)SincResampler.Sample(src, count, _channels, c, _sourcePos, kernel);
+                _sourcePos += speed;
+            }
+            return;
         }
+
+        // Under a tempo ramp: the read position of every frame is the closed form of its timeline
+        // frame, and the kernel — wide enough for the fastest speed in its cell — changes only on a
+        // fixed grid of timeline frames. Nothing depends on where a block happens to start, so the
+        // preview and the rendered file are the same sample for sample, and nothing accumulates.
+        int lat = Eq.LatencySamples;
+        int g = 0;
+        while (g < frames)
+        {
+            long at = rel + g;
+            long cell = (long)Math.Floor(at / (double)KernelCellFrames);
+            int upto = (int)Math.Min(frames, (cell + 1) * KernelCellFrames - rel);
+            var kernel = SincResampler.KernelFor(_map.MaxSpeedOver(cell * KernelCellFrames + lat, (cell + 1) * KernelCellFrames + lat));
+            for (; g < upto; g++)
+            {
+                _sourcePos = SourceReadFor(clip, rel + g);
+                if (_sourcePos >= sourceEnd) { g = frames; break; }
+                for (int c = 0; c < _channels; c++)
+                    work[g * _channels + c] = (float)SincResampler.Sample(src, count, _channels, c, _sourcePos, kernel);
+            }
+        }
+        _sourcePos = SourceReadFor(clip, rel + frames);
     }
 
-    private void RenderIndependent(Span<float> work, int frames, VoiceClip clip, long sourceEnd)
+    private void RenderIndependent(Span<float> work, int frames, VoiceClip clip, long sourceEnd, long rel)
     {
         var st = _stretch ??= CreateStretch();      // EnsureStretchIfNeeded normally got here first
         // CreateStretch sets _dirty, but ApplyParametersIfDirty already ran for this block — before
@@ -683,14 +791,32 @@ public sealed class TrackVoice : IDisposable
         // whether anything previously created the stretcher, so two renders of one project differ.
         ApplyParametersIfDirty();
 
-        // How many input frames this run of output consumes, carrying the fraction forward so the
-        // read position does not drift over a four-minute song.
-        double exact = frames * _speed + _inCarry;
-        int inFrames = (int)Math.Floor(exact);
-        _inCarry = exact - inFrames;
-        if (inFrames <= 0) inFrames = 1;
+        int inFrames;
+        if (_map.IsConstant)
+        {
+            // How many input frames this run of output consumes, carrying the fraction forward so the
+            // read position does not drift over a four-minute song.
+            double exact = frames * _map.BaseSpeed + _inCarry;
+            inFrames = (int)Math.Floor(exact);
+            _inCarry = exact - inFrames;
+            if (inFrames <= 0) inFrames = 1;
 
-        if (_needsPrime) { Prime(st, clip); _needsPrime = false; }
+            if (_needsPrime) { Prime(st, clip, rel); _needsPrime = false; }
+        }
+        else
+        {
+            if (_needsPrime) { Prime(st, clip, rel); _needsPrime = false; }
+
+            // Under a tempo ramp: feed exactly what takes the read position to where the closed form
+            // says it must be when this output ends — the same function the rebind check compares
+            // against. Adding up frames × speed instead drifts past that check's two frames within a
+            // few blocks of a ramp, and re-primes the stretcher part-way through it: a jump.
+            double want = SourceReadFor(clip, rel + frames);
+            long at = (long)Math.Round(_sourcePos);
+            inFrames = (int)Math.Floor(want - at);
+            if (inFrames <= 0) inFrames = 1;
+            _inCarry = want - (at + inFrames);
+        }
 
         long start = (long)Math.Round(_sourcePos);
         EnsureInScratch(inFrames);
@@ -715,13 +841,16 @@ public sealed class TrackVoice : IDisposable
     /// that half, and is fed the audio that <i>should already have come out</i>.
     /// </para>
     /// </summary>
-    private unsafe void Prime(Stretch st, VoiceClip clip)
+    private unsafe void Prime(Stretch st, VoiceClip clip, long rel)
     {
         st.Reset();
         if (clip.Audio is null) return;
 
         long at = (long)Math.Round(_sourcePos);
         long count = clip.Audio.FrameCount;
+        // The rate the stretcher is fed at here: one speed, or under a ramp the speed at the point
+        // the read position stands for.
+        float rate = (float)(_map.IsConstant ? _map.BaseSpeed : _map.SpeedAt(rel + Eq.LatencySamples + _stretchOutLatency));
 
         int need = Math.Max(0, st.SeekLength());
         if (need > 0)
@@ -729,12 +858,12 @@ public sealed class TrackVoice : IDisposable
             EnsureInScratch(need);
             var buf = _inScratch.AsSpan(0, need * _channels);
             CopySource(clip, at - need, need, buf, count);
-            st.Seek(buf, need, (float)_speed);
+            st.Seek(buf, need, rate);
         }
 
         // OutputSeekLength scales with the playback rate (7200 at 1.0, 6854 at 0.92), so it is
         // asked fresh every time rather than cached alongside SeekLength.
-        int outNeed = Math.Max(0, st.OutputSeekLength((float)_speed));
+        int outNeed = Math.Max(0, st.OutputSeekLength(rate));
         if (outNeed == 0) return;
 
         EnsureInScratch(outNeed);
@@ -766,6 +895,8 @@ public sealed class TrackVoice : IDisposable
     {
         var st = new Stretch();
         st.PresetDefault(_channels, _sampleRate, true);
+        _stretchInLatency = st.InputLatency();
+        _stretchOutLatency = st.OutputLatency();
         _dirty = true;
         _needsPrime = true;
         return st;

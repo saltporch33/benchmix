@@ -358,7 +358,20 @@ public sealed class ProjectSession : IDisposable
     /// <summary>Details of the most recent separation, for the UI to report.</summary>
     public StemResult? LastStemResult { get; private set; }
 
-    private TrackModel AddSeparatedTrack(TrackModel source, string path, string name, string colour)
+    /// <summary>
+    /// The tempo map a track's voice plays: from its origin, in engine frames, at speeds the engine
+    /// can play. With no tempo ramp, the one speed — exactly what setting Speed used to give it.
+    /// </summary>
+    public TempoMap EngineTempoOf(TrackModel model)
+    {
+        double v0 = Math.Clamp(model.Speed, TempoMap.LowestSpeed, TempoMap.HighestSpeed);
+        if (model.Ramps.Count == 0) return TempoMap.Constant(v0);
+        long origin = SecondsToFrames(model.TimelineOffsetSeconds);
+        return TempoMap.Lenient(v0, model.Ramps.Select(r => new TempoMap.Ramp(
+            SecondsToFrames(r.StartSeconds) - origin, SecondsToFrames(r.EndSeconds) - origin, r.ToSpeed)));
+    }
+
+    internal TrackModel AddSeparatedTrack(TrackModel source, string path, string name, string colour)
     {
         var model = new TrackModel
         {
@@ -369,6 +382,7 @@ public sealed class ProjectSession : IDisposable
             // into place instead of needing to be re-matched.
             TimelineOffsetSeconds = source.TimelineOffsetSeconds,
             Speed = source.Speed,
+            Ramps = source.Ramps.ToList(),       // the same origin, so the very same tempo map
             Semitones = source.Semitones,
             Mode = source.Mode,
             PreserveFormants = source.PreserveFormants,
@@ -442,17 +456,17 @@ public sealed class ProjectSession : IDisposable
     {
         if (!_voices.TryGetValue(model.Id, out var v)) return;
 
-        v.TimelineOffsetFrames = SecondsToFrames(model.TimelineOffsetSeconds);
-
         // The sections are rebuilt only when they have actually changed. Apply runs on every pixel
         // of a knob drag, and swapping in a new timeline drops the voice's binding to the section
         // it is playing — which would re-prime the vocoder sixty times a second while someone
         // nudges the TEMPO knob.
         var next = BuildTimeline(model);
-        if (!v.Timeline.Matches(next)) v.SetTimeline(next);
 
+        // Origin, sections and tempo go to the engine in one step. A ramped track's tempo is
+        // measured from its origin, so a block that saw one of them without the others — a paste
+        // before the origin, mid-playback — would play the wrong audio for a block.
+        v.Place(SecondsToFrames(model.TimelineOffsetSeconds), v.Timeline.Matches(next) ? v.Timeline : next, EngineTempoOf(model));
         v.Mode = model.Mode;
-        v.Speed = model.Speed;
         v.Semitones = model.Semitones;
         v.PreserveFormants = model.PreserveFormants;
 

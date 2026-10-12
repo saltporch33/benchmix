@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**240 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**304 tests, 0 failures, 0 skipped** (2026-10-12). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -511,6 +511,96 @@ buttontest 36).
 **Not verified:** the drag under a real hand with real mouse capture, a group dragged while the rows
 are scrolled part-way, and how a group dropped across many sections sounds — what lands is checked,
 not listened to.
+
+## 2026-10-11 — tempo ramps, part 1: the sound engine
+
+**A track without a ramp is unchanged.** Every test from before passed untouched. 30-second
+renders of two real songs through the command-line renderer — untouched, LINK and phase vocoder —
+were taken from the working tree just before the change and again after it: all three files hash
+the same (`819464bf2adcdcdb`, `d3fea3134b55cec4`, `6086fee0a8249967`).
+
+**In the test project.** Where each moment of the song should come out is worked out from the
+integral written in the test, never asked of the tempo map.
+- `TempoRampRenderTests` (27), on the real voice:
+  - smooth swells on a 431 Hz carrier before, all through and after a ramp, up (0.92→1.10) and
+    down (1.10→0.90), on the phase vocoder and on LINK, and from the song's own tempo (110 → 115 BPM
+    on the vocoder), in blocks of 1000 and 4096: **all 90 swells land within 2 frames** of where the
+    ramp puts them;
+  - the stretcher is never restarted part-way through a ramp, at blocks of 333, 1000 and 4096;
+  - on LINK a ramp renders the same sample for sample in blocks of 333 and 4096 (`==`), so preview
+    and export agree; a seek into a ramp plays exactly what playing through it does (`==`); on the
+    vocoder it lands in time;
+  - two renders of one ramped track are identical; a split inside a ramp changes no sample on LINK
+    (`==`) and does not restart the vocoder (largest difference from the unsplit render 0.00000);
+  - a cut edge inside a ramp is declicked on its own frames, and the gap after it is silent;
+  - a render runs to the end of a ramped track; any ramp sends the whole track through the
+    stretcher, and removing it makes the track untouched again.
+- `TempoMapTests` (9): with no ramp the map is exactly the multiply and divide it replaced (`==`,
+  at ten speeds from 0.25 to 4 and 4,000 random frames out to ±10⁸); before the first ramp it is
+  exactly the knob (`==`); the position never steps backwards; the inverse brackets the render
+  loop's frame exactly at every frame near a ramp's edges and middle, and is within one frame of
+  the integral there; the tempo never
+  jumps at a ramp's edges; it goes evenly in BPM and holds after; a ramp before a track's start is
+  measured from it; impossible ramps are refused by one builder and dropped by the other.
+- `TempoRampEditingTests` (18): a ramp moves nothing before it and later sections by what the tempo
+  says; moving a ramped track's start leaves every section and ramp where they were; a section
+  dragged under a ramp lands on a whole frame where it was dropped, and its end snaps to the next
+  section's start; a split under a ramp is a seam; an empty track takes a section's ramps with its
+  tempo and gives them back; a paste onto an empty track and the tracks from *Split* take their
+  song's ramps; a ramped project reopens rendering byte for byte the same; it is saved as version
+  3; a version 2 file opens with no ramps; ramps that cannot be played are dropped on load; undo
+  is deep for ramps; a group moved into a ramp keeps its seam.
+- `JoinTests` run every join check on two ramped paths as well, plus a butt join inside a ramp on
+  a frame that rounds awkwardly: still crossfaded.
+- `SectionFuzzTests.NoSequenceOfEditsUnderTempoRampsLeavesATrackBroken` (4 seeds × 150 steps): every
+  track keeps its rules, its ramps never overlap, and the engine plays exactly the tempo map the
+  project describes.
+
+**Broken on purpose.** With the read-ahead under a ramp taken out, 4 swell tests failed; with the
+vocoder fed by an accumulated count instead of the closed form, 3 restart tests failed. Both
+passed again once put back.
+
+**The review** (one reader over the diff) found five things, all fixed before anything was
+committed:
+- **Snapping a group under a tempo ramp missed the line.** A group whose section under a ramp
+  snapped to an edge on another track landed short of the guide (about 22 ms in the reviewer's
+  case): the move was the gap added to the grabbed section's start, and under a ramp the sections
+  move by the same frames, not the same time. It is now worked back from the exact frame the edge
+  lands on. `AGroupUnderARampSnapsItsEndOntoAnotherTracksEdge` and
+  `AGroupAcrossTracksUnderARampSnapsAndStillMovesTogether` (which also checks that both decks
+  still move by the same time).
+- **A paste before a ramped track's start reached the engine in three steps** — origin, sections,
+  tempo map — and a block played between them would put the ramp seconds away and jump back. The
+  three now go in one step (`TrackVoice.Place`); `AnEditBeforeARampedTracksStartReachesTheEngineInOneStep`
+  counts the steps. The same gap existed between the origin and the sections before tempo ramps.
+- **Two checks that the engine plays the project's tempo map compared it with itself.** Replaced by
+  a check that every section starts in the engine on the frame the lane draws it at — the engine's
+  map in frames against the editor's in seconds — in the fuzz test and in
+  `ARampedTrackPlaysEachSectionWhereTheLaneDrawsIt`, which renders a section on a track that
+  starts at 30 s under a ramp that begins before it, and reads where it starts and stops off the audio.
+- **The test for a section's end snapping under a ramp would have passed without the fix**: at its
+  zoom the snap reached far enough for the ramp-blind estimate too. Zoomed in, it no longer does.
+- **No test rendered a ramp from the song's own tempo**, his own case (110 → 115 BPM from 1.0×),
+  where nothing else forces the stretcher on. Added to the timing and the restart tests.
+
+Each fix was then taken out again, one at a time, and its tests run: both group tests failed; the
+placement test and all four fuzz seeds failed with the engine's ramps measured from 0:00 instead of
+the track's start; both restart tests from the song's own tempo failed with a ramped track allowed
+to skip the stretcher at 1.0×; the step count failed with the three separate writes; and the
+end-snap test, once it drops short of the edge, failed with the ramp-blind estimate. (Dropped long,
+it had passed either way: the overwrite trims the next section into a join.)
+
+**In the published exe.** `--latencycheck` now also plays seven 431 Hz bursts untouched and through
+the phase vocoder speeding up from 1.0 to 1.08 over 17.5 s. Each lands within 166 frames
+(3.5 ms) of where the ramp puts it: 1, 6, −19, −121, −122, −166, −125. That spread is the
+measuring, not the ramp: the check finds each burst by the first sample over a threshold, and the
+vocoder smears an onset. Measured the same way at a constant speed, with no ramp at all, 1.04 gave
+−68 to −158 frames and 1.08 gave −49 to −218; at 1.0, 0. The swells above are the precise measure.
+`scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way (gesturetest 158,
+buttontest 36). **304 tests, 0 failed, 0 skipped.**
+
+**Not verified:** nobody has listened to a tempo ramp; there is no way to make one in the app yet;
+the swells are a sine, not music.
 
 ## The stretch engine
 

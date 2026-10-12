@@ -100,6 +100,38 @@ bookkeeping rather than something anyone chose. When a section is pasted, dragge
 point before it, the origin moves back and every section on the track moves forward by the same
 whole number of frames, so nothing is heard to move.
 
+## Tempo ramps
+
+*2026-10-11.* A track can change tempo over a span of the timeline: from whatever it plays where
+the ramp starts, in a straight line, to the speed the ramp ends on, then holding there. The TEMPO
+knob is the speed before the first ramp. Ramps sit on the timeline in seconds
+(`TrackModel.Ramps`); sections stay where they always were, in the track's own frames.
+
+So the one number that turned track frames into timeline frames — the speed — becomes a
+**tempo map** (`TempoMap`): speed is piecewise linear in timeline time, so the distance travelled
+through the track is piecewise quadratic, and both directions have a closed form. Everything that
+multiplied or divided by the speed now asks the map instead: the engine's read position, a seek, a
+section's length on the timeline, its declick ramps, the edge a section snaps to, moving the
+origin. With no ramp, the map *is* the old multiply and divide, the same expressions in the same
+order, so a track without ramps places and renders every sample exactly as before (30-second
+renders of two real songs, untouched, through LINK and through the phase vocoder, hash the same
+before and after).
+
+Two rules keep a ramped track in time at every block size:
+
+- **Read positions are computed, never accumulated.** The phase vocoder is fed the difference
+  between where the map says the read should be at the end of this block and where it was, so
+  rounding cannot build up. LINK (no pitch kept) reads each output frame at its closed-form
+  position; its anti-alias kernel is chosen per fixed 1024-frame cell of the timeline, not per
+  block, so a preview and an export pick the same kernels.
+- **A ramped track never bypasses the stretcher**, even where it plays at 1.0. Dropping in and
+  out of it would restart it, and its delay, partway through a song.
+
+The map is immutable, and it is measured from the track's origin, so the origin, the sections and
+the map reach the engine together: one snapshot, swapped by reference (`TrackVoice.Place`), read
+once per block. A block never sees a moved origin with the old map — which, after a paste before a
+ramped track's start, would play the wrong part of the song for a block and then jump back.
+
 ## Tempo and key: measure, then decide
 
 Daniel asked for detection of both. [Spike 03](SPIKE-03-analysis.md) calibrated against his own
@@ -168,7 +200,16 @@ would be right for a large model and would only add ways to be wrong here.
   "looped clip" object. Changing the original section afterwards does not change its repeats.
 - **No per-section EQ, volume or speed.** Those belong to the track, so every section on it gets
   the same treatment. A section that needs its own EQ wants its own track.
-- **No automation curves.** Knobs are static per track; fades are per clip.
+- **No automation curves, except a track's tempo ramps.** Every other knob is static per track;
+  fades are per clip.
+- **A tempo ramp is a straight line in BPM.** No curves, and the tempo holds after it until the
+  next one.
+- **A track with a tempo ramp is processed for its whole length**, so it is no longer
+  bit-identical to its file even where it plays at 1.0.
+- **The ruler's bar lines do not follow a tempo ramp**, and the BPM on the strip is the tempo
+  before the first ramp.
+- **No way to make a tempo ramp in the app yet.** The engine and project file support them; the
+  clicking and typing come next.
 - **Key detection is 47%.** Documented, surfaced, and worked around rather than hidden.
 - **No effects** — no reverb, delay, compression or plugins, by design.
 - **Memory grows with track count.** Eight 4-minute tracks is roughly 740 MB.
