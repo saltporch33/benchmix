@@ -976,6 +976,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _rangeAnchorId = clip.Id;
     }
 
+    /// <summary>The sections a selection box over these rows and times touches, topmost track first.</summary>
+    public IReadOnlyList<(TrackModel Track, ClipModel Clip)> SectionsInBox(int firstRow, int lastRow, double fromSeconds, double toSeconds)
+        => SectionSelection.Touching(Tracks.Select(t => t.Model).ToList(), firstRow, lastRow, fromSeconds, toSeconds, Session);
+
+    /// <summary>
+    /// A selection box (Daniel, 2026-10-11): exactly what it touches, plus <paramref name="keep"/> —
+    /// what was selected already, when Ctrl or Shift was held as it started. The first section it
+    /// touches, earliest on the topmost track, becomes the one commands act on and where the next
+    /// Shift+click measures from.
+    /// </summary>
+    public void SelectBand(IReadOnlySet<Guid> keep, IReadOnlyList<(TrackModel Track, ClipModel Clip)> touched)
+    {
+        var ids = new HashSet<Guid>(keep);
+        foreach (var (_, c) in touched) ids.Add(c.Id);
+        var all = Tracks.SelectMany(t => t.Clips).ToList();
+        foreach (var c in all) c.IsSelected = ids.Contains(c.Id);
+
+        var first = touched.Count > 0 ? all.FirstOrDefault(c => c.Id == touched[0].Clip.Id) : null;
+        SelectedClip = first ?? (SelectedClip is { IsSelected: true } current && all.Contains(current)
+                                     ? current : all.LastOrDefault(c => c.IsSelected));
+        _rangeAnchorId = SelectedClip?.Id;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+    }
+
+    /// <summary>The box was let go: say what it selected.</summary>
+    public void FinishBand() => ReportSelection();
+
     private void ReportSelection()
     {
         var selected = SelectedClips;

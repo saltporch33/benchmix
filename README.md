@@ -69,6 +69,7 @@ control on screen is one you asked for.
 | <kbd>Alt</kbd>+click a lane | move the playhead without moving anything |
 | <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |
 | <kbd>Shift</kbd>+click a section | select every section between the section you clicked before and this one |
+| drag across empty space (a gap, an empty track, or under the tracks) | draw a box: every section it touches is selected, as on the Windows desktop. <kbd>Ctrl</kbd> or <kbd>Shift</kbd> held as you start adds to what is selected |
 | <kbd>Delete</kbd> | delete the selected sections, leaving the gaps (not while typing in a text box) |
 | drag a track's name (or its ≡) up or down | move the track; a blue line shows where it will land |
 | double-click a track's name, or right-click its strip → *Rename track* | rename it: type, then <kbd>Enter</kbd> keeps it (so does clicking anywhere else), <kbd>Esc</kbd> keeps the old name |
@@ -78,7 +79,9 @@ name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> past
 
 **Several sections at once.** Click one section, then <kbd>Ctrl</kbd>+click others to add them, or
 <kbd>Shift</kbd>+click to take every section between the two — on every track from the one to the
-other, but only sections wholly inside that stretch of time. <kbd>Delete</kbd> removes the whole
+other, but only sections wholly inside that stretch of time. Or drag a box across empty space: it
+takes every section it **touches**, even partly, on every track it covers — but only what is on
+screen, as it does not scroll the view. <kbd>Delete</kbd> removes the whole
 selection in one undo step and leaves the gaps. Cut, copy, repeat and the drags still act on one
 section: the one you clicked last. Every button, knob and slider explains itself in a tooltip.
 

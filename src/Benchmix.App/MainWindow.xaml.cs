@@ -614,6 +614,15 @@ public partial class MainWindow : Window
             _scriptedModifiers = null;
         }
 
+        // --- the selection box ---
+        try { RunBandGestures(Check, notes); }
+        finally
+        {
+            BandLost();
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -1008,13 +1017,18 @@ public partial class MainWindow : Window
         var below = At(BelowTracks, _vm.ScrollSeconds + 2.5);
         _scriptedWindowPoint = below;
         BelowDown(BelowTracks, below, 1);
+        BandUp();
         BelowDown(BelowTracks, below, 2);
+        BandUp();
         _scriptedWindowPoint = null;
         Check($"a double-click under the last track plays from there (engine at {engine.PositionSeconds:0.000}s)",
               PlayingAt(BelowTracks, below));
 
         _vm.SelectClip(Find(id));
+        _scriptedWindowPoint = below;
         BelowDown(BelowTracks, below, 1);
+        BandUp();
+        _scriptedWindowPoint = null;
         Check("a plain click under the last track lets go of the selected sections", _vm.SelectedClips.Count == 0);
     }
 
@@ -1254,6 +1268,210 @@ public partial class MainWindow : Window
 
         UpdateLayout();
         Check("the grip explains itself on hover", GripOf(_vm.Tracks[0]) is { ToolTip: string { Length: > 0 } });
+    }
+
+    /// <summary>
+    /// The selection box (Daniel, 2026-10-11), through the lanes' and the empty room's own handlers
+    /// with a scripted pointer. What it should select is worked out here from the sections and rows
+    /// on screen, not from the code that does the selecting.
+    /// </summary>
+    private void RunBandGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        var song = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Clips.Any(c => c.TimelineLengthSeconds > 14));
+        if (song is null) { notes.Add("no section longer than 14 s, so the selection box is untested - pass a file to cover it"); return; }
+        var songId = song.Id;
+        double pps = _vm.PixelsPerSecond;
+        FrameworkElement? Row(TrackViewModel t) => TrackList.ItemContainerGenerator.ContainerFromItem(t) as FrameworkElement;
+        double LayerY(Point window) => TranslatePoint(window, BandLayer).Y;
+        Point At(FrameworkElement surface, double t, double fraction = 0.5)
+        {
+            var o = surface.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (t - _vm.ScrollSeconds) * pps, o.Y + surface.ActualHeight * fraction);
+        }
+        // Every section on a row the box covers that reaches into its time: the desktop's rule.
+        HashSet<Guid> Expected(Point a, Point b, double from, double to)
+        {
+            double y0 = Math.Min(LayerY(a), LayerY(b)), y1 = Math.Max(LayerY(a), LayerY(b));
+            double lo = Math.Min(from, to), hi = Math.Max(from, to);
+            var ids = new HashSet<Guid>();
+            foreach (var t in _vm.Tracks)
+            {
+                if (Row(t) is not { } row) continue;
+                double top = row.TranslatePoint(new Point(0, 0), BandLayer).Y;
+                if (top > y1 || top + row.ActualHeight <= y0) continue;
+                foreach (var c in t.Clips)
+                    if (c.TimelineLengthSeconds > 0 && c.TimelineStartSeconds < hi && c.TimelineEndSeconds > lo) ids.Add(c.Id);
+            }
+            return ids;
+        }
+        HashSet<Guid> Selected() => _vm.SelectedClips.Select(c => c.Id).ToHashSet();
+        void Press(FrameworkElement surface, Point p)
+        {
+            _scriptedWindowPoint = p;
+            if (ReferenceEquals(surface, BelowTracks)) BelowDown(surface, p); else LaneDown(surface, p);
+        }
+        void MoveTo(FrameworkElement surface, Point p)
+        {
+            _scriptedWindowPoint = p;
+            if (ReferenceEquals(surface, BelowTracks)) BandMove(p, true); else LaneMove(surface, p, true);
+        }
+        void LetGo(FrameworkElement surface)
+        {
+            if (ReferenceEquals(surface, BelowTracks)) BandUp(); else LaneUp(surface);
+            _scriptedWindowPoint = null;
+        }
+
+        // --- under the last track, while the rows still leave room there ---
+        var bottom = _vm.Tracks[^1];
+        if (BelowTracks.ActualHeight < 20 || Row(bottom) is null)
+            notes.Add($"no room under the tracks ({BelowTracks.ActualHeight:0} px), so a box started there is untested");
+        else
+        {
+            var from = At(BelowTracks, _vm.ScrollSeconds + 1, 0.3);
+            var into = new Point(At(BelowTracks, _vm.ScrollSeconds + 20).X, Row(bottom)!.TranslatePoint(new Point(0, Row(bottom)!.ActualHeight / 2), this).Y);
+            var wantBelow = Expected(from, into, _vm.ScrollSeconds + 1, _vm.ScrollSeconds + 20);
+            // Raised as routed events on the room itself, so the press, move and release handlers
+            // wired up in the XAML are the ones that run.
+            _scriptedWindowPoint = from;
+            BelowTracks.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = MouseLeftButtonDownEvent });
+            _scriptedWindowPoint = into;
+            BelowTracks.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = MouseMoveEvent });
+            BelowTracks.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = MouseLeftButtonUpEvent });
+            _scriptedWindowPoint = null;
+            Check("a box from under the tracks is let go when the button is (its own press, move and release handlers ran)",
+                  _band is null && BandRect.Visibility != Visibility.Visible);
+            if (wantBelow.Count == 0) notes.Add("the bottom track has nothing in view, so a box from under the tracks selects nothing to compare");
+            else Check($"a box started under the last track selects what it reaches on the rows above (got {Selected().Count}, expected {wantBelow.Count})",
+                       Selected().SetEquals(wantBelow));
+        }
+
+        // --- a gap to start from: cut the song into 3 s pieces and take one out ---
+        var piece = song.Clips.First(c => c.TimelineLengthSeconds > 14);
+        double T = piece.TimelineStartSeconds + 2;
+        _vm.SelectedTrack = song;
+        foreach (var at in new[] { T, T + 3, T + 6, T + 9 }) { _vm.SeekTo(at); _vm.SplitAtPlayheadCommand.Execute(null); }
+        song = _vm.Tracks.First(t => t.Id == songId);
+        var hole = song.Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - (T + 3)) < 0.01);
+        if (hole is null) { notes.Add("could not cut the song into pieces, so the selection box is untested"); return; }
+        _vm.SelectClip(hole);
+        PressDelete();
+        _vm.ScrollSeconds = Math.Max(0, T - 3);
+        UpdateLayout();
+        song = _vm.Tracks.First(t => t.Id == songId);
+        if (LaneOf(song) is not { ActualHeight: > 0 } lane) { notes.Add("the song's lane is not laid out, so the selection box is untested"); return; }
+        var before = song.Clips.First(c => Math.Abs(c.TimelineStartSeconds - T) < 0.01);
+        var after = song.Clips.First(c => Math.Abs(c.TimelineStartSeconds - (T + 6)) < 0.01);
+
+        // The box reaches down into the next row when there is one on screen.
+        // The box reaches half way into the row below, when there is one on screen, and a copy of
+        // the piece before the gap is pasted there first so that row has something in the box's time.
+        int index = _vm.Tracks.IndexOf(song);
+        double reach = 0.5;
+        TrackViewModel? below = null;
+        if (index + 1 < _vm.Tracks.Count && Row(_vm.Tracks[index + 1]) is { } nextRow
+            && nextRow.TranslatePoint(new Point(0, nextRow.ActualHeight / 2), this).Y
+               < TrackScroller.TranslatePoint(new Point(0, TrackScroller.ViewportHeight), this).Y)
+        {
+            below = _vm.Tracks[index + 1];
+            _vm.SelectClip(before);
+            _vm.CopyClipCommand.Execute(null);
+            _vm.SelectedTrack = below;
+            _vm.SeekTo(T + 1);
+            _vm.PasteClipCommand.Execute(null);
+            var belowId = below.Id;
+            PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == belowId)?.Clips.Any(c => Math.Abs(c.TimelineStartSeconds - (T + 1)) < 0.01) == true);
+            below = _vm.Tracks.First(t => t.Id == belowId);
+            song = _vm.Tracks.First(t => t.Id == songId);
+            lane = LaneOf(song)!;
+            UpdateLayout();
+            reach = 1.5;
+        }
+        else notes.Add("no second row on screen, so the box is checked on one row only");
+
+        var start = At(lane, T + 4.5);
+        var small = At(lane, T + 3.2, 0.6);
+        var end = At(lane, T + 1.5, reach);
+
+        // A click in the gap without dragging lets go of the selection, as it always has.
+        _vm.SelectClip(after);
+        Press(lane, start);
+        LetGo(lane);
+        Check("a click on empty lane space without dragging still lets go of the selection", _vm.SelectedClips.Count == 0);
+
+        Press(lane, start);
+        MoveTo(lane, small);
+        int whileSmall = Selected().Count;
+        MoveTo(lane, end);
+        int sections = song.Clips.Count;
+        bool deleteRefused = Selected().Count > 0 && !PressDelete() && _vm.Tracks.First(t => t.Id == songId).Clips.Count == sections;
+        bool shown = BandRect.Visibility == Visibility.Visible;
+        double left = Canvas.GetLeft(BandRect), width = BandRect.Width, top = Canvas.GetTop(BandRect), height = BandRect.Height;
+        double wantLeft = (T + 1.5 - _vm.ScrollSeconds) * pps, wantTop = Math.Min(LayerY(start), LayerY(end));
+        var whileBig = Selected();
+        LetGo(lane);
+        var want = Expected(start, end, T + 1.5, T + 4.5);
+
+        Check($"dragging across empty lane space draws a box where the pointer went (at {left:0}, {top:0}, {width:0} x {height:0} px)",
+              shown && Math.Abs(left - wantLeft) <= 1 && Math.Abs(width - 3 * pps) <= 1
+              && Math.Abs(top - wantTop) <= 1 && Math.Abs(height - Math.Abs(LayerY(end) - LayerY(start))) <= 1);
+        Check($"the selection follows the box while it is dragged ({whileSmall} while small, {whileBig.Count} when larger)",
+              whileSmall < whileBig.Count && whileBig.SetEquals(want));
+        bool reachedBelow = below is null || below.Clips.Any(c => want.Contains(c.Id));
+        Check($"every section the box touches is selected, on every row it covers, even ones only partly inside (got {Selected().Count}, expected {want.Count})",
+              want.Contains(before.Id) && !want.Contains(after.Id) && reachedBelow && Selected().SetEquals(want));
+        Check("the box disappears when the button is let go", BandRect.Visibility != Visibility.Visible);
+        Check("Delete is refused while a box is being dragged, even with sections in it selected", deleteRefused);
+        Check($"after a box, the earliest section on the topmost row is the one commands act on, and the status bar counts them (\"{_vm.Status}\")",
+              _vm.SelectedClip?.Id == before.Id && _vm.Status.Contains("selected"));
+
+        // Ctrl as the box starts: it adds to what was selected.
+        _vm.SelectClip(_vm.Tracks.SelectMany(t => t.Clips).First(c => c.Id == after.Id));
+        _scriptedModifiers = ModifierKeys.Control;
+        Press(lane, start);
+        MoveTo(lane, end);
+        LetGo(lane);
+        _scriptedModifiers = null;
+        Check($"Ctrl held as the box starts adds to the selection ({Selected().Count} selected)",
+              Selected().Contains(after.Id) && want.IsSubsetOf(Selected()));
+
+        // A Ctrl- or Shift-click on empty space — to pick the track Ctrl+V pastes to, say — leaves
+        // the sections already picked alone, in a lane and under the tracks.
+        var picked = Selected();
+        foreach (var held in new[] { ModifierKeys.Control, ModifierKeys.Shift })
+        {
+            _scriptedModifiers = held;
+            Press(lane, start);
+            LetGo(lane);
+            Check($"a {held}+click on empty lane space keeps the sections already selected ({Selected().Count} of {picked.Count})",
+                  Selected().SetEquals(picked));
+        }
+        if (BelowTracks.ActualHeight >= 20)
+        {
+            _scriptedModifiers = ModifierKeys.Control;
+            var under = At(BelowTracks, T, 0.3);
+            Press(BelowTracks, under);
+            LetGo(BelowTracks);
+            Check($"a Control+click under the tracks keeps the sections already selected ({Selected().Count} of {picked.Count})",
+                  Selected().SetEquals(picked));
+        }
+        _scriptedModifiers = null;
+
+        // A right-press while a box is held — the start of a pan, say — keeps the box's selection.
+        Press(lane, start);
+        MoveTo(lane, end);
+        var boxed = Selected();
+        OnLaneRightButtonDown(lane, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = PreviewMouseRightButtonDownEvent });
+        LetGo(lane);
+        Check($"a right-press while a box is held keeps what the box selected ({Selected().Count} of {boxed.Count})",
+              boxed.Count > 0 && Selected().SetEquals(boxed));
+
+        // A box over nothing selects nothing.
+        _vm.SelectClip(_vm.Tracks.SelectMany(t => t.Clips).First(c => c.Id == after.Id));
+        Press(lane, At(lane, T + 3.3, 0.3));
+        MoveTo(lane, At(lane, T + 5.7, 0.7));
+        LetGo(lane);
+        Check("a box over empty space selects nothing, and lets go of what was selected", _vm.SelectedClips.Count == 0);
     }
 
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
@@ -2093,8 +2311,121 @@ public partial class MainWindow : Window
 
         if (clickCount >= 2 && !shift && !ctrl) { _vm.PlayFrom(at); return true; }
         if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
-        if (!shift && !ctrl) _vm.SelectClip(null);
+        BandDown(surface, window, additive: shift || ctrl);
         return true;
+    }
+
+    private void OnBelowTracksMouseMove(object sender, MouseEventArgs e) => BandMove(WindowPoint(e), e.LeftButton == MouseButtonState.Pressed);
+
+    private void OnBelowTracksMouseUp(object sender, MouseButtonEventArgs e) => BandUp();
+
+    private void OnBelowTracksLostCapture(object sender, MouseEventArgs e) => BandLost();
+
+    // ---------------- the selection box ----------------
+
+    /// <summary>
+    /// A selection box being dragged: where it started, in timeline seconds and in the rows' own
+    /// coordinates, so it stays put if they scroll under it; and what it adds to.
+    /// </summary>
+    private sealed class Band
+    {
+        public required FrameworkElement Surface;
+        public required Point Origin;
+        public required double AnchorSeconds;
+        public required double AnchorY;
+        public required bool Additive;
+        public required IReadOnlySet<Guid> Keep;
+        public bool Started;
+        public HashSet<Guid>? Shown;
+    }
+
+    private Band? _band;
+
+    private void BandDown(FrameworkElement surface, Point window, bool additive)
+    {
+        var p = BandPoint(window);
+        _band = new Band
+        {
+            Surface = surface,
+            Origin = window,
+            AnchorSeconds = SecondsAtLaneX(p.X),
+            AnchorY = p.Y,
+            Additive = additive,
+            Keep = additive ? _vm.SelectedClips.Select(c => c.Id).ToHashSet() : new HashSet<Guid>(),
+        };
+        if (_scriptedWindowPoint is null) surface.CaptureMouse();
+    }
+
+    /// <summary>
+    /// A window point in the box layer's coordinates, held to the lanes on screen. There is no
+    /// auto-scroll, so the box must not reach rows or times nobody can see.
+    /// </summary>
+    private Point BandPoint(Point window)
+    {
+        double top = TrackScroller.TranslatePoint(new Point(0, 0), this).Y;
+        var held = new Point(window.X, Math.Clamp(window.Y, top, top + TrackScroller.ViewportHeight));
+        var p = TranslatePoint(held, BandLayer);
+        return new Point(Math.Clamp(p.X, 0, BandLayer.ActualWidth), p.Y);
+    }
+
+    /// <summary>
+    /// Past 4 px the box is drawn, and every section it touches — on every row it covers — is
+    /// selected as it grows, as on the Windows desktop.
+    /// </summary>
+    private void BandMove(Point window, bool pressed)
+    {
+        var b = _band;
+        if (b is null || !(pressed || _scriptedWindowPoint is not null)) return;
+        if (!b.Started)
+        {
+            if (Math.Abs(window.X - b.Origin.X) < 4 && Math.Abs(window.Y - b.Origin.Y) < 4) return;
+            b.Started = true;
+        }
+
+        var p = BandPoint(window);
+        double seconds = SecondsAtLaneX(p.X), pps = _vm.PixelsPerSecond;
+        double x0 = (Math.Min(b.AnchorSeconds, seconds) - _vm.ScrollSeconds) * pps;
+        double x1 = (Math.Max(b.AnchorSeconds, seconds) - _vm.ScrollSeconds) * pps;
+        double y0 = Math.Min(b.AnchorY, p.Y), y1 = Math.Max(b.AnchorY, p.Y);
+        Canvas.SetLeft(BandRect, x0);
+        Canvas.SetTop(BandRect, y0);
+        BandRect.Width = Math.Max(1, x1 - x0);
+        BandRect.Height = Math.Max(1, y1 - y0);
+        BandRect.Visibility = Visibility.Visible;
+
+        int first = -1, last = -1;
+        for (int i = 0; i < _vm.Tracks.Count; i++)
+        {
+            if (TrackList.ItemContainerGenerator.ContainerFromItem(_vm.Tracks[i]) is not FrameworkElement row) continue;
+            double rowTop = row.TranslatePoint(new Point(0, 0), BandLayer).Y;
+            if (rowTop <= y1 && rowTop + row.ActualHeight > y0) { if (first < 0) first = i; last = i; }
+        }
+        var touched = first < 0 ? Array.Empty<(Benchmix.Core.Model.TrackModel, Benchmix.Core.Model.ClipModel)>()
+                                : _vm.SectionsInBox(first, last, b.AnchorSeconds, seconds);
+        var ids = touched.Select(t => t.Clip.Id).ToHashSet();
+        if (b.Shown is not null && ids.SetEquals(b.Shown)) return;     // nothing new to draw
+        b.Shown = ids;
+        _vm.SelectBand(b.Keep, touched);
+    }
+
+    private void BandUp()
+    {
+        var b = _band;
+        _band = null;                                  // state first: the release re-enters via LostMouseCapture
+        if (b is null) return;
+        BandRect.Visibility = Visibility.Collapsed;
+        if (_scriptedWindowPoint is null && b.Surface.IsMouseCaptured) b.Surface.ReleaseMouseCapture();
+        if (b.Started) _vm.FinishBand();
+        else if (!b.Additive) _vm.SelectClip(null);    // a click on empty space lets go of the selection
+        _vm.EndGesture();
+    }
+
+    /// <summary>Losing the mouse ends a box as if let go; before it started it was no click at all.</summary>
+    private void BandLost()
+    {
+        if (_band is { Started: true }) { BandUp(); return; }
+        _band = null;
+        BandRect.Visibility = Visibility.Collapsed;
     }
 
     // ---------------- lanes: select, drag sections, seek ----------------
@@ -2337,6 +2668,7 @@ public partial class MainWindow : Window
     /// </summary>
     private bool PressDelete()
     {
+        if (_band is not null) { _vm.Status = "Let go of the selection box first."; return false; }
         if (_dragClip is not null) { _vm.Status = "Let go of the section first."; return false; }
         return _vm.DeleteSelection(fallBackToPlayhead: false);
     }
@@ -2486,7 +2818,8 @@ public partial class MainWindow : Window
     private void OnLaneLostCapture(object sender, MouseEventArgs e)
     {
         _pendingToggle = null;                         // losing the mouse is not a click
-        if (_dragClip is not null) LaneUp((FrameworkElement)sender);
+        if (_band is not null) BandLost();
+        else if (_dragClip is not null) LaneUp((FrameworkElement)sender);
     }
 
     private bool LaneDown(FrameworkElement lane, Point window, int clickCount = 1)
@@ -2515,12 +2848,18 @@ public partial class MainWindow : Window
 
         var clip = ClipAtLaneX(vm, x);
 
-        // A Ctrl- or Shift-click in a gap selects the track and leaves the selection alone.
-        if (clip is null && (Modifiers.HasFlag(ModifierKeys.Shift) || Modifiers.HasFlag(ModifierKeys.Control))) return true;
+        // A press on empty lane space arms a selection box (Daniel, 2026-10-11). Let go without
+        // dragging and it is the click it always was: it lets go of the selection — or, with Ctrl
+        // or Shift held, leaves the selection alone.
+        if (clip is null)
+        {
+            BandDown(lane, window, additive: Modifiers.HasFlag(ModifierKeys.Shift) || Modifiers.HasFlag(ModifierKeys.Control));
+            return true;
+        }
 
         // Shift+click selects the range from the anchor — the section clicked before this — to
         // this one, and that is all it does: no drag starts from it.
-        if (clip is not null && Modifiers.HasFlag(ModifierKeys.Shift))
+        if (Modifiers.HasFlag(ModifierKeys.Shift))
         {
             _vm.SelectClipRange(clip);
             return true;
@@ -2529,9 +2868,8 @@ public partial class MainWindow : Window
         // Ctrl+click flips this section in or out of the selection — but only if the press is
         // released without moving, because Ctrl held through a drag means "place it freely" and
         // that drag must still start from here. The press only arms the toggle.
-        if (clip is not null && Modifiers.HasFlag(ModifierKeys.Control)) _pendingToggle = clip;
+        if (Modifiers.HasFlag(ModifierKeys.Control)) _pendingToggle = clip;
         else _vm.SelectClip(clip);
-        if (clip is null) return true;                 // clicking a gap just clears the selection
 
         _dragTrack = vm;
         _dragClip = clip;
@@ -2553,6 +2891,8 @@ public partial class MainWindow : Window
 
     private void LaneMove(FrameworkElement lane, Point window, bool pressed)
     {
+        if (_band is not null) { BandMove(window, pressed); return; }
+
         // Hovering near an edge shows what grabbing it would do, so trimming and looping are
         // discoverable without a manual.
         if (_dragClip is null && lane.DataContext is TrackViewModel hover)
@@ -2615,6 +2955,8 @@ public partial class MainWindow : Window
 
     private void LaneUp(FrameworkElement lane)
     {
+        if (_band is not null) { BandUp(); return; }
+
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
         var toggle = _pendingToggle;
@@ -2641,6 +2983,10 @@ public partial class MainWindow : Window
     {
         var lane = (FrameworkElement)sender;
         if (lane.DataContext is not TrackViewModel vm) return;
+
+        // The left button is still holding a box or a section: a right-press — the start of a pan,
+        // say, to reach further — must not swap what they hold for what is under the pointer.
+        if (_band is not null || _dragClip is not null) return;
         TakeKeyboardFromText();
         _vm.SelectedTrack = vm;
         var clip = ClipAtLaneX(vm, e.GetPosition(lane).X);

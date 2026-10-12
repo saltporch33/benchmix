@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**214 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**220 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -399,6 +399,55 @@ picture was looked at: the ≡ grip sits left of each track's colour, the rest o
 
 **Not verified:** the drag under a real hand with real mouse capture (a scripted run takes no
 capture), and the line's position when the rows are scrolled part-way.
+
+## 2026-10-11 — the selection box
+
+**In the test project** (`SectionSelectionTests`, 6 more, on the four-section ramp tracks): a box
+over 15–25 s takes the two sections it half covers; a box over two of three tracks takes nothing
+from the third; a section whose file is missing is never taken; a box ending exactly where a section
+starts does not take it, and a box of no width takes the section under it; dragged either way the
+box takes the same sections; and they come topmost track first, then by time, so the first is the
+top-left one. **220 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 125 to **140 checks**, through the lanes' and the
+empty room's own press, move and release handlers with a scripted pointer. What the box should take
+is worked out in the check from the sections and rows on screen, not from the code that selects.
+The song is cut into 3 s pieces with one taken out, so there is a gap to start from, and a copy of
+the piece before the gap is pasted onto the row below, so the box must reach two rows. Published
+exe, 2026-10-11:
+
+```
+PASS  a box started under the last track selects what it reaches on the rows above (got 1, expected 1)
+PASS  a click on empty lane space without dragging still lets go of the selection
+PASS  dragging across empty lane space draws a box where the pointer went (at 180, 76, 120 x 152 px)
+PASS  the selection follows the box while it is dragged (0 while small, 2 when larger)
+PASS  every section the box touches is selected, on every row it covers, even ones only partly inside (got 2, expected 2)
+PASS  the box disappears when the button is let go
+PASS  Delete is refused while a box is being dragged, even with sections in it selected
+PASS  after a box, the earliest section on the topmost row is the one commands act on, and the status bar counts them
+PASS  Ctrl held as the box starts adds to the selection (3 selected)
+PASS  a box over empty space selects nothing, and lets go of what was selected
+PASS  a box from under the tracks is let go when the button is (its own press, move and release handlers ran)
+PASS  a Control+click on empty lane space keeps the sections already selected (3 of 3)
+PASS  a Shift+click on empty lane space keeps the sections already selected (3 of 3)
+PASS  a Control+click under the tracks keeps the sections already selected (3 of 3)
+PASS  a right-press while a box is held keeps what the box selected (2 of 2)
+```
+
+**The review** (one reader over the diff, as planned for this feature) found three things, all fixed
+the same day: a right-press while the left button held a box — the start of a pan, say — replaced
+the box's selection with whatever was under the pointer; the checks for a box under the tracks
+called the box code by name, so the room's own press, move and release handlers were never run (they
+are now raised as routed events on it); and nothing checked that a Ctrl- or Shift-click on empty space
+still keeps the selection. The right-press check was run first against a build without the fix and
+failed (1 of 2 kept).
+
+The double-click checks under the tracks now release each press, as WPF does, because a press there
+arms a box.
+
+**Not verified:** the box under a real hand with real mouse capture (a scripted run takes none), a
+box dragged while the rows are scrolled part-way, and the box's look — it is drawn as a translucent
+blue rectangle, but no probe picture shows one mid-drag.
 
 ## The stretch engine
 

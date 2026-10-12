@@ -426,7 +426,12 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                     <Border x:Name="BelowTracks" Grid.Row="1" Grid.Column="1" Background="Transparent"
-                            MouseLeftButtonDown="OnBelowTracksMouseDown"/>
+                            MouseLeftButtonDown="OnBelowTracksMouseDown" MouseMove="OnBelowTracksMouseMove"
+                            MouseLeftButtonUp="OnBelowTracksMouseUp" LostMouseCapture="OnBelowTracksLostCapture"/>
+                    <!-- The selection box, over the lanes only, in the rows' own coordinates so it scrolls with them. -->
+                    <Canvas x:Name="BandLayer" Grid.RowSpan="2" Grid.Column="1" IsHitTestVisible="False" ClipToBounds="True">
+                        <Rectangle x:Name="BandRect" Visibility="Collapsed" Fill="#2878C8FF" Stroke="#C878C8FF" StrokeThickness="1"/>
+                    </Canvas>
                     <!-- Where a track being dragged up or down will land. -->
                     <Canvas x:Name="ReorderLayer" Grid.RowSpan="2" Grid.ColumnSpan="2" IsHitTestVisible="False">
                         <Rectangle x:Name="InsertLine" Height="2" Visibility="Collapsed" Fill="{StaticResource AccentBrush}"/>

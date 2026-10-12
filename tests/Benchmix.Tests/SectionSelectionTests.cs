@@ -165,4 +165,95 @@ public class SectionSelectionTests : IDisposable
         var result = SectionSelection.DeleteAll(Array.Empty<(TrackModel, ClipModel)>());
         Assert.False(result.Changed);
     }
+
+    // ---------------------------------------------------------------- the selection box (2026-10-11)
+
+    private static HashSet<Guid> Ids(IEnumerable<(TrackModel Track, ClipModel Clip)> r) => r.Select(x => x.Clip.Id).ToHashSet();
+
+    [Fact]
+    public async Task ABoxTakesASectionItOnlyPartlyCovers()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var t = await FourSectionsAsync(s, _wav);
+        var c = InOrder(t);
+
+        var ids = Ids(SectionSelection.Touching(s.Project.Tracks, 0, 0, 15, 25, s));   // half of [10,20), half of [20,30)
+        Assert.True(ids.SetEquals(new[] { c[1].Id, c[2].Id }),
+            $"a box over 15–25 s took {ids.Count} sections, not the two it half covers — it would not select what the eye sees it touching");
+    }
+
+    [Fact]
+    public async Task ABoxTakesOnlyTheTracksItCovers()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await FourSectionsAsync(s, _wav);
+        var b = await FourSectionsAsync(s, _wav);
+        var c = await FourSectionsAsync(s, _wav);
+
+        var range = SectionSelection.Touching(s.Project.Tracks, 1, 2, 12, 14, s);
+        Assert.True(range.All(r => r.Track != a), "the box took a section from a track above the ones it covers");
+        Assert.True(range.Count == 2 && range.Any(r => r.Track == b) && range.Any(r => r.Track == c),
+            $"a box over two tracks took {range.Count} sections, not one on each");
+    }
+
+    [Fact]
+    public async Task ABoxNeverTakesASectionWhoseFileIsMissing()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        await FourSectionsAsync(s, _wav);
+        string gone = Path.Combine(_dir, "gone.wav");
+        var missing = new TrackModel { SourcePath = gone };
+        var ghost = new ClipModel { SourcePath = gone, TrackStartSeconds = 15, SourceEndSeconds = -1 };
+        missing.Clips.Add(ghost);
+        s.Project.Tracks.Add(missing);
+        await FourSectionsAsync(s, _wav);
+
+        var ids = Ids(SectionSelection.Touching(s.Project.Tracks, 0, 2, 0, 60, s));
+        Assert.False(ids.Contains(ghost.Id),
+            "a section whose audio is missing was taken by the box — Delete would then erase the missing song's arrangement for good once the file is back");
+        Assert.Equal(8, ids.Count);
+    }
+
+    [Fact]
+    public async Task ABoxEndingWhereASectionStartsDoesNotTakeIt_AndABoxOfNoWidthTakesTheOneUnderIt()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var t = await FourSectionsAsync(s, _wav);
+        var c = InOrder(t);
+
+        var ending = Ids(SectionSelection.Touching(s.Project.Tracks, 0, 0, 5, 10, s));
+        Assert.True(ending.SetEquals(new[] { c[0].Id }),
+            "a box ending exactly where a section starts took it — the box would select a section it does not cover");
+
+        var point = Ids(SectionSelection.Touching(s.Project.Tracks, 0, 0, 10, 10, s));
+        Assert.True(point.SetEquals(new[] { c[1].Id }),
+            "a box of no width at 10 s did not take the section starting there, the one under the pointer");
+    }
+
+    [Fact]
+    public async Task ABoxGivesTheSameSectionsWhicheverWayItWasDragged()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        await FourSectionsAsync(s, _wav);
+        await FourSectionsAsync(s, _wav);
+
+        var down = Ids(SectionSelection.Touching(s.Project.Tracks, 0, 1, 12, 33, s));
+        var up = Ids(SectionSelection.Touching(s.Project.Tracks, 1, 0, 33, 12, s));
+        Assert.True(down.SetEquals(up) && down.Count == 6,
+            $"dragged one way the box took {down.Count} sections, the other way {up.Count}");
+    }
+
+    [Fact]
+    public async Task ABoxListsTheTopmostTrackFirstThenByTime()
+    {
+        // The first is the one commands act on after a box: it must be the top-left one.
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await FourSectionsAsync(s, _wav);
+        var b = await FourSectionsAsync(s, _wav);
+
+        var range = SectionSelection.Touching(s.Project.Tracks, 1, 0, 25, 5, s);
+        Assert.True(range[0].Track == a && range[0].Clip.Id == InOrder(a)[0].Id,
+            "the first section after a box is not the earliest on the topmost track, so Cut or Ctrl+D would act on another");
+        Assert.True(range.Take(3).All(r => r.Track == a) && range.Skip(3).All(r => r.Track == b), "the box's sections are not listed track by track, top first");
+    }
 }

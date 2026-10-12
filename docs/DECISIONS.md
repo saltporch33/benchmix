@@ -386,3 +386,19 @@ Daniel, 2026-10-11, verbatim: *"4. click and drag tracks to reorder them up and 
 | **Refused while a section is held under the mouse**, or while something is loading. | The section's drag is part-way through putting it somewhere. |
 | **No auto-scroll**: the line only reaches the rows on screen. | As for every drag today. |
 | **Match key still matches the first other track in the list**, which is now whichever track is at the top. Its tooltip says so. | The behaviour is unchanged; what "first" means is now his to choose. |
+
+## 2026-10-11 — the selection box
+
+Daniel, 2026-10-11, verbatim: *"2. Left click + dragging the mouse should create a classic windows
+square lasso thingy (like onwindows desktop that allows you to drag a box to select multiple desktop
+icons) that allows me to select clips"*.
+
+| Decision | Why |
+| --- | --- |
+| **The box starts on empty space** — a gap between sections, an empty track, before or after a song, or the room under the last track. | A press on a section already means "drag it". On the desktop, too, the box starts where there is no icon. |
+| **It selects every section it touches, even partly**, on every track it covers, live as it grows. | His reference: the Windows desktop selects every icon the box touches. Shift+click keeps its own rule — only what is wholly inside — because two short pieces must not sweep up a whole song on the track between them; the box is drawn, so what it touches is in plain view. |
+| **Ctrl or Shift held as it starts adds to the selection**; otherwise it replaces it. | As on the desktop. A Ctrl- or Shift-click on empty space already left the selection alone. |
+| **Afterwards the earliest section on the topmost track is the one commands act on**, and where the next Shift+click measures from. | Cut, Copy and Ctrl+D act on one section; the top-left one is the one the eye starts from. |
+| **A click on empty space still lets go of the selection — now when the button is let go, not when it is pressed.** | The press might be the start of a box. The click ends in the same state as before. |
+| **The box only covers what is on screen**; it does not scroll the view. | Nothing in Benchmix auto-scrolls yet; selecting rows nobody can see would make Delete act on them unseen. |
+| **Delete is refused while the box is being dragged, and a right-press then changes no selection.** | What it would delete is still changing; and a right-press with the box still held — to pan further, say — used to swap the box's sections for the one under the pointer. |

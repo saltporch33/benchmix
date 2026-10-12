@@ -4,7 +4,8 @@ namespace Benchmix.Core;
 
 /// <summary>
 /// Selecting more than one section at once (Daniel, 2026-10-03): the range a Shift+click covers,
-/// and deleting the lot. Ctrl+click needs nothing here — it flips one section in or out.
+/// the sections a selection box touches (2026-10-11), and deleting the lot. Ctrl+click needs
+/// nothing here — it flips one section in or out.
 /// </summary>
 public static class SectionSelection
 {
@@ -37,6 +38,34 @@ public static class SectionSelection
                 if (TimelineEditor.LengthFramesOf(c, s) <= 0) continue;
                 if (Start(tracks[i], c, s) >= from - tolerance && End(tracks[i], c, s) <= to + tolerance)
                     result.Add((tracks[i], c));
+            }
+        return result;
+    }
+
+    /// <summary>
+    /// The sections a selection box covers (Daniel, 2026-10-11): on every track from
+    /// <paramref name="firstTrack"/> to <paramref name="lastTrack"/>, every section the box
+    /// <b>touches</b>, even partly — the Windows desktop's rule, where Shift+click takes only what is
+    /// wholly inside. Sections are [start, end): a box ending exactly where a section starts does not
+    /// take it, and a box of no width takes the one under it. Topmost track first, then by start, so
+    /// the first is the one commands should act on. Either corner may come first.
+    /// </summary>
+    public static List<(TrackModel Track, ClipModel Clip)> Touching(
+        IList<TrackModel> tracks, int firstTrack, int lastTrack, double fromSeconds, double toSeconds, ProjectSession s)
+    {
+        var result = new List<(TrackModel, ClipModel)>();
+        int lo = Math.Max(0, Math.Min(firstTrack, lastTrack));
+        int hi = Math.Min(tracks.Count - 1, Math.Max(firstTrack, lastTrack));
+        double from = Math.Min(fromSeconds, toSeconds), to = Math.Max(fromSeconds, toSeconds);
+
+        for (int i = lo; i <= hi; i++)
+            foreach (var c in tracks[i].Clips.OrderBy(c => TimelineEditor.StartFrameOf(c, s)))
+            {
+                // A section whose file is missing is not drawn and cannot be clicked: never selected.
+                if (TimelineEditor.LengthFramesOf(c, s) <= 0) continue;
+                double start = Start(tracks[i], c, s), end = End(tracks[i], c, s);
+                bool reaches = start < to || (from == to && start <= to);
+                if (reaches && end > from) result.Add((tracks[i], c));
             }
         return result;
     }
