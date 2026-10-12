@@ -140,6 +140,7 @@ public class ProjectStoreTests
                 Name = "Topper", SourcePath = @"C:\music\top.mp3", Bpm = 102, Key = "G#m", Camelot = "1A",
                 Speed = 0.9118, Semitones = -2, EqLow = 0, EqHigh = 1.2,
                 TimelineOffsetSeconds = 8.25, Mode = StretchMode.Linked, Muted = true,
+                Ramps = { new TempoRamp(20, 32.5, 0.95), new TempoRamp(40, 41, 1.0) },
             },
         },
     };
@@ -170,6 +171,7 @@ public class ProjectStoreTests
         Assert.Equal(StretchMode.Linked, t.Mode);
         Assert.True(t.Muted);
         Assert.Equal("G#m", t.Key);
+        Assert.True(t.Ramps.SequenceEqual(original.Tracks[1].Ramps), "a saved project lost or changed its tempo ramps");
     }
 
     [Fact]

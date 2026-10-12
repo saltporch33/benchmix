@@ -14,6 +14,10 @@ namespace Benchmix.App.Controls;
 /// loop built earlier, the first of its repeats.
 /// </param>
 /// <param name="LoopHandleRight">The same for the loop's outer right end.</param>
+/// <param name="Tempo">
+/// The track's tempo map in seconds from its origin when it has tempo ramps, else null — and then
+/// every position is worked out with the one speed exactly as before.
+/// </param>
 public sealed record ClipVisual(
     PeakData? Peaks,
     int SampleRate,
@@ -24,7 +28,11 @@ public sealed record ClipVisual(
     bool IsSelected,
     bool IsForeign,
     bool LoopHandleLeft = false,
-    bool LoopHandleRight = false);
+    bool LoopHandleRight = false,
+    TempoMap? Tempo = null,
+    double TimelineEndSeconds = 0,
+    double OriginSeconds = 0,
+    double TrackStartSeconds = 0);
 
 /// <summary>
 /// Draws one track's sections on the timeline.
@@ -75,6 +83,17 @@ public sealed class WaveformView : FrameworkElement
         nameof(LoopMode), typeof(bool), typeof(WaveformView),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    /// <summary>The track's tempo ramps, drawn over its sections whatever the mode (2026-10-11).</summary>
+    public static readonly DependencyProperty RampsProperty = DependencyProperty.Register(
+        nameof(Ramps), typeof(IReadOnlyList<RampVisual>), typeof(WaveformView),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public IReadOnlyList<RampVisual>? Ramps
+    {
+        get => (IReadOnlyList<RampVisual>?)GetValue(RampsProperty);
+        set => SetValue(RampsProperty, value);
+    }
+
     public IReadOnlyList<ClipVisual>? Clips
     {
         get => (IReadOnlyList<ClipVisual>?)GetValue(ClipsProperty);
@@ -97,8 +116,18 @@ public sealed class WaveformView : FrameworkElement
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
 
         var clips = Clips;
-        if (clips is null) return;
+        if (clips is not null) DrawClips(dc, clips, w, h);
 
+        // Tempo ramps over everything: they belong to the track, not to any one section.
+        if (Ramps is { Count: > 0 } ramps)
+        {
+            double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            foreach (var r in ramps) RampLayout.Draw(dc, r, Math.Max(0.01, PixelsPerSecond), ScrollSeconds, h, dip);
+        }
+    }
+
+    private void DrawClips(DrawingContext dc, IReadOnlyList<ClipVisual> clips, double w, double h)
+    {
         // The selected section last, so while it is dragged over another it is the one on top.
         foreach (var clip in clips) if (!clip.IsSelected) DrawClip(dc, clip, w, h);
         foreach (var clip in clips) if (clip.IsSelected) DrawClip(dc, clip, w, h);
@@ -122,9 +151,10 @@ public sealed class WaveformView : FrameworkElement
         double srcEnd = clip.SourceEndSeconds < 0 ? srcTotal : Math.Min(clip.SourceEndSeconds, srcTotal);
         if (srcEnd <= srcStart) return;
 
-        // Timeline extent of this section after the stretch.
+        // Timeline extent of this section after the stretch — and its tempo ramps.
         double clipStart = clip.TimelineStartSeconds;
-        double clipEnd = clipStart + (srcEnd - srcStart) / speed;
+        var tempo = clip.Tempo;
+        double clipEnd = tempo is null ? clipStart + (srcEnd - srcStart) / speed : clip.TimelineEndSeconds;
 
         double viewStart = ScrollSeconds;
         double viewEnd = ScrollSeconds + w / pps;
@@ -162,8 +192,10 @@ public sealed class WaveformView : FrameworkElement
                 double tB = viewStart + (px + 1) / pps;
 
                 // timeline -> source
-                double sA = srcStart + (tA - clipStart) * speed;
-                double sB = srcStart + (tB - clipStart) * speed;
+                double sA = tempo is null ? srcStart + (tA - clipStart) * speed
+                                          : srcStart + (tempo.PositionAt(tA - clip.OriginSeconds) - clip.TrackStartSeconds);
+                double sB = tempo is null ? srcStart + (tB - clipStart) * speed
+                                          : srcStart + (tempo.PositionAt(tB - clip.OriginSeconds) - clip.TrackStartSeconds);
                 if (sB <= srcStart || sA >= srcEnd) continue;
                 sA = Math.Max(sA, srcStart);
                 sB = Math.Min(sB, srcEnd);
@@ -236,7 +268,7 @@ public sealed class WaveformView : FrameworkElement
         double length = Math.Max(0, srcEnd - Math.Max(0, clip.SourceStartSeconds)) / Math.Max(0.01, clip.Speed);
 
         double left = (clip.TimelineStartSeconds - ScrollSeconds) * pps;
-        double right = (clip.TimelineStartSeconds + length - ScrollSeconds) * pps;
+        double right = ((clip.Tempo is null ? clip.TimelineStartSeconds + length : clip.TimelineEndSeconds) - ScrollSeconds) * pps;
 
         var fill = new SolidColorBrush(Color.FromArgb(235, 120, 220, 255));
         fill.Freeze();

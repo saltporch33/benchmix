@@ -100,19 +100,65 @@ public sealed partial class TrackViewModel : ObservableObject
         // The loop the selected section belongs to, so loop mode can mark its two outer ends.
         var selected = Clips.FirstOrDefault(c => c.IsSelected);
         var run = selected is null ? null : LoopRun.Of(Model, selected.Model, _session);
+        var tempo = TimelineEditor.SecondsMapOf(Model);         // once for the lot; null with no tempo ramp
 
         ClipVisuals = Clips.Select(c => new Controls.ClipVisual(
             c.Peaks, c.SampleRate, c.TimelineStartSeconds, c.SourceStartSeconds,
             c.SourceEndSeconds < 0 ? c.SourceDurationSeconds : c.SourceEndSeconds,
             Speed, c.IsSelected, c.IsForeign,
             LoopHandleLeft: run is not null && run.IsOuterEdge(c.Model, left: true),
-            LoopHandleRight: run is not null && run.IsOuterEdge(c.Model, left: false))).ToArray();
+            LoopHandleRight: run is not null && run.IsOuterEdge(c.Model, left: false),
+            Tempo: tempo,
+            TimelineEndSeconds: c.TimelineEndSeconds,
+            OriginSeconds: Model.TimelineOffsetSeconds,
+            TrackStartSeconds: c.TrackStartSeconds)).ToArray();
 
         OnPropertyChanged(nameof(ClipVisuals));
+        NotifyRampsChanged();                                   // a turn of TEMPO changes where the first ramp starts from
         OnPropertyChanged(nameof(TimelineDurationSeconds));
         OnPropertyChanged(nameof(TimelineEndSeconds));
         OnPropertyChanged(nameof(TrimText));
         OnPropertyChanged(nameof(IsEmpty));
+    }
+
+    // ---- tempo ramps (Daniel, 2026-10-11) ----
+
+    /// <summary>What the lane draws for this track's tempo ramps, as one immutable array: placed ones in order, then one being placed.</summary>
+    public IReadOnlyList<Controls.RampVisual> RampVisuals { get; private set; } = Array.Empty<Controls.RampVisual>();
+
+    /// <summary>True while the box for a ramp's end tempo is open on this track.</summary>
+    [ObservableProperty] private bool _isTypingRampBpm;
+
+    /// <summary>What is typed in the box. The dashed line follows it as it is typed.</summary>
+    [ObservableProperty] private string _rampBpmDraft = "";
+
+    /// <summary>Where on the timeline the box sits: beside the ramp's end.</summary>
+    [ObservableProperty] private double _rampBoxSeconds;
+
+    /// <summary>The ramp being placed or retyped on this track, drawn on top. Set by the main view-model.</summary>
+    public (double Start, double FromBpm, double? End, int? Retype)? RampDraft { get; set; }
+
+    partial void OnRampBpmDraftChanged(string value) => NotifyRampsChanged();
+
+    /// <summary>Republishes what the lane draws for the ramps. Never throws: it runs on every repaint path.</summary>
+    public void NotifyRampsChanged()
+    {
+        var list = new List<Controls.RampVisual>(Model.Ramps.Count + 1);
+        double? typed = TempoRamps.ParseBpm(Model, RampBpmDraft) is (true, var v, _) ? Model.Bpm * v : null;
+        for (int i = 0; i < Model.Ramps.Count; i++)
+        {
+            var r = Model.Ramps[i];
+            bool retyping = RampDraft is { Retype: int k } && k == i;
+            double to = retyping && typed is { } t ? t : Model.Bpm * r.ToSpeed;
+            list.Add(new Controls.RampVisual(r.StartSeconds, r.EndSeconds, TempoRamps.BpmAt(Model, r.StartSeconds), to,
+                                             retyping ? Controls.RampLook.Typing : Controls.RampLook.Placed));
+        }
+        if (RampDraft is { Retype: null } d)
+            list.Add(d.End is double e
+                ? new Controls.RampVisual(d.Start, e, d.FromBpm, typed ?? d.FromBpm, Controls.RampLook.Typing)
+                : new Controls.RampVisual(d.Start, d.Start, d.FromBpm, d.FromBpm, Controls.RampLook.StartOnly));
+        RampVisuals = list.ToArray();
+        OnPropertyChanged(nameof(RampVisuals));
     }
 
     /// <summary>Nothing on this track yet — the lane says how to put something there.</summary>

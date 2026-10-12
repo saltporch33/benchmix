@@ -61,6 +61,28 @@ public sealed class InverseBoolToVisibilityConverter : IValueConverter
         => Binding.DoNothing;
 }
 
+/// <summary>
+/// Where a tempo ramp's BPM box sits in its lane: just right of the ramp's end, or just left of it
+/// when there is no room on the right. Inputs: the end in timeline seconds, the view's scroll, its
+/// zoom, and the lane's width.
+/// </summary>
+public sealed class RampBoxPlacementConverter : IMultiValueConverter
+{
+    public const double Gap = 10, Width = 60;
+
+    public object Convert(object[] values, Type targetType, object parameter, CultureInfo culture)
+    {
+        double At(int i) => values.Length > i && values[i] is double d && double.IsFinite(d) ? d : 0;
+        double x = (At(0) - At(1)) * Math.Max(0.01, At(2));
+        double width = At(3);
+        double left = x + Gap + Width <= width ? x + Gap : x - Width - Gap;
+        return new Thickness(Math.Max(2, left), 0, 0, 0);
+    }
+
+    public object[] ConvertBack(object value, Type[] targetTypes, object parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>Visible only when the bound count is zero — the empty-state prompt.</summary>
 public sealed class ZeroToVisibilityConverter : IValueConverter
 {

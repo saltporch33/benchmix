@@ -15,6 +15,7 @@
             <local:BoolToVisibilityConverter x:Key="BoolVis"/>
             <local:InverseBoolToVisibilityConverter x:Key="NotBoolVis"/>
             <local:ZeroToVisibilityConverter x:Key="ZeroVis"/>
+            <local:RampBoxPlacementConverter x:Key="RampBoxPlace"/>
 
             <Style TargetType="ToolTip">
                 <Setter Property="Background" Value="{StaticResource Bg3Brush}"/>

@@ -352,6 +352,131 @@ public class TempoRampEditingTests : IDisposable
             $"loading kept {ramps.Count} ramps — a damaged file would play tempo changes nobody set up, or crash");
     }
 
+    // ---------------------------------------------------------------- making and changing a ramp
+
+    [Fact]
+    public async Task ARampStartsAtTheTempoTheTrackIsPlayingThere()
+    {
+        var (s, t) = await CutAsync(0);
+        t.Bpm = 100;
+        t.Speed = 0.96;
+        Assert.True(TempoRamps.Add(t, 10, 20, 1.05, s).Changed);
+        Assert.True(TimelineEditor.SpeedAt(t, 10) == 0.96 && TempoRamps.BpmAt(t, 10) == 100 * 0.96,
+            "a ramp does not start at the tempo the track was playing — the tempo would jump where the ramp begins");
+        Assert.True(TempoRamps.Add(t, 30, 40, 1.1, s).Changed);
+        Assert.True(TimelineEditor.SpeedAt(t, 30) == 1.05,
+            "a second ramp does not start at the tempo the first one arrived at — the tempo would jump between them");
+    }
+
+    [Fact]
+    public async Task AddingARampSaysWhereItGoesAndHowMuchLaterAudioMoves()
+    {
+        var (s, t) = await CutAsync(0, 30);
+        t.Bpm = 100;
+        var result = TempoRamps.Add(t, 10.0000001, 20, 1.1, s);
+        var r = t.Ramps.Single();
+        Assert.True(r.StartSeconds * Rate == Math.Round(r.StartSeconds * Rate) && r.EndSeconds * Rate == Math.Round(r.EndSeconds * Rate),
+            "a ramp's ends are not on whole frames — sections placed against them would land a frame off");
+        Assert.Contains("from 100.0 to 110.0 BPM between 10.00s and 20.00s", result.Message);
+        Assert.Contains("plays 1.36s sooner", result.Message);          // 9.5 s of song at 1.1x after the ramp, not 10 at 1.0x
+    }
+
+    [Fact]
+    public async Task ARampCannotStartInsideAnotherOrRunIntoTheNext()
+    {
+        var (s, t) = await CutAsync(0);
+        t.Bpm = 100;
+        Assert.True(TempoRamps.Add(t, 10, 20, 1.05, s).Changed);
+        Assert.True(TempoRamps.Add(t, 30, 40, 1.1, s).Changed);
+        Assert.False(TempoRamps.Add(t, 15, 25, 1.0, s).Changed, "a ramp was allowed to start inside another — two tempo changes at once");
+        Assert.False(TempoRamps.Add(t, 22, 31, 1.0, s).Changed, "a ramp was allowed to run into the next one");
+        Assert.True(TempoRamps.Add(t, 20, 30, 1.0, s).Changed, "a ramp butting both its neighbours should be allowed");
+        Assert.True(TempoRamps.IndexInside(t, 25) == 1 && TempoRamps.IndexInside(t, 20) == -1, "the ramp under a point is not found");
+        t.Ramps.RemoveAt(1);
+        Assert.True(TempoRamps.RoomAround(t, 25) == (20, 30) && TempoRamps.RoomAround(t, 5) == (0, 10)
+                    && TempoRamps.RoomAround(t, 50) == (40, double.PositiveInfinity), "the free room between ramps is wrong");
+    }
+
+    [Fact]
+    public async Task ATempoItCannotReachIsRefused_AndAnUnknownTempoStartsNoRamp()
+    {
+        var (s, t) = await CutAsync(0);
+        t.Bpm = 100;
+        Assert.True(TempoRamps.ParseBpm(t, " 97.5 ") is (true, var v, _) && v == 97.5 / 100, "a typed tempo was not read as typed");
+        Assert.True(TempoRamps.ParseBpm(t, "fast") is (false, _, var why) && why.Contains("like 115"), "a word was taken for a tempo");
+        Assert.True(TempoRamps.ParseBpm(t, "999") is (false, _, var far) && far.Contains("between 25.0 and 400.0"),
+            "a tempo the engine cannot play was accepted");
+        Assert.False(TempoRamps.Add(t, 10, 20, 9.0, s).Changed, "a ramp to a speed the engine cannot play was placed");
+        t.Bpm = 0;
+        Assert.True(TempoRamps.Add(t, 10, 20, 1.0, s) is { Changed: false } r && r.Message.Contains("unknown"),
+            "a track with no known tempo got a ramp whose BPM means nothing");
+    }
+
+    [Fact]
+    public async Task ChangingARampsEndTempoOrRemovingItMovesLaterSectionsAndUndoesExactly()
+    {
+        var (s, t) = await CutAsync(0, 30);
+        t.Bpm = 100;
+        var later = AtTrackSeconds(t, 30);
+        double at = When(t, later, s);
+        TempoRamps.Add(t, 10, 20, 1.1, s);
+        double sped = When(t, later, s);
+        Assert.True(TempoRamps.SetEndSpeed(t, 0, 0.9, s).Changed && When(t, later, s) > at, "slowing the ramp down did not push later sections later");
+        Assert.False(TempoRamps.SetEndSpeed(t, 0, 0.9, s).Changed, "typing the same tempo again counted as a change");
+        Assert.True(TempoRamps.SetEndSpeed(t, 0, 1.1, s).Changed && When(t, later, s) == sped, "putting the tempo back did not put the section back exactly");
+        Assert.True(TempoRamps.Remove(t, 0, s).Changed && t.Ramps.Count == 0 && When(t, later, s) == at,
+            "removing the ramp did not put the later section back where it was");
+    }
+
+    [Fact]
+    public async Task DraggingARampDotStopsAtTheNextRampAndBackPutsItBack()
+    {
+        var (s, t) = await CutAsync(0);
+        t.Bpm = 100;
+        TempoRamps.Add(t, 10, 20, 1.05, s);
+        TempoRamps.Add(t, 30, 40, 1.1, s);
+        var original = t.Ramps[0];
+
+        var end = new RampEdgeDrag(s, t, 0, end: true);
+        end.DragTo(35, SnapSettings.Off);
+        Assert.True(t.Ramps[0].EndSeconds == 30, $"the end was dragged into the next ramp, to {t.Ramps[0].EndSeconds}s");
+        end.DragTo(10.02, SnapSettings.Off);
+        Assert.True(t.Ramps[0].EndSeconds == 10 + TempoRamps.MinimumSeconds, "the end was dragged past the ramp's own start");
+        end.DragTo(20, SnapSettings.Off);
+        Assert.True(t.Ramps[0] == original && !end.Finish().Changed, "dragging the end back did not put the ramp back exactly");
+
+        var start = new RampEdgeDrag(s, t, 1, end: false);
+        start.DragTo(15, SnapSettings.Off);
+        Assert.True(t.Ramps[1].StartSeconds == 20, "the start was dragged back into the ramp before it");
+        start.DragTo(25.37, SnapSettings.Off);
+        Assert.True(t.Ramps[1].StartSeconds * Rate == Math.Round(t.Ramps[1].StartSeconds * Rate) && Math.Abs(t.Ramps[1].StartSeconds - 25.37) <= 1.0 / Rate
+                    && start.Finish().Changed, "the start did not land on a whole frame where it was dropped");
+    }
+
+    [Fact]
+    public async Task TheEndDotIgnoresItsOwnTracksSectionsButTheStartDoesNot()
+    {
+        var (s, t) = await CutAsync(0, 12, 33);
+        t.Bpm = 100;
+        TempoRamps.Add(t, 20, 30, 1.1, s);
+        var snap = new SnapSettings(true, 20);                       // half a second either side
+        double own = When(t, AtTrackSeconds(t, 33), s);                // a section edge on its own track, after the ramp
+        double before = When(t, AtTrackSeconds(t, 12), s);             // one before it
+
+        double startAt = TempoRamps.SnapPoint(t, before + 0.3, isEnd: false, except: 0, snap, s, out var startSnap);
+        Assert.True(startAt == before && startSnap == before, $"a ramp's start did not snap to its own track's section edge at {before}s");
+        double endAt = TempoRamps.SnapPoint(t, own + 0.3, isEnd: true, except: 0, snap, s, out var endSnap);
+        Assert.True(endSnap is null && Math.Abs(endAt - (own + 0.3)) <= 1.0 / Rate,
+            "a ramp's end snapped to a section on its own track — that section moves as soon as the ramp changes the tempo, so the end would not stay on it");
+
+        var other = await s.AddTrackAsync(_wav, own + 0.1);
+        endAt = TempoRamps.SnapPoint(t, own + 0.3, isEnd: true, except: 0, snap, s, out endSnap);
+        double edge = When(other, other.Clips[0], s);
+        Assert.True(endSnap == edge && Math.Abs(endAt - edge) <= 1.0 / Rate, "a ramp's end did not snap to another deck's section");
+        Assert.True(TempoRamps.SnapPoint(t, own + 0.3, true, 0, SnapSettings.Off, s, out var none) == TimelineEditor.SecondsOf(s.SecondsToFrames(own + 0.3), s) && none is null,
+            "with Ctrl held a ramp's dot still snapped");
+    }
+
     [Fact]
     public async Task UndoIsDeepForRamps()
     {

@@ -208,8 +208,9 @@ would be right for a large model and would only add ways to be wrong here.
   bit-identical to its file even where it plays at 1.0.
 - **The ruler's bar lines do not follow a tempo ramp**, and the BPM on the strip is the tempo
   before the first ramp.
-- **No way to make a tempo ramp in the app yet.** The engine and project file support them; the
-  clicking and typing come next.
+- **A tempo ramp is a span of the timeline**: moving a section under one changes the tempo it plays
+  at, and adding, moving or retyping a ramp moves every later section on that track.
+- **Dragging a ramp's dot while playing re-primes that track** on each move, as turning TEMPO does.
 - **Key detection is 47%.** Documented, surfaced, and worked around rather than hidden.
 - **No effects** — no reverb, delay, compression or plugins, by design.
 - **Memory grows with track count.** Eight 4-minute tracks is roughly 740 MB.

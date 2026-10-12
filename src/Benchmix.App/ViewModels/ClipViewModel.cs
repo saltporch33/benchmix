@@ -52,8 +52,8 @@ public sealed partial class ClipViewModel : ObservableObject
     /// <summary>Where it appears on the timeline, after the track's origin and tempo.</summary>
     public double TimelineStartSeconds => TimelineEditor.TimelineSecondsAt(_track.Model, TrackStartSeconds);
 
-    /// <summary>How long it occupies the timeline, after the track's tempo.</summary>
-    public double TimelineLengthSeconds => LengthSeconds / Math.Max(0.01, _track.Speed);
+    /// <summary>How long it occupies the timeline, after the track's tempo — and its tempo ramps.</summary>
+    public double TimelineLengthSeconds => TimelineEditor.TimelineLength(_track.Model, TrackStartSeconds, LengthSeconds);
 
     public double TimelineEndSeconds => TimelineStartSeconds + TimelineLengthSeconds;
 

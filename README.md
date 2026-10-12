@@ -20,12 +20,15 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   to, so a tagged library loads instantly.
 - **Match BPM** stretches a track onto the project tempo in one click, folding half-time and
   double-time readings first.
+- **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
+  110 to 115 BPM while it mixes into the next.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
 - **Render** to 16/24-bit or 32-bit float WAV, with a safety limiter.
 
 ## What it deliberately does not do
 
-No effects rack, no automation curves, no MIDI, no recording, no plugins. It is not a DAW. Every
+No effects rack, no automation curves (the one exception: tempo ramps), no MIDI, no recording, no
+plugins. It is not a DAW. Every
 control on screen is one you asked for.
 
 ---
@@ -64,6 +67,10 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
+| <kbd>Ctrl</kbd>+<kbd>R</kbd> | ramp mode on / off |
+| in ramp mode: click a track, then click it again further along | start and end a tempo ramp, then type the tempo to reach (<kbd>Enter</kbd> keeps it, <kbd>Esc</kbd> cancels) |
+| in ramp mode: drag a ramp's dot / click its end dot | move that end / change the tempo it reaches |
+| right-click on a tempo ramp → *Remove tempo ramp* | take it away; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts it back |
 | drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges (never to bars); <kbd>Ctrl</kbd> frees it |
 | drag one of several selected sections | move them all together. All on one track: sideways, or onto another track. On several tracks: sideways only. They keep their exact spacing, snap as one to other sections' edges, and one <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts them all back |
 | drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
@@ -95,6 +102,22 @@ it again lengthens or shortens the whole thing. It overwrites whatever it runs o
 a paste does, and one <kbd>Ctrl</kbd>+<kbd>Z</kbd> takes the whole drag back. This is not the
 Shift-drag listening loop on the ruler, which only changes what plays.
 
+**Tempo ramps.** To change a track's tempo gradually:
+
+1. Press *RAMP MODE* (or <kbd>Ctrl</kbd>+<kbd>R</kbd>).
+2. Click the track where the tempo should start changing. A yellow dot appears, labelled with the
+   tempo the track is playing there.
+3. Click the same track where the change should be complete. A box opens beside that point.
+4. Type the tempo to reach and press <kbd>Enter</kbd>.
+
+A yellow line joins the two dots: from the top edge down to the bottom if the tempo slows, from the
+bottom up to the top if it speeds up. After the ramp the track stays at the new tempo. Later audio
+on that track moves to keep time with it. To change a ramp, drag either dot sideways, or click the
+end dot to type a new tempo. Holding <kbd>Ctrl</kbd> while you click or drag stops the dot snapping
+to nearby edges. Each track's ramps are its own; *TEMPO* is the tempo before the first ramp,
+*Reset* removes the ramps, and each change is one <kbd>Ctrl</kbd>+<kbd>Z</kbd>. While ramp mode is
+on, clicks place dots instead of selecting or moving sections; turn it off to edit sections again.
+
 **Empty tracks.** *+ Empty track* makes a track with nothing on it. Paste or drag a section onto it
 and it takes on the tempo and pitch that section was playing at, so it sounds and lands exactly as
 it did — but with its own EQ and volume, which is usually why you moved it. Drop a song file on an
@@ -116,6 +139,9 @@ and exists to stop a two-song mix clipping. A single loud track passed through o
 comes out slightly attenuated. That is the limiter doing its job, not the editor altering your
 audio, and it is a per-project setting — but it is worth knowing before you use Benchmix as a
 pass-through converter.
+
+A track with a **tempo ramp** goes through the stretcher for its whole length, so it is not
+bit-identical to its file anywhere — even where it plays at its own tempo.
 
 **Key detection is a guess, and says so.** Values read from a file's tags are trusted. Values
 Benchmix worked out itself are marked with a `?`. Tempo detection measured 94% exact with nothing

@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**304 tests, 0 failures, 0 skipped** (2026-10-12). `dotnet test` — about 90 seconds (the stem
+**311 tests, 0 failures, 0 skipped** (2026-10-12). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -599,8 +599,79 @@ vocoder smears an onset. Measured the same way at a constant speed, with no ramp
 `scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way (gesturetest 158,
 buttontest 36). **304 tests, 0 failed, 0 skipped.**
 
-**Not verified:** nobody has listened to a tempo ramp; there is no way to make one in the app yet;
-the swells are a sine, not music.
+**Not verified:** nobody has listened to a tempo ramp; the swells are a sine, not music.
+
+## 2026-10-12 — tempo ramps, part 2: making and changing them
+
+**In the test project.** `TempoRampEditingTests` grew by seven, on the ramp WAV:
+- a ramp starts at exactly the tempo the track plays there (`==`), and a second one at exactly the
+  tempo the first arrived at;
+- a new ramp's ends land on whole frames, and the status says where it goes and how much later
+  audio moves (1.36 s sooner for 10 s from 1.0× to 1.1× — checked against the arithmetic, not the map);
+- a ramp cannot start inside another or run into the next; butting both neighbours is allowed; the
+  free room between ramps is right;
+- a typed tempo is read as typed; a word, a tempo the engine cannot play, and a track with no known
+  tempo are refused, with messages;
+- changing the end tempo moves later sections, and putting it back puts them back exactly (`==`);
+  removing the ramp puts them back where they were before it (`==`);
+- dragging a dot stops at the next ramp and at its own ramp's other end, lands on a whole frame, and
+  dragging it back restores the ramp exactly;
+- a start dot snaps to its own track's section edge, an end dot does not (it would not stay there),
+  both snap to another deck's section, and Ctrl frees them.
+
+`ProjectTests.SaveThenLoadRoundTripsEveryField` now carries two ramps. **311 tests, 0 failed,
+0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 158 to **187 checks**, through the lane's own
+handlers with a scripted pointer, modifiers and focus:
+
+```
+PASS  Ctrl+R is bound to ramp mode
+PASS  Escape is not a bare KeyBinding, so it cannot fire inside a text box
+PASS  RAMP MODE turns on through its own toggle
+PASS  loop mode and ramp mode are never on together
+PASS  a track whose tempo is unknown starts no ramp and says why
+PASS  the first click puts a dot at 30.00s, filled in with the tempo it plays there (93.0 BPM)
+PASS  Esc with PROJECT BPM focused is left to the box
+PASS  Esc takes the first dot away again
+PASS  the second click opens the tempo box beside the end point, filled in with 93.0
+PASS  the box is never given the keyboard in a scripted run
+PASS  the control map labels the box textbox:rampBpm
+PASS  typing 97.5 and Enter makes the ramp 30.00s → 45.00s, ending at 97.5 BPM
+PASS  the engine plays the tempo map the project describes
+PASS  the lane is handed the ramp to draw
+PASS  a section after the ramp now comes 0.67s sooner, as the faster tempo says
+PASS  a section before the ramp did not move
+PASS  it is drawn going up: first dot on the bottom edge, second on the top, joined by a line
+PASS  Ctrl+R waits while a ramp's dot is held
+PASS  dragging the end dot to 50 s moves only the end
+PASS  clicking the end dot opens the box with 97.5
+PASS  typing 99.0 and Enter changes only the end tempo
+PASS  a tempo it cannot reach is refused and the box stays open
+PASS  clicking elsewhere keeps what was typed, and that click starts nothing else
+PASS  a new ramp cannot start inside another
+PASS  in ramp mode a drag across a section moves no section
+PASS  the right-click menu offers Remove tempo ramp over a ramp, and not elsewhere
+PASS  Remove tempo ramp takes it off, and the section after it goes back where it was
+PASS  each ramp edit was one undo step: back to 101.0, then 99.0, then 97.5, then ending at 45 s, then none
+PASS  RAMP MODE turns off through its toggle and drops an unfinished ramp
+```
+
+The section after the ramp is checked against the integral written out in the check, within a
+frame. `--buttontest` grew from 36 to **41**: a ramp on the topper to 100.0 BPM; the real *Match
+BPM* button sets the tempo before it and keeps where it goes, and says so; the real *Reset*
+removes it; one Ctrl+Z brings it back with the matched tempo; two more take back the match and the
+ramp, one each. Both demo pictures now draw ramps: `--demosections` a ramp going down and one being
+typed (dashed, following the typed tempo), `--demoediting` one going up and one coming back down,
+with LOOP MODE still on. Looked at: the slowing ramp runs from the top edge to the bottom, the
+speeding one from the bottom to the top.
+
+`scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way (gesturetest 187,
+buttontest 41).
+
+**Not verified:** nobody has listened to a ramp; typing into the real box with real keyboard focus,
+and the dots under a real hand, have not been tried — the checks drive the handlers with a scripted
+pointer and focus; the window checks were not re-run against a deliberately broken build.
 
 ## The stretch engine
 

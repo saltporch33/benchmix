@@ -100,10 +100,10 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so does a track through a tempo ramp (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space, dragging a track up or down, the selection box, dragging a group — 158 checks |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 36 checks |
-| `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection |
-| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide and an empty track |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo) — 187 checks |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks |
+| `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
+| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, and tempo ramps up and down |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), and a scroll-wheel click lands back on the frame play started from |
@@ -148,10 +148,11 @@ These **exit 1 on failure** and also log a `verdict=` line to
 - **An untouched track is bit-identical — with the limiter OFF.** The limiter is on by default and
   does attenuate a loud track. Overstating this is a logged mistake with its own test.
 - **Every editing shortcut is Ctrl-modified**, because a bare key bound on the Window also fires
-  from inside a TextBox (PROJECT BPM, a track's name). The two bare keys that act, Delete
-  (2026-10-03) and Space (moved out of the KeyBindings 2026-10-11, so a name can have spaces), are
-  deliberately **not** KeyBindings: `OnWindowPreviewKeyDown` runs them only when the keyboard focus
-  is not in a text box or a menu, and `--gesturetest` fails if either KeyBinding ever appears.
+  from inside a TextBox (PROJECT BPM, a track's name, a ramp's tempo). The three bare keys that act,
+  Delete (2026-10-03), Space (moved out of the KeyBindings 2026-10-11, so a name can have spaces)
+  and Escape (2026-10-12, only to cancel a tempo ramp being placed or retyped), are deliberately
+  **not** KeyBindings: `OnWindowPreviewKeyDown` runs them only when the keyboard focus is not in
+  another text box or a menu, and `--gesturetest` fails if any of them ever becomes a KeyBinding.
 - **Nothing touches his own music files without an explicit yes.** Tag write-back is offered, not
   done.
 
@@ -175,4 +176,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-11.*
+*Revised 2026-10-12.*

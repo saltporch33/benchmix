@@ -35,6 +35,7 @@
         <KeyBinding Key="D" Modifiers="Ctrl" Command="{Binding DuplicateClipCommand}"/>
         <KeyBinding Key="T" Modifiers="Ctrl" Command="{Binding AddEmptyTrackCommand}"/>
         <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding ToggleLoopModeCommand}"/>
+        <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding ToggleRampModeCommand}"/>
     </Window.InputBindings>
 
     <Grid>
@@ -69,6 +70,10 @@
                               VerticalAlignment="Center"
                               IsChecked="{Binding LoopMode, Mode=TwoWay}"
                               ToolTip="While on, dragging either end of a section repeats it instead of trimming it (Ctrl+L). It moves in whole repeats; hold Ctrl for part of one. This builds repeats on the track — it is not the Shift-drag listening loop."/>
+                <ToggleButton Content="RAMP MODE" Style="{StaticResource PillToggle}" Margin="6,0,0,0" Padding="0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding RampMode, Mode=TwoWay}"
+                              ToolTip="While on, click a track twice to change its tempo gradually between the two points (Ctrl+R): the first click starts at the tempo it is playing, at the second you type the tempo to reach. Drag a dot to move it, click the end dot to change its tempo, right-click the line to remove it. Sections stay put while it is on."/>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"
                             ToolTip="Zoom so the whole mix fits the window (Ctrl+0)."/>
@@ -278,7 +283,7 @@
                                                         IsBipolar="True"
                                                         ArcBrush="{StaticResource AccentBrush}" TrackBrush="{StaticResource Bg3Brush}"
                                                         KnobBrush="{StaticResource Bg2Brush}" TextBrush="{StaticResource Text1Brush}"
-                                                        ToolTip="Speed without changing pitch. Drag up/down, Shift for fine, double-click to reset."/>
+                                                        ToolTip="Speed without changing pitch. On a track with a tempo ramp this is the tempo before the first ramp. Drag up/down, Shift for fine, double-click to reset."/>
                                                 <c:Knob Width="58" Height="74" Margin="0,0,10,0"
                                                         Label="PITCH" Minimum="-12" Maximum="12" DefaultValue="0"
                                                         Value="{Binding Semitones, Mode=TwoWay}" ValueText="{Binding SemitonesText}"
@@ -321,7 +326,7 @@
                                                         CommandParameter="{Binding}"
                                                         ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
                                                 <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
-                                                        ToolTip="Put tempo, pitch, EQ and volume back to normal. Sections, fades, LINK, mute and solo stay as they are."
+                                                        ToolTip="Put tempo, pitch, EQ and volume back to normal, and remove tempo ramps. Sections, fades, LINK, mute and solo stay as they are."
                                                         Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"/>
                                                 <ToggleButton Content="LINK" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
@@ -394,6 +399,8 @@
                                                 <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
                                                           Click="OnLoopModeMenu" InputGestureText="Ctrl+L"/>
                                                 <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
+                                                <Separator Tag="removeRamp"/>
+                                                <MenuItem Header="Remove tempo ramp" Tag="removeRamp" Click="OnRemoveRampMenu"/>
                                                 <Separator/>
                                                 <!-- A Click handler like every item above, never a Command bound
                                                      through RelativeSource AncestorType=Window: a ContextMenu is
@@ -409,6 +416,7 @@
                                                 PixelsPerSecond="{Binding DataContext.PixelsPerSecond, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                Ramps="{Binding RampVisuals}"
                                                 IsMuted="{Binding Muted}"
                                                 WaveBrush="{Binding ColorBrush}"
                                                 ClipBackground="{Binding ClipBackground}"/>
@@ -419,6 +427,25 @@
                                                        Style="{StaticResource Caption}" Margin="14,0" VerticalAlignment="Center"
                                                        IsHitTestVisible="False" TextWrapping="Wrap"
                                                        Visibility="{Binding IsEmpty, Converter={StaticResource BoolVis}}"/>
+                                            <!-- The end tempo of a tempo ramp, typed beside its end dot. An element in the
+                                                 lane, not a Popup: no window of its own, so in a scripted run it is off-screen
+                                                 with the rest, and it is never given the keyboard there. -->
+                                            <TextBox x:Name="RampBpmBox" Style="{StaticResource DarkBox}" Width="58" Height="20" FontSize="11.5"
+                                                     HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                     Text="{Binding RampBpmDraft, UpdateSourceTrigger=PropertyChanged}"
+                                                     Visibility="{Binding IsTypingRampBpm, Converter={StaticResource BoolVis}}"
+                                                     PreviewKeyDown="OnRampBpmKeyDown" LostKeyboardFocus="OnRampBpmLostFocus"
+                                                     IsVisibleChanged="OnRampBpmBoxShown"
+                                                     ToolTip="The tempo this ramp should reach, in BPM. Enter keeps it; Esc cancels.">
+                                                <TextBox.Margin>
+                                                    <MultiBinding Converter="{StaticResource RampBoxPlace}">
+                                                        <Binding Path="RampBoxSeconds"/>
+                                                        <Binding Path="DataContext.ScrollSeconds" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                        <Binding Path="DataContext.PixelsPerSecond" RelativeSource="{RelativeSource AncestorType=Window}"/>
+                                                        <Binding Path="ActualWidth" RelativeSource="{RelativeSource AncestorType=Grid}"/>
+                                                    </MultiBinding>
+                                                </TextBox.Margin>
+                                            </TextBox>
                                         </Grid>
                                     </Border>
                                 </Grid>

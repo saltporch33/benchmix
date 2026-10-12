@@ -109,6 +109,21 @@ public partial class MainWindow : Window
                     EndVerificationRun(false);
                     return;
                 }
+                // A placed tempo ramp going down, and a second one with its tempo being typed.
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                _vm.RampMode = true;
+                _vm.PlaceRampPoint(demo, 50, free: true);
+                _vm.PlaceRampPoint(demo, 58, free: true);
+                _vm.CommitRampEntry(demo.Id, (demo.Model.Bpm * demo.Model.Speed * 0.97).ToString("0.0", inv));
+                _vm.PlaceRampPoint(demo, 33, free: true);
+                _vm.PlaceRampPoint(demo, 42, free: true);
+                demo.RampBpmDraft = (demo.Model.Bpm * demo.Model.Speed * 1.05).ToString("0.0", inv);
+                if (demo.Model.Ramps.Count != 1 || !demo.IsTypingRampBpm)
+                {
+                    App.Log($"ui probe failed: the sections demo has {demo.Model.Ramps.Count} tempo ramps, not 1, or no tempo being typed");
+                    EndVerificationRun(false);
+                    return;
+                }
                 _vm.SeekTo(100);          // clear of the section edges, so the outline is visible
                 await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 await Task.Delay(400);
@@ -142,6 +157,20 @@ public partial class MainWindow : Window
                 if (empty.Clips.Count != 4 || _vm.SelectedClip is null)
                 {
                     App.Log($"ui probe failed: the editing demo left {empty.Clips.Count} sections on the empty track, not 4, or selected none");
+                    EndVerificationRun(false);
+                    return;
+                }
+                // Tempo ramps up and then down on the song, drawn with LOOP MODE still on.
+                double songBpm = song.Model.Bpm;
+                _vm.PlaceRampPoint(song, 22, free: true);
+                _vm.PlaceRampPoint(song, 28, free: true);
+                _vm.CommitRampEntry(song.Id, (songBpm * 1.04).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                _vm.PlaceRampPoint(song, 44, free: true);
+                _vm.PlaceRampPoint(song, 52, free: true);
+                _vm.CommitRampEntry(song.Id, songBpm.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+                if (song.Model.Ramps.Count != 2 || !_vm.LoopMode)
+                {
+                    App.Log($"ui probe failed: the editing demo has {song.Model.Ramps.Count} tempo ramps on the song, not 2, or LOOP MODE went off");
                     EndVerificationRun(false);
                     return;
                 }
@@ -683,6 +712,17 @@ public partial class MainWindow : Window
             _scriptedWindowPoint = null;
             _scriptedModifiers = null;
             _vm.StopCommand.Execute(null);
+        }
+
+        // --- tempo ramps ---
+        try { RunTempoRampGestures(Check, notes); }
+        finally
+        {
+            if (_rampGrab is { } held) LaneUp(LaneOf(held.Track) ?? this);
+            _vm.RampMode = false;
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _scriptedFocus = null;
         }
 
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
@@ -1796,6 +1836,268 @@ public partial class MainWindow : Window
               Math.Abs(C(a).TimelineStartSeconds - sa - 2) <= frame && Math.Abs(C(b).TimelineStartSeconds - sb - 2) <= frame);
     }
 
+    /// <summary>
+    /// Tempo ramps (Daniel, 2026-10-11) through the lane's own handlers, with a scripted pointer,
+    /// modifiers and focus: RAMP MODE, the two clicks, typing the tempo, moving the end, retyping it,
+    /// removing the ramp, and one undo step for each. Leaves the project as it found it.
+    /// </summary>
+    private void RunTempoRampGestures(Action<string, bool> Check, List<string> notes)
+    {
+        bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+R is bound to ramp mode", Bound(Key.R, _vm.ToggleRampModeCommand));
+        Check("Escape is not a bare KeyBinding, so it cannot fire inside a text box",
+              !InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Escape));
+
+        var toggle = Descendants<System.Windows.Controls.Primitives.ToggleButton>(this).FirstOrDefault(b => b.Content as string == "RAMP MODE");
+        var source = PresentationSource.FromVisual(this);
+        UpdateLayout();
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Bpm > 0 && t.Clips.Count > 0 && t.Model.Ramps.Count == 0);
+        if (toggle is null || source is null || first is null || LaneOf(first) is not { ActualHeight: > 0 } lane0)
+        {
+            notes.Add("no RAMP MODE toggle, or no laid-out track with a known tempo, so tempo ramps are untested in the window - pass a file to cover them");
+            return;
+        }
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+        void Toggle()
+        {
+            bool was = _vm.RampMode;
+            var peer = new System.Windows.Automation.Peers.ToggleButtonAutomationPeer(toggle);
+            ((System.Windows.Automation.Provider.IToggleProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Toggle)).Toggle();
+            PumpUntil(() => _vm.RampMode != was);
+        }
+
+        var id = first.Id;
+        TrackViewModel Track() => _vm.Tracks.First(t => t.Id == id);
+        FrameworkElement Lane() => LaneOf(Track())!;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double frame = 1.0 / _vm.Session.SampleRate;
+        double OnFrame(double sec) => Benchmix.Core.TimelineEditor.SecondsOf(_vm.Session.SecondsToFrames(sec), _vm.Session);
+
+        // Room for 0-55 s across the lane.
+        _vm.ScrollSeconds = 0;
+        _vm.PixelsPerSecond = Math.Min(20, Math.Max(4, (lane0.ActualWidth - 120) / 55));
+        double pps = _vm.PixelsPerSecond;
+        UpdateLayout();
+        Point At(FrameworkElement lane, double sec)
+        {
+            var o = lane.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (sec - _vm.ScrollSeconds) * pps, o.Y + lane.ActualHeight / 2);
+        }
+        // A left press goes as WPF routes it: the window's Preview, then the lane, then the release.
+        void Click(FrameworkElement lane, Point p, bool ctrl = true)
+        {
+            _scriptedModifiers = ctrl ? ModifierKeys.Control : ModifierKeys.None;
+            _scriptedWindowPoint = p;
+            WindowPress(MouseButton.Left, lane);
+            LaneDown(lane, p);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+        List<FrameworkElement> RemoveItems(FrameworkElement lane)
+            => lane.ContextMenu?.Items.OfType<FrameworkElement>().Where(i => i.Tag as string == "removeRamp").ToList() ?? new();
+
+        var before = Track().Clips.Select(c => (c.Id, At: c.TimelineStartSeconds)).ToList();
+        double origin = Track().Model.TimelineOffsetSeconds, v0 = Track().Model.Speed, bpm = Track().Model.Bpm;
+        double from = bpm * v0;
+        string fromText = from.ToString("0.0", inv);
+
+        // --- RAMP MODE ---
+        _vm.LoopMode = false;
+        _vm.RampMode = false;
+        Toggle();
+        Check("RAMP MODE turns on through its own toggle", _vm.RampMode);
+        _vm.LoopMode = true;
+        bool rampWentOff = !_vm.RampMode;
+        Toggle();
+        Check("loop mode and ramp mode are never on together", rampWentOff && _vm.RampMode && !_vm.LoopMode);
+
+        // --- a track with no tempo starts nothing (before the first dot, so it cannot disturb it) ---
+        int tracks = _vm.Tracks.Count;
+        _vm.AddEmptyTrackCommand.Execute(null);
+        UpdateLayout();
+        if (_vm.Tracks.Count == tracks + 1 && LaneOf(_vm.Tracks[^1]) is { ActualHeight: > 0 } emptyLane)
+        {
+            Click(emptyLane, At(emptyLane, 20));
+            Check($"a track whose tempo is unknown starts no ramp and says why (\"{_vm.Status}\")", !_vm.RampPending && _vm.Status.Contains("unknown"));
+        }
+        else notes.Add("the empty track was not laid out, so a ramp on a track with no tempo is untested");
+        if (_vm.Tracks.Count > tracks) Undo(() => _vm.Tracks.Count == tracks);
+        _vm.SelectedTrack = Track();
+
+        // --- the first click, and Esc ---
+        Click(Lane(), At(Lane(), 30));
+        var dot = Track().RampVisuals.LastOrDefault();
+        Check($"the first click puts a dot at 30.00s, filled in with the tempo it plays there ({fromText} BPM)",
+              _vm.RampPending && dot is { Look: Controls.RampLook.StartOnly } d && d.StartSeconds == OnFrame(30) && d.FromBpm == from);
+
+        _scriptedFocus = BpmBox;
+        var esc = Press(Key.Escape);
+        OnWindowPreviewKeyDown(this, esc);
+        Check("Esc with PROJECT BPM focused is left to the box", !esc.Handled && _vm.RampPending);
+        _scriptedFocus = this;
+        esc = Press(Key.Escape);
+        OnWindowPreviewKeyDown(this, esc);
+        _scriptedFocus = null;
+        Check("Esc takes the first dot away again", esc.Handled && !_vm.RampPending && Track().RampVisuals.Count == 0);
+
+        // --- the second click opens the box; typing and Enter make the ramp ---
+        Click(Lane(), At(Lane(), 30));
+        Click(Lane(), At(Lane(), 45));
+        UpdateLayout();
+        var box = RampBpmBoxOf(Track());
+        double x45 = (45 - _vm.ScrollSeconds) * pps;
+        double gridWidth = (box?.Parent as FrameworkElement)?.ActualWidth ?? 0;
+        double wantLeft = Math.Max(2, x45 + 70 <= gridWidth ? x45 + 10 : x45 - 70);
+        Check($"the second click opens the tempo box beside the end point, filled in with {fromText}",
+              box is { Visibility: Visibility.Visible } && box.Text == fromText && Math.Abs(box.Margin.Left - wantLeft) <= 1);
+        Check("the box is never given the keyboard in a scripted run", box is not null && !box.IsKeyboardFocusWithin);
+        Check("the control map labels the box textbox:rampBpm", box is not null && LabelFor(box) == "textbox:rampBpm");
+        if (box is null) { notes.Add("the ramp's tempo box was not found, so typing a tempo is untested"); return; }
+
+        string to1 = (from + 4.5).ToString("0.0", inv);
+        double v1 = double.Parse(to1, inv) / bpm;
+        box.Text = to1;
+        OnRampBpmKeyDown(box, Press(Key.Enter));
+        var m = Track().Model;
+        Check($"typing {to1} and Enter makes the ramp 30.00s → 45.00s, ending at {to1} BPM",
+              m.Ramps.Count == 1 && m.Ramps[0] == new Benchmix.Core.Model.TempoRamp(OnFrame(30), OnFrame(45), v1) && !Track().IsTypingRampBpm && !_vm.RampPending);
+        var voice = _vm.Session.VoiceFor(m);
+        Check("the engine plays the tempo map the project describes",
+              voice is not null && !voice.Tempo.IsConstant && voice.Tempo.SameAs(_vm.Session.EngineTempoOf(m)));
+        var wave = Descendants<Controls.WaveformView>(Lane()).FirstOrDefault();
+        Check("the lane is handed the ramp to draw", wave?.Ramps is { Count: 1 } drawn && drawn[0].Look == Controls.RampLook.Placed && drawn[0].EndSeconds == OnFrame(45));
+
+        // Where the tempo puts the sections: nothing before the ramp moves; one after it comes sooner.
+        double a = OnFrame(30), b = OnFrame(45);
+        var later = before.Where(x => x.At > 46).OrderBy(x => x.At).Select(x => Track().Clips.FirstOrDefault(c => c.Id == x.Id)).FirstOrDefault(c => c is not null);
+        if (later is null || origin > a) notes.Add("no section after 46 s, or the track starts after 30 s, so where a ramp puts later sections is untested here");
+        else
+        {
+            double fb = v0 * (a - origin) + (v0 + v1) / 2 * (b - a);
+            double want = b + (later.TrackStartSeconds - fb) / v1;
+            double was = before.First(x => x.Id == later.Id).At;
+            Check($"a section after the ramp now comes {was - later.TimelineStartSeconds:0.00}s sooner, as the faster tempo says",
+                  Math.Abs(later.TimelineStartSeconds - want) <= frame);
+        }
+        var earlier = before.Where(x => x.At < 29).Select(x => (Clip: Track().Clips.FirstOrDefault(c => c.Id == x.Id), x.At)).FirstOrDefault(x => x.Clip is not null);
+        if (earlier.Clip is null) notes.Add("no section before 29 s, so that a ramp leaves earlier sections alone is untested here");
+        else Check("a section before the ramp did not move", earlier.Clip.TimelineStartSeconds == earlier.At);
+
+        double h = Lane().ActualHeight - 1, dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var g = Controls.RampLayout.Layout(Track().RampVisuals[0], pps, _vm.ScrollSeconds, h, dip);
+        Check("it is drawn going up: first dot on the bottom edge, second on the top, joined by a line",
+              g.StartDot.Y == h - Controls.RampLayout.Inset && g.EndDot.Y == Controls.RampLayout.Inset);
+
+        // --- dragging the end dot ---
+        var lane = Lane();
+        var grab = At(lane, 45);
+        var to = At(lane, 50);
+        _scriptedModifiers = ModifierKeys.Control;
+        _scriptedWindowPoint = grab;
+        WindowPress(MouseButton.Left, lane);
+        LaneDown(lane, grab);
+        var midway = new Point((grab.X + to.X) / 2, grab.Y);
+        _scriptedWindowPoint = midway;
+        LaneMove(lane, midway, true);
+        _vm.ToggleRampModeCommand.Execute(null);
+        bool stayedOn = _vm.RampMode;
+        _scriptedWindowPoint = to;
+        LaneMove(lane, to, true);
+        LaneUp(lane);
+        _scriptedWindowPoint = null;
+        _scriptedModifiers = null;
+        Check("Ctrl+R waits while a ramp's dot is held", stayedOn);
+        Check("dragging the end dot to 50 s moves only the end", m.Ramps.Count == 1 && m.Ramps[0].EndSeconds == OnFrame(50) && m.Ramps[0].StartSeconds == OnFrame(30));
+
+        // --- clicking the end dot retypes its tempo ---
+        Click(Lane(), At(Lane(), 50));
+        UpdateLayout();
+        box = RampBpmBoxOf(Track())!;
+        Check($"clicking the end dot opens the box with {to1}", box.Visibility == Visibility.Visible && box.Text == to1 && _vm.RampEntryOpen);
+        string to2 = (from + 6).ToString("0.0", inv);
+        double v2 = double.Parse(to2, inv) / bpm;
+        box.Text = to2;
+        OnRampBpmKeyDown(box, Press(Key.Enter));
+        Check($"typing {to2} and Enter changes only the end tempo", m.Ramps.Count == 1 && m.Ramps[0].ToSpeed == v2 && m.Ramps[0].EndSeconds == OnFrame(50));
+
+        Click(Lane(), At(Lane(), 50));
+        UpdateLayout();
+        box = RampBpmBoxOf(Track())!;
+        box.Text = (bpm * 4 + 50).ToString("0", inv);
+        OnRampBpmKeyDown(box, Press(Key.Enter));
+        Check($"a tempo it cannot reach is refused and the box stays open (\"{_vm.Status}\")",
+              box.Visibility == Visibility.Visible && m.Ramps[0].ToSpeed == v2 && _vm.Status.Contains("between"));
+
+        string to3 = (from + 8).ToString("0.0", inv);
+        double v3 = double.Parse(to3, inv) / bpm;
+        box.Text = to3;
+        Click(Lane(), At(Lane(), 10));
+        Check("clicking elsewhere keeps what was typed, and that click starts nothing else",
+              m.Ramps.Count == 1 && m.Ramps[0].ToSpeed == v3 && !_vm.RampPending && !Track().IsTypingRampBpm);
+
+        // --- what a press does not do in ramp mode ---
+        Click(Lane(), At(Lane(), 40));
+        Check($"a new ramp cannot start inside another (\"{_vm.Status}\")", !_vm.RampPending && _vm.Status.Contains("inside a tempo ramp"));
+
+        var section = Track().Clips.FirstOrDefault(c => c.TimelineStartSeconds < 25 && c.TimelineEndSeconds > c.TimelineStartSeconds + 2 && c.TimelineStartSeconds + 1 < 28);
+        if (section is null) notes.Add("no section before the ramp to press on, so that ramp mode leaves sections alone is untested");
+        else
+        {
+            double was = section.TimelineStartSeconds, inside = Math.Min(section.TimelineEndSeconds - 0.5, 27);
+            lane = Lane();
+            var press = At(lane, Math.Max(was + 0.5, inside));
+            var away = new Point(press.X + 40, press.Y);
+            _scriptedWindowPoint = press;
+            WindowPress(MouseButton.Left, lane);
+            LaneDown(lane, press);
+            _scriptedWindowPoint = away;
+            LaneMove(lane, away, true);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            var after = Track().Clips.FirstOrDefault(c => c.Id == section.Id);
+            Check("in ramp mode a drag across a section moves no section", after is not null && after.TimelineStartSeconds == was && !_vm.DragInProgress);
+            _vm.CancelRamp();
+        }
+
+        // --- the right-click menu ---
+        lane = Lane();
+        LaneRightDown(lane, At(lane, 5));
+        PrepareLaneMenu(lane);
+        bool hiddenAway = RemoveItems(lane).All(i => i.Visibility == Visibility.Collapsed);
+        LaneRightDown(lane, At(lane, 40));
+        PrepareLaneMenu(lane);
+        var items = RemoveItems(lane);
+        Check("the right-click menu offers Remove tempo ramp over a ramp, and not elsewhere",
+              hiddenAway && items.Count == 2 && items.All(i => i.Visibility == Visibility.Visible));
+        if (items.OfType<MenuItem>().FirstOrDefault() is { } remove)
+        {
+            OnRemoveRampMenu(remove, new RoutedEventArgs());
+            var back = later is null ? null : Track().Clips.FirstOrDefault(c => c.Id == later.Id);
+            Check("Remove tempo ramp takes it off, and the section after it goes back where it was",
+                  m.Ramps.Count == 0 && (back is null || Math.Abs(back.TimelineStartSeconds - before.First(x => x.Id == back.Id).At) <= frame));
+        }
+        else notes.Add("no Remove tempo ramp item in the lane menu");
+
+        // --- one undo step each ---
+        bool UndoTo(Func<Benchmix.Core.Model.TrackModel, bool> state) { Undo(() => state(Track().Model)); return state(Track().Model); }
+        bool u1 = UndoTo(x => x.Ramps.Count == 1 && x.Ramps[0].ToSpeed == v3);
+        bool u2 = u1 && UndoTo(x => x.Ramps.Count == 1 && x.Ramps[0].ToSpeed == v2);
+        bool u3 = u2 && UndoTo(x => x.Ramps.Count == 1 && x.Ramps[0].ToSpeed == v1 && x.Ramps[0].EndSeconds == OnFrame(50));
+        bool u4 = u3 && UndoTo(x => x.Ramps.Count == 1 && x.Ramps[0].EndSeconds == OnFrame(45));
+        bool u5 = u4 && UndoTo(x => x.Ramps.Count == 0);
+        Check($"each ramp edit was one undo step: back to {to3}, then {to2}, then {to1}, then ending at 45 s, then none", u5);
+
+        // --- RAMP MODE off drops a ramp that was only started ---
+        Click(Lane(), At(Lane(), 30));
+        bool pending = _vm.RampPending;
+        Toggle();
+        Check("RAMP MODE turns off through its toggle and drops an unfinished ramp", pending && !_vm.RampMode && !_vm.RampPending && Track().RampVisuals.Count == 0);
+    }
+
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
     {
         // The shortcuts are XAML wiring, which no unit test can see.
@@ -2051,6 +2353,7 @@ public partial class MainWindow : Window
 
         await CheckSplitThroughMenuAsync(Check, Labels);
         await CheckRenameThroughMenuAsync(Check, Labels);
+        await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -2219,6 +2522,56 @@ public partial class MainWindow : Window
     /// of the defects found on 2026-10-03 while the user guide was being checked against the app,
     /// and fails without its fix.
     /// </summary>
+    /// <summary>
+    /// Match BPM and Reset on a track with a tempo ramp (2026-10-11), through the real buttons: Match
+    /// BPM sets the tempo before the ramp and leaves where the ramp goes; Reset takes the ramp away
+    /// in the same step; and each of those, and the ramp itself, is one Ctrl+Z.
+    /// </summary>
+    private async Task CheckTempoRampButtonsAsync(Action<string, bool> check, Func<Button, Task> click,
+                                                  Func<string, List<Button>> buttons, Func<string> labels)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        async Task Undo() { _vm.UndoCommand.Execute(null); await Settle(); }
+
+        if (_vm.Tracks.Count != 2 || _vm.Tracks[1].Model.Bpm <= 0) { check("a topper with a known tempo to put a tempo ramp on", false); return; }
+        var id = _vm.Tracks[1].Id;
+        TrackViewModel Topper() => _vm.Tracks.First(t => t.Id == id);
+        double bpm = Topper().Model.Bpm, speedBefore = Topper().Model.Speed;
+
+        _vm.PlaceRampPoint(Topper(), 20, free: true);
+        _vm.PlaceRampPoint(Topper(), 30, free: true);
+        bool made = _vm.CommitRampEntry(id, "100");
+        await Settle();
+        check("a tempo ramp on the topper, from 20 s to 30 s, ending at 100.0 BPM",
+              made && Topper().Model.Ramps is [{ StartSeconds: 20, EndSeconds: 30 } r] && r.ToSpeed == 100.0 / bpm);
+
+        var match = buttons("Match BPM");
+        var reset = buttons("Reset");
+        if (match.Count != 2 || reset.Count < 2) { check("Match BPM and Reset buttons for the ramped topper", false); return; }
+
+        await click(match[1]);
+        double matched = Topper().Model.Speed;
+        check($"Match BPM sets the tempo before the ramp ({bpm * matched:0.0} BPM) and leaves where the ramp goes",
+              matched != speedBefore && Topper().Model.Ramps is [{ } kept] && kept.ToSpeed == 100.0 / bpm
+              && labels().Contains("tempo ramp still goes to 100.0 BPM"));
+
+        await click(reset[1]);
+        check("Reset also removes the tempo ramp", Topper().Model.Ramps.Count == 0 && Topper().Model.Speed == 1
+              && _vm.Session.VoiceFor(Topper().Model)?.Tempo.IsConstant == true && labels().Contains("tempo ramps removed"));
+
+        await Undo();
+        check("one Ctrl+Z brings back the ramp with the matched tempo", Topper().Model.Ramps.Count == 1 && Topper().Model.Speed == matched);
+        await Undo();
+        bool matchUndone = Topper().Model.Ramps.Count == 1 && Topper().Model.Speed == speedBefore;
+        await Undo();
+        check("two more Ctrl+Z take back the match and the ramp, one each", matchUndone && Topper().Model.Ramps.Count == 0);
+    }
+
     private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,
                                                  Func<string, List<Button>> buttons)
     {
@@ -2461,6 +2814,7 @@ public partial class MainWindow : Window
         Button b when b.Content is string bs => "button:" + bs,
         TextBox { Name: "BpmBox" } => "textbox:projectBpm",
         TextBox { Name: "RenameBox" } => "textbox:rename",
+        TextBox { Name: "RampBpmBox" } => "textbox:rampBpm",
         TextBox => "textbox",
         Slider => "slider:master",
         TextBlock tb when tb.Text is { Length: > 0 } s && s.Length < 60 => "text:" + s,
@@ -2640,6 +2994,7 @@ public partial class MainWindow : Window
             return true;
         }
         if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
+        if (_vm.RampMode) return true;                     // in ramp mode a press acts on ramps only
         BandDown(surface, window, additive: shift || ctrl);
         return true;
     }
@@ -2963,6 +3318,15 @@ public partial class MainWindow : Window
     private bool WindowPress(MouseButton button, DependencyObject? pressedOn)
     {
         if (!IsInRenameBox(pressedOn)) _vm.CommitOpenRenames();
+
+        // A press anywhere but in a ramp's BPM box keeps the tempo typed there, if the track can
+        // reach it, and is used up doing so: it does not also start a new ramp.
+        _pressEndedRampEntry = false;
+        if (_vm.RampEntryOpen && !IsInRampBox(pressedOn))
+        {
+            _vm.FinishRampEntry(applyIfValid: true);
+            _pressEndedRampEntry = true;
+        }
         if (button != MouseButton.Middle) return false;
         _vm.StopAndReturn();
         return true;
@@ -2978,6 +3342,20 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Escape drops a tempo ramp being placed, or keeps the tempo a retyped one had. Only while
+        // there is one, and not from another text box, where Escape is that box's own.
+        if (e.Key == Key.Escape && Modifiers == ModifierKeys.None && _vm.RampPending)
+        {
+            var focused = e.OriginalSource as IInputElement ?? FocusedForKeys;
+            if (IsInRampBox(focused as DependencyObject) || BareKeyAppliesTo(focused))
+            {
+                _vm.CancelRamp();
+                ReturnKeyboardToTimeline();
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (e.Key is not (Key.Delete or Key.Space) || Modifiers != ModifierKeys.None) return;
 
         // OriginalSource is the element the key was raised on — the focused one, including one
@@ -3172,7 +3550,7 @@ public partial class MainWindow : Window
         _pendingToggle = null;                         // losing the mouse is not a click
         _pendingCollapse = null;
         if (_band is not null) BandLost();
-        else if (_dragClip is not null) LaneUp((FrameworkElement)sender);
+        else if (_dragClip is not null || _rampGrab is not null) LaneUp((FrameworkElement)sender);
     }
 
     private bool LaneDown(FrameworkElement lane, Point window, int clickCount = 1)
@@ -3180,6 +3558,7 @@ public partial class MainWindow : Window
         if (lane.DataContext is not TrackViewModel vm) return false;
 
         _vm.SelectedTrack = vm;
+        if (_vm.RampMode) { _clickMemo = null; return RampDown(lane, vm, window); }
         double x = LaneX(lane, window);
         var memo = _clickMemo;
         _clickMemo = null;
@@ -3263,6 +3642,30 @@ public partial class MainWindow : Window
     {
         if (_band is not null) { BandMove(window, pressed); return; }
 
+        if (_rampGrab is { } g)
+        {
+            if (!(pressed || _scriptedWindowPoint is not null)) return;
+            double moved = window.X - _rampGrabOrigin.X;
+            if (!_rampDragging)
+            {
+                if (Math.Abs(moved) < 4) return;
+                _rampDragging = true;
+                _vm.BeginRampDotDrag(g.Track, g.Index, g.End);
+            }
+            _vm.DragRampDotTo(g.Seconds + moved / Math.Max(0.01, _vm.PixelsPerSecond), free: Modifiers.HasFlag(ModifierKeys.Control));
+            _vm.RecomputeLength();
+            return;
+        }
+        if (_vm.RampMode)
+        {
+            if (lane.DataContext is TrackViewModel rh)
+            {
+                double rx = LaneX(lane, window), ry = window.Y - lane.TranslatePoint(new Point(0, 0), this).Y;
+                lane.Cursor = RampDotAt(rh, lane, rx, ry) is not null ? Cursors.SizeWE : Cursors.Cross;
+            }
+            return;
+        }
+
         // Hovering near an edge shows what grabbing it would do, so trimming and looping are
         // discoverable without a manual.
         if (_dragClip is null && lane.DataContext is TrackViewModel hover)
@@ -3344,6 +3747,21 @@ public partial class MainWindow : Window
     {
         if (_band is not null) { BandUp(); return; }
 
+        if (_rampGrab is { } g)
+        {
+            // State first: releasing capture raises LostMouseCapture, which comes straight back here.
+            bool dragged = _rampDragging;
+            _rampGrab = null;
+            _rampDragging = false;
+            _vm.PointerHeld = false;
+            if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
+            if (dragged) _vm.EndDrag();
+            else if (g.End) _vm.BeginRetypeRamp(g.Track, g.Index);
+            else _vm.Status = "The start of a ramp always takes the tempo the track is already playing. Drag it to move it; click the end dot to change the tempo.";
+            _vm.EndGesture();
+            return;
+        }
+
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
         var toggle = _pendingToggle;
@@ -3377,17 +3795,21 @@ public partial class MainWindow : Window
     /// menu acts on what was clicked — "Paste at playhead" included, which pastes onto the
     /// selected track.
     /// </summary>
-    private void OnLaneRightButtonDown(object sender, MouseButtonEventArgs e)
+    private void OnLaneRightButtonDown(object sender, MouseButtonEventArgs e) => LaneRightDown((FrameworkElement)sender, WindowPoint(e));
+
+    private void LaneRightDown(FrameworkElement lane, Point window)
     {
-        var lane = (FrameworkElement)sender;
         if (lane.DataContext is not TrackViewModel vm) return;
 
         // The left button is still holding a box or a section: a right-press — the start of a pan,
         // say, to reach further — must not swap what they hold for what is under the pointer.
-        if (_band is not null || _dragClip is not null) return;
+        if (_band is not null || _dragClip is not null || _rampGrab is not null) return;
         TakeKeyboardFromText();
         _vm.SelectedTrack = vm;
-        var clip = ClipAtLaneX(vm, e.GetPosition(lane).X);
+        double x = LaneX(lane, window);
+        int under = Benchmix.Core.TempoRamps.IndexUnder(vm.Model, SecondsAtLaneX(x), 4 / Math.Max(0.01, _vm.PixelsPerSecond));
+        _rampUnderMenu = under >= 0 ? (vm, under) : null;
+        var clip = ClipAtLaneX(vm, x);
 
         // Right-clicking one of several selected sections keeps the selection, so the menu's
         // Delete can remove them all; anywhere else it selects what is under the pointer.
@@ -3395,12 +3817,123 @@ public partial class MainWindow : Window
         else _vm.SelectClip(clip);
     }
 
-    private void OnLaneContextMenuOpening(object sender, ContextMenuEventArgs e)
+    private void OnLaneContextMenuOpening(object sender, ContextMenuEventArgs e) => PrepareLaneMenu((FrameworkElement)sender);
+
+    /// <summary>Sets the lane menu up for where it was opened: loop mode's tick, and "Remove tempo ramp" only over a ramp.</summary>
+    private void PrepareLaneMenu(FrameworkElement lane)
     {
-        if (((FrameworkElement)sender).ContextMenu is not { } menu) return;
-        foreach (var item in menu.Items.OfType<MenuItem>())
-            if (item.Tag as string == "loopmode") item.IsChecked = _vm.LoopMode;
+        if (lane.ContextMenu is not { } menu) return;
+        bool overRamp = _rampUnderMenu is { } r && ReferenceEquals(r.Track, lane.DataContext);
+        foreach (var item in menu.Items.OfType<FrameworkElement>())
+        {
+            if (item is MenuItem { Tag: "loopmode" } loop) loop.IsChecked = _vm.LoopMode;
+            if (item.Tag as string == "removeRamp") item.Visibility = overRamp ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
+
+    private void OnRemoveRampMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t && _rampUnderMenu is { } r && ReferenceEquals(r.Track, t)) _vm.RemoveRamp(t, r.Index);
+        else _vm.Status = "Right-click on a tempo ramp to remove it.";
+    }
+
+    // ---------------- tempo ramps in the lane (Daniel, 2026-10-11) ----------------
+
+    /// <summary>A press on a ramp's dot, waiting to see whether it is a click or a drag.</summary>
+    private (TrackViewModel Track, int Index, bool End, double Seconds)? _rampGrab;
+    private bool _rampDragging;
+    private Point _rampGrabOrigin;
+    private (TrackViewModel Track, int Index)? _rampUnderMenu;
+
+    /// <summary>Set by <see cref="WindowPress"/>: that press kept the tempo being typed, and does nothing else.</summary>
+    private bool _pressEndedRampEntry;
+
+    /// <summary>
+    /// A left press on a lane in ramp mode. On a dot it grabs that end of its ramp — a drag moves it,
+    /// a click on the end dot retypes its tempo; anywhere else it puts a ramp's next point down.
+    /// Sections are not selected or dragged.
+    /// </summary>
+    private bool RampDown(FrameworkElement lane, TrackViewModel vm, Point window)
+    {
+        if (_pressEndedRampEntry) { _pressEndedRampEntry = false; return true; }
+        double x = LaneX(lane, window), y = window.Y - lane.TranslatePoint(new Point(0, 0), this).Y;
+        if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(SecondsAtLaneX(x)); return true; }
+
+        if (RampDotAt(vm, lane, x, y) is { } dot)
+        {
+            _rampGrab = (vm, dot.Index, dot.End, dot.Seconds);
+            _rampGrabOrigin = window;
+            _rampDragging = false;
+            _vm.PointerHeld = true;
+            if (_scriptedWindowPoint is null) lane.CaptureMouse();
+            return true;
+        }
+        _vm.PlaceRampPoint(vm, SecondsAtLaneX(x), free: Modifiers.HasFlag(ModifierKeys.Control));
+        return true;
+    }
+
+    /// <summary>The placed ramp's dot under a lane point, the end winning where both are; laid out as it is drawn.</summary>
+    private (int Index, bool End, double Seconds)? RampDotAt(TrackViewModel vm, FrameworkElement lane, double x, double y)
+    {
+        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var visuals = vm.RampVisuals;
+        for (int i = 0; i < visuals.Count && i < vm.Model.Ramps.Count; i++)
+        {
+            var g = Controls.RampLayout.Layout(visuals[i], _vm.PixelsPerSecond, _vm.ScrollSeconds, lane.ActualHeight - 1, dip);
+            if (Math.Abs(x - g.EndDot.X) <= Controls.RampLayout.GrabPixels || g.EndLabel.Contains(new Point(x, y)))
+                return (i, true, vm.Model.Ramps[i].EndSeconds);
+            if (Math.Abs(x - g.StartDot.X) <= Controls.RampLayout.GrabPixels)
+                return (i, false, vm.Model.Ramps[i].StartSeconds);
+        }
+        return null;
+    }
+
+    private void OnRampBpmKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: TrackViewModel t } box) return;
+        if (e.Key == Key.Enter)
+        {
+            if (_vm.CommitRampEntry(t.Id, box.Text)) ReturnKeyboardToTimeline();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape)
+        {
+            _vm.CancelRamp();
+            ReturnKeyboardToTimeline();
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>
+    /// The keyboard leaving the box keeps the tempo typed, as a click elsewhere does — but not when
+    /// it left the app (no new focus), or went into a menu or popup.
+    /// </summary>
+    private void OnRampBpmLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (e.NewFocus is not DependencyObject to || to is System.Windows.Controls.Primitives.MenuBase or MenuItem) return;
+        if (!ReferenceEquals(to, this) && !(to is Visual v && v.IsDescendantOf(this))) return;
+        if (_vm.RampEntryOpen) _vm.FinishRampEntry(applyIfValid: true);
+    }
+
+    /// <summary>
+    /// Puts the keyboard in the box when it opens, with the tempo selected so typing replaces it.
+    /// Never in a scripted run: asking Windows for the keyboard would activate the hidden window.
+    /// </summary>
+    private void OnRampBpmBoxShown(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (sender is not TextBox box || !box.IsVisible || App.IsScriptedRun) return;
+        Dispatcher.BeginInvoke(() => { if (box.IsVisible) { box.Focus(); box.SelectAll(); } },
+                               System.Windows.Threading.DispatcherPriority.Input);
+    }
+
+    private static bool IsInRampBox(DependencyObject? d)
+    {
+        for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is TextBox { Name: "RampBpmBox" }) return true;
+        return false;
+    }
+
+    private TextBox? RampBpmBoxOf(TrackViewModel t) => RowPart<TextBox>(t, "RampBpmBox");
 
     private void OnLoopModeMenu(object sender, RoutedEventArgs e) => _vm.LoopMode = ((MenuItem)sender).IsChecked;
 
@@ -3456,7 +3989,8 @@ public partial class MainWindow : Window
     private void OnTrimStartToPlayhead(object sender, RoutedEventArgs e)
     {
         if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
-        double into = (_vm.PositionSeconds - c.TimelineStartSeconds) * c.Track.Speed;
+        // How far into the song the playhead is, after the track's tempo and its tempo ramps.
+        double into = Benchmix.Core.TimelineEditor.TrackSecondsAt(c.Track.Model, _vm.PositionSeconds) - c.TrackStartSeconds;
         if (into <= 0) { _vm.Status = "The playhead is before this section."; return; }
 
         // Clamp against this section's own end, not the whole file's. Past it, the trim would
@@ -3476,7 +4010,7 @@ public partial class MainWindow : Window
     private void OnTrimEndToPlayhead(object sender, RoutedEventArgs e)
     {
         if (ClipOf(sender) is not { } c) { _vm.Status = "Click a section first."; return; }
-        double into = (_vm.PositionSeconds - c.TimelineStartSeconds) * c.Track.Speed + c.SourceStartSeconds;
+        double into = Benchmix.Core.TimelineEditor.TrackSecondsAt(c.Track.Model, _vm.PositionSeconds) - c.TrackStartSeconds + c.SourceStartSeconds;
         if (into <= c.SourceStartSeconds + 0.05) { _vm.Status = "The playhead is at or before the section's start."; return; }
 
         _vm.BeginTrim(c, start: false);

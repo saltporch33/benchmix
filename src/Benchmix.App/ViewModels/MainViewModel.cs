@@ -433,6 +433,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (track is null || _session is null) return;
         if (HeldUnderTheMouse()) return;
 
+        if (_ramp?.TrackId == track.Id) ClearRampDraft();
         PushUndo($"remove {track.Name}");
         Session.RemoveTrack(track.Model);
         Tracks.Remove(track);
@@ -466,7 +467,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MarkDirty();
 
         string folded = Math.Abs(from - track.OriginalBpm) > 0.01 ? $" (read as {from:F1}, half/double-time)" : "";
-        Status = $"{track.Name}: {(speed - 1) * 100:+0.0;-0.0}% to hit {target:F1} BPM{folded}.";
+        // TEMPO is the tempo before the first ramp; the ramps keep where they go.
+        int n = track.Model.Ramps.Count;
+        string ramps = n == 0 ? ""
+            : $" Its tempo ramp{(n > 1 ? "s" : "")} still go{(n > 1 ? "" : "es")} to {track.Model.Bpm * track.Model.Ramps[^1].ToSpeed:0.0} BPM.";
+        Status = $"{track.Name}: {(speed - 1) * 100:+0.0;-0.0}% to hit {target:F1} BPM{folded}.{ramps}";
     }
 
     /// <summary>Suggests and applies a pitch shift so a track sits with the project's key reference.</summary>
@@ -578,15 +583,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         track ??= SelectedTrack;
         if (track is null) return;
 
+        if (_ramp?.TrackId == track.Id) ClearRampDraft();
+        bool hadRamps = track.Model.Ramps.Count > 0;
         AsOneUndoStep($"reset {track.Name}", () =>
         {
+            track.Model.Ramps.Clear();
             track.Speed = 1;
             track.Semitones = 0;
             track.EqLow = track.EqMid = track.EqHigh = 1;
             track.Gain = 1;
         });
+        if (hadRamps) Redraw(track);                // TEMPO may already have been 1, and then nothing pushed the ramps away
         MarkDirty();
-        Status = $"{track.Name} back to its original tempo, pitch and EQ.";
+        Status = $"{track.Name} back to its original tempo, pitch and EQ{(hadRamps ? ", with its tempo ramps removed" : "")}.";
     }
 
     // ---------------- project ----------------
@@ -597,6 +606,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         CommitOpenRenames();
         if (!ConfirmDiscard()) return;
         if (_session is null) return;
+        EndRampEntry();
 
         // Go through OpenAsync so the graph, the voices, the decoded clips and the loop region are
         // all released. Clearing the collections in place leaves the audio in memory and the old
@@ -626,6 +636,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         CommitOpenRenames();
         if (!ConfirmDiscard()) return;
         if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
+        EndRampEntry();
 
         var dlg = new OpenFileDialog { Title = "Open project", Filter = ProjectStore.FileFilter };
         if (dlg.ShowDialog() != true) return;
@@ -812,6 +823,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // Every row is about to be rebuilt; a name half-typed into one of them goes with it, rather
         // than being written later into a track that is no longer in the project.
         foreach (var t in Tracks) t.IsRenaming = false;
+        EndRampEntry();                 // and so does a ramp being placed, or its tempo being typed
 
         var keepTrack = SelectedTrack?.Id;
         var keepClip = SelectedClip?.Id;
@@ -1281,9 +1293,264 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ToggleLoopMode() => LoopMode = !LoopMode;
 
     partial void OnLoopModeChanged(bool value)
-        => Status = value
+    {
+        if (value) RampMode = false;
+        Status = value
             ? "Loop mode on: drag either end of a section to repeat it. Hold Ctrl for part of a repeat."
             : "Loop mode off: dragging the end of a section trims it again.";
+    }
+
+    // ---------------- tempo ramps (Daniel, 2026-10-11) ----------------
+    //
+    // His words: "first click puts a dot indicating start of ramp, second click puts the end point,
+    // and a yellow line connects them indicating up or down. Setting bpm should have my type it in.
+    // Whatever the current bpm of the clip is will be filled in automatically at the start point of
+    // the ramp. Then I'll type in the bpm for the end point." What a ramp does to the project lives
+    // in Core (TempoRamps, RampEdgeDrag); this is the glue, one undo step per edit.
+
+    /// <summary>
+    /// While on, a click on a track places a tempo ramp's dots instead of selecting or dragging
+    /// sections. Never on together with LOOP MODE: both change what a press in a lane does.
+    /// </summary>
+    [ObservableProperty] private bool _rampMode;
+
+    [RelayCommand]
+    private void ToggleRampMode()
+    {
+        if (HeldUnderTheMouse()) return;
+        RampMode = !RampMode;
+    }
+
+    partial void OnRampModeChanged(bool value)
+    {
+        if (value)
+        {
+            LoopMode = false;
+            Status = "Ramp mode on: click a track where its tempo should start changing, then where the change should be complete, then type the tempo. Sections stay put while it is on (Ctrl+R turns it off).";
+            return;
+        }
+        bool onlyStarted = _ramp is { End: null, Retype: null };
+        string? finished = FinishRampEntry(applyIfValid: true);
+        if (_rampDrag is not null) EndDrag();
+        Status = onlyStarted ? "Ramp mode off — the ramp that was started was not placed."
+               : finished is not null ? $"{finished} Ramp mode off."
+               : "Ramp mode off: clicking and dragging sections works again.";
+    }
+
+    private sealed record RampDraftState(Guid TrackId, double Start, double FromBpm, double? End, int? Retype);
+
+    private RampDraftState? _ramp;
+    private RampEdgeDrag? _rampDrag;
+    private TrackViewModel? _rampDragTrack;
+
+    /// <summary>A ramp is being placed or retyped: a first dot down, or the box for its end tempo open.</summary>
+    public bool RampPending => _ramp is not null;
+
+    /// <summary>The box for a ramp's end tempo is open.</summary>
+    public bool RampEntryOpen => _ramp is { End: not null } or { Retype: not null };
+
+    /// <summary>
+    /// A click on a track in ramp mode: the first puts the ramp's start dot down, at the tempo the
+    /// track plays there; the second, on the same track, its end, and opens the box for the tempo
+    /// to reach. True when it did something.
+    /// </summary>
+    public bool PlaceRampPoint(TrackViewModel t, double seconds, bool free)
+    {
+        if (HeldUnderTheMouse()) return false;
+        if (t.Model.Bpm <= 0) { Status = $"{t.Name}'s tempo is unknown, so a ramp has no BPM to start from."; return false; }
+
+        bool second = _ramp is { End: null, Retype: null } d0 && d0.TrackId == t.Id;
+        double at = TempoRamps.SnapPoint(t.Model, seconds, isEnd: second, except: -1, SnapFor(free), Session, out var snapped);
+        SnapLineSeconds = snapped;
+
+        if (!second)
+        {
+            if (TempoRamps.IndexInside(t.Model, at) >= 0)
+            {
+                Status = "That is inside a tempo ramp. Drag its dots to move it, click its end dot to change its tempo, or right-click it to remove it.";
+                return false;
+            }
+            bool moved = _ramp is not null;
+            ClearRampDraft();
+            double from = TempoRamps.BpmAt(t.Model, at);
+            _ramp = new RampDraftState(t.Id, at, from, null, null);
+            ShowRampDraft(t);
+            Status = (moved ? $"Started the ramp on {t.Name} instead. " : "")
+                   + $"Ramp starts at {at:0.00}s at {from:0.0} BPM, the tempo {t.Name} is playing there. Now click where it should arrive.";
+            return true;
+        }
+
+        double a = _ramp!.Start, b = at;
+        if (Math.Abs(b - a) < TempoRamps.MinimumSeconds || Math.Abs(b - a) * PixelsPerSecond < 4)
+        {
+            Status = "Click further along — a ramp needs some length.";
+            return false;
+        }
+        if (b < a) (a, b) = (b, a);                                  // a ramp runs forward in time
+        var (lo, hi) = TempoRamps.RoomAround(t.Model, _ramp.Start);
+        string clamped = b > hi || a < lo ? " It stops where the next ramp begins." : "";
+        a = Math.Max(a, lo);
+        b = Math.Min(b, hi);
+        if (b - a < TempoRamps.MinimumSeconds) { Status = "There is no room for a ramp there: it would run into the next one."; return false; }
+
+        double fromBpm = TempoRamps.BpmAt(t.Model, a);
+        _ramp = new RampDraftState(t.Id, a, fromBpm, b, null);
+        t.RampBpmDraft = fromBpm.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        t.RampBoxSeconds = b;
+        t.IsTypingRampBpm = true;
+        ShowRampDraft(t);
+        Status = $"Type the tempo {t.Name} should reach at {b:0.00}s, then press Enter (it starts at {fromBpm:0.0} BPM). Esc cancels.{clamped}";
+        return true;
+    }
+
+    /// <summary>
+    /// Enter in the box: places the new ramp, or changes the tempo an existing one reaches. A tempo
+    /// it cannot reach leaves the box open and says why. True when the box closed.
+    /// </summary>
+    public bool CommitRampEntry(Guid trackId, string? typed)
+    {
+        if (_ramp is not { } d || d.TrackId != trackId || (d.End is null && d.Retype is null)) return false;     // a stale box
+        var t = Tracks.FirstOrDefault(x => x.Id == trackId);
+        if (t is null) { ClearRampDraft(); return false; }
+        if (HeldUnderTheMouse()) return false;
+
+        var (ok, speed, why) = TempoRamps.ParseBpm(t.Model, typed);
+        if (!ok) { Status = why; return false; }
+
+        EditResult result;
+        if (d.Retype is int i)
+        {
+            if (i >= t.Model.Ramps.Count) { ClearRampDraft(); Status = "That tempo ramp is no longer there."; return true; }
+            if (t.Model.Ramps[i].ToSpeed == speed)
+            {
+                ClearRampDraft();
+                Status = $"Kept {t.Model.Bpm * speed:0.0} BPM.";
+                return true;
+            }
+            PushUndo($"{t.Name}: tempo ramp's end");
+            result = TempoRamps.SetEndSpeed(t.Model, i, speed, Session);
+        }
+        else
+        {
+            PushUndo($"{t.Name}: tempo ramp");
+            result = TempoRamps.Add(t.Model, d.Start, d.End!.Value, speed, Session);
+            if (!result.Changed) { Status = result.Message; return false; }
+        }
+
+        ClearRampDraft();
+        Redraw(t);
+        RecomputeLength();
+        MarkDirty();
+        EndGesture();
+        SnapLineSeconds = null;
+        Status = result.Message;
+        return true;
+    }
+
+    /// <summary>Esc: drops the ramp being placed, or keeps the tempo a retyped one already had.</summary>
+    public void CancelRamp()
+    {
+        if (_ramp is not { } d) return;
+        var t = Tracks.FirstOrDefault(x => x.Id == d.TrackId);
+        ClearRampDraft();
+        Status = d.Retype is int i && t is not null && i < t.Model.Ramps.Count
+            ? $"Kept {t.Model.Bpm * t.Model.Ramps[i].ToSpeed:0.0} BPM."
+            : "Ramp cancelled.";
+    }
+
+    /// <summary>
+    /// A click somewhere else while the box is open: what was typed is kept if it is a tempo the
+    /// track can reach, and the ramp is cancelled if not. A first dot on its own is dropped. Returns
+    /// the status it set, or null when there was nothing to finish.
+    /// </summary>
+    public string? FinishRampEntry(bool applyIfValid)
+    {
+        if (_ramp is not { } d) return null;
+        var t = Tracks.FirstOrDefault(x => x.Id == d.TrackId);
+        if (t is null || (d.End is null && d.Retype is null)) { ClearRampDraft(); return null; }
+        if (applyIfValid && TempoRamps.ParseBpm(t.Model, t.RampBpmDraft).Ok && CommitRampEntry(d.TrackId, t.RampBpmDraft)) return Status;
+
+        string draft = t.RampBpmDraft;
+        CancelRamp();
+        if (d.Retype is null) Status = $"Ramp cancelled: \"{draft}\" is not a tempo it can reach.";
+        return Status;
+    }
+
+    /// <summary>Drops a ramp being placed without a word: the project is being replaced or rebuilt.</summary>
+    public void EndRampEntry() => ClearRampDraft();
+
+    /// <summary>A click on a ramp's end dot: opens the box with the tempo it reaches, to type another.</summary>
+    public void BeginRetypeRamp(TrackViewModel t, int i)
+    {
+        if (HeldUnderTheMouse()) return;
+        if (i < 0 || i >= t.Model.Ramps.Count) return;
+        ClearRampDraft();
+        var r = t.Model.Ramps[i];
+        double to = t.Model.Bpm * r.ToSpeed;
+        _ramp = new RampDraftState(t.Id, r.StartSeconds, TempoRamps.BpmAt(t.Model, r.StartSeconds), r.EndSeconds, i);
+        t.RampBpmDraft = to.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        t.RampBoxSeconds = r.EndSeconds;
+        t.IsTypingRampBpm = true;
+        ShowRampDraft(t);
+        Status = $"Type the tempo this ramp should reach, then press Enter. Esc keeps {to:0.0} BPM.";
+    }
+
+    /// <summary>Starts dragging one end of a ramp. One undo step for the whole drag.</summary>
+    public void BeginRampDotDrag(TrackViewModel t, int i, bool end)
+    {
+        EndDrag();
+        ClearRampDraft();
+        if (i < 0 || i >= t.Model.Ramps.Count) return;
+        PushUndo($"{t.Name}: move tempo ramp");
+        _rampDrag = new RampEdgeDrag(Session, t.Model, i, end);
+        _rampDragTrack = t;
+    }
+
+    public void DragRampDotTo(double seconds, bool free)
+    {
+        if (_rampDrag is null || _rampDragTrack is null) return;
+        _rampDrag.DragTo(seconds, SnapFor(free));
+        Redraw(_rampDragTrack);
+        RecomputeLength();
+        SnapLineSeconds = _rampDrag.SnapLineSeconds;
+        var r = _rampDrag.Ramp;
+        Status = $"{_rampDragTrack.Name}: ramp {r.StartSeconds:0.00}s → {r.EndSeconds:0.00}s{(_rampDrag.SnappedTo is { } on ? " — on " + on : "")}";
+    }
+
+    /// <summary>The lane menu's "Remove tempo ramp". Ctrl+Z puts it back.</summary>
+    public void RemoveRamp(TrackViewModel t, int i)
+    {
+        if (HeldUnderTheMouse()) return;
+        if (i < 0 || i >= t.Model.Ramps.Count) { Status = "That tempo ramp is no longer there."; return; }
+        if (_ramp?.TrackId == t.Id) ClearRampDraft();
+        PushUndo($"{t.Name}: remove tempo ramp");
+        var result = TempoRamps.Remove(t.Model, i, Session);
+        Redraw(t);
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
+    }
+
+    private void ShowRampDraft(TrackViewModel t)
+    {
+        if (_ramp is not { } d) return;
+        t.RampDraft = (d.Start, d.FromBpm, d.End, d.Retype);
+        t.NotifyRampsChanged();
+    }
+
+    private void ClearRampDraft()
+    {
+        var d = _ramp;
+        _ramp = null;
+        if (d is null) return;
+        if (Tracks.FirstOrDefault(x => x.Id == d.TrackId) is { } t)
+        {
+            t.RampDraft = null;
+            t.IsTypingRampBpm = false;
+            t.NotifyRampsChanged();
+        }
+        SnapLineSeconds = null;
+    }
 
     // ---------------- dragging sections ----------------
     //
@@ -1300,7 +1567,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// True while a section is being dragged. Removing a section then would leave the drag holding
     /// one that is no longer on the track, and its drop would clear what is under the ghost.
     /// </summary>
-    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null;
+    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null;
     private TrackViewModel? _dragHome;
     private Guid _dragClipId;
 
@@ -1518,12 +1785,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 ? $"{_dragHome.Name}: loop left as the one section."
                 : $"{_dragHome.Name}: looped {_loopDrag.Repeats + 1}×{(_loopDrag.Partial ? " and a part" : "")}. Each repeat is its own section now.";
         }
+        else if (_rampDrag is not null)
+        {
+            Status = _rampDrag.Finish().Message;
+            if (_rampDragTrack is not null) Redraw(_rampDragTrack);
+        }
 
-        bool changed = _move is not null || _trim is not null || _loopDrag is not null || _group is not null;
+        bool changed = _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null;
         _move = null;
         _trim = null;
         _loopDrag = null;
         _group = null;
+        _rampDrag = null;
+        _rampDragTrack = null;
         _groupIds = new();
         _dragHome = null;
         SnapLineSeconds = null;

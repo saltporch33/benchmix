@@ -442,7 +442,7 @@ the ramp. Then I'll type in the bpm for the end point. If it goes down, then fir
 line of track and second point on bottom with yellow line connecting and vice versa"*.
 
 He asked for it to be built and approved one piece at a time; this is the engine and the project
-file. Clicking, typing and drawing ramps is part 2. Until then the app has no way to make one.
+file. Clicking, typing and drawing ramps is part 2, below.
 
 | Decision | Why |
 | --- | --- |
@@ -457,3 +457,26 @@ file. Clicking, typing and drawing ramps is part 2. Until then the app has no wa
 | **Project files are now version 3.** Every save writes 3, so an older Benchmix refuses a file saved from now on rather than opening it. | An older build would open a ramped project, drop its ramps without a word and save over them. |
 | **Ramps travel with the tempo**: an empty track that takes a dragged section's tempo and pitch takes its ramps too (and gives them back when only passed over); a paste onto an empty track takes them; the vocal and instrumental tracks from *Split* take their song's. | They are part of how that song plays. A stem without its song's ramp would drift out of time with it. |
 | **Moving a track's origin leaves its ramps where they are** on the timeline. | Nothing he placed should move. |
+
+## 2026-10-12 — tempo ramps, part 2: making and changing them
+
+His description, quoted in full under part 1, is followed as written: a first click puts a dot at
+the tempo the track is playing there, a second puts the end, he types the tempo to reach, and a
+yellow line joins them from the top edge to the bottom when it goes down and the other way when it
+goes up. Everything else here is a default he can change.
+
+| Decision | Why |
+| --- | --- |
+| **RAMP MODE** is a toggle beside LOOP MODE, **Ctrl+R**. Off by default, not saved. Turning one of the two on turns the other off. | Both change what a press in a lane does; with both on, one of them would be dead. Ctrl+R was free, and every editing shortcut is Ctrl-modified. |
+| **In ramp mode a press in a lane acts on ramps only**: sections are not selected or moved, and there is no selection box. Alt+click still moves the playhead; the ruler and the room under the tracks keep their double-click to play. Ramps are drawn whatever the mode. | Nothing competes with the dots. |
+| **The dot is placed on the press**, at the tempo in effect there, shown on its label. | His words: the current BPM "will be filled in automatically at the start point". |
+| **A second click left of the first swaps them**; a click on another track starts the ramp there instead; a first click inside an existing ramp is refused; a second click past the next ramp stops at its start. Less than 0.1 s, or 4 px, between the clicks: "click further along". | Defaults. Two tempo changes at once on one track are not representable. |
+| **The typed tempo must be a number between a quarter and four times the song's own tempo** — what the engine can play. Enter keeps it; Esc drops the new ramp (or, when retyping, keeps the old tempo). Clicking anywhere else keeps it if it is valid and drops the ramp if not; a click on a lane that does this does nothing else. Leaving the app is not clicking elsewhere. | As the rename box behaves. A click that was only meant to finish typing must not also start a new ramp. |
+| **The box sits in the lane beside the end dot**, not in a popup window, and a scripted run never gives it the keyboard. | A popup is a window of its own, which a verification run would put on his screen. |
+| **Escape is a third bare key**, alongside Delete and Space: handled in the window, only while a ramp is being placed or retyped, and not from another text box. | Escape is not a KeyBinding, for the same reason as the other two: a bare KeyBinding would fire from inside a text box. |
+| **Drawing:** yellow, 2 px; down from the top edge to the bottom when slowing, up from the bottom when speeding up, level across the middle within 0.05 BPM; the tempo at each dot labelled. While its tempo is typed the line is dashed and follows what is typed. | His description; the level line and labels are defaults. |
+| **Changing a ramp:** drag either dot sideways; click the end dot to type a new tempo; a click on the start dot says why its tempo cannot be typed. Right-click on a ramp, in any mode: *Remove tempo ramp*. | He described making a ramp, not changing one. The start's tempo is never stored (part 1), so it cannot be typed. |
+| **Dot snapping:** within 10 px to section edges on other tracks and to ramp ends on any track; the start dot also to its own track's section edges. Ctrl frees it. Never to bars. | A section after a ramp's start moves as soon as the ramp changes the tempo, so an end snapped to one on its own track would not stay on it. |
+| **One undo step** for each new ramp, each dot drag, each retyped tempo and each removal. **Reset** removes the track's ramps in its own one step. **Match BPM** sets TEMPO — the tempo before the first ramp — and keeps the ramps, and the status bar says where they still go. | As for every other edit. |
+| **While a dot is held** — from the press — Ctrl+R, Ctrl+L and every other edit wait, as for a held section. | The same rule, for the same reason. |
+| **The BPM on the strip is unchanged**: the tempo before the first ramp. | "Keep the bpm info exactly as it is." |
