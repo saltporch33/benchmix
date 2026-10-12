@@ -491,3 +491,6 @@ spikes/**/obj/
 *.mp3
 *.flac
 models/
+
+# Listening clips made for Daniel, not part of the project
+/listen/
