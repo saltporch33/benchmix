@@ -196,6 +196,82 @@ public static class TimelineEditor
         return new EditResult(true, "Section deleted. The gap is left as it is.");
     }
 
+    // ---------------------------------------------------------------- join
+
+    /// <summary>
+    /// Whether <paramref name="later"/> sits exactly where the song would carry on had
+    /// <paramref name="earlier"/> never been cut from it: the same file, after it on the track, and
+    /// as far from it on the track as in the song. Exact, in frames, as the seam rule is. A repeat
+    /// jumps back in the song, and a moved piece has a different distance, so neither lines up.
+    /// </summary>
+    public static bool LinesUp(ClipModel earlier, ClipModel later, ProjectSession s)
+        => earlier.SourcePath.Equals(later.SourcePath, StringComparison.OrdinalIgnoreCase)
+           && StartFrameOf(later, s) >= EndFrameOf(earlier, s)
+           && StartFrameOf(later, s) - StartFrameOf(earlier, s) == SourceStartFrameOf(later, s) - SourceStartFrameOf(earlier, s);
+
+    /// <summary>
+    /// The section a lone selected section joins with (Daniel, 2026-10-12): the one straight after
+    /// it on the track if that lines up with it, otherwise the one straight before it; null if
+    /// neither does.
+    /// </summary>
+    public static ClipModel? JoinPartner(TrackModel track, ClipModel clip, ProjectSession s)
+    {
+        var others = track.Clips.Where(c => !ReferenceEquals(c, clip) && LengthFramesOf(c, s) > 0).ToList();
+        var next = others.Where(c => StartFrameOf(c, s) >= EndFrameOf(clip, s)).MinBy(c => StartFrameOf(c, s));
+        if (next is not null && LinesUp(clip, next, s)) return next;
+        var previous = others.Where(c => EndFrameOf(c, s) <= StartFrameOf(clip, s)).MaxBy(c => StartFrameOf(c, s));
+        return previous is not null && LinesUp(previous, clip, s) ? previous : null;
+    }
+
+    /// <summary>Why these sections cannot be joined, or null when they can.</summary>
+    public static string? JoinProblem(TrackModel track, IEnumerable<ClipModel> sections, ProjectSession s)
+    {
+        var parts = sections.Distinct().OrderBy(c => StartFrameOf(c, s)).ToList();
+        if (parts.Count < 2) return "Select two or more sections on one track to join.";
+        if (parts.Any(c => !track.Clips.Contains(c))) return "Those sections are not all on this track.";
+        if (parts.Any(c => s.AudioFor(c) is null || LengthFramesOf(c, s) <= 0)) return "A section's song is missing, so it cannot be joined.";
+        for (int i = 0; i + 1 < parts.Count; i++)
+        {
+            var a = parts[i];
+            var b = parts[i + 1];
+            if (!a.SourcePath.Equals(b.SourcePath, StringComparison.OrdinalIgnoreCase))
+                return "Those come from different songs, so there is no song between them to put back.";
+            if (!LinesUp(a, b, s))
+                return "Those do not line up: the later one is not where the song carries on from the earlier one — it is a repeat, or one of them has been moved. Join puts back pieces that still sit where the song put them.";
+            long gapStart = EndFrameOf(a, s), gapEnd = StartFrameOf(b, s);
+            if (track.Clips.Any(c => !parts.Contains(c) && StartFrameOf(c, s) < gapEnd && EndFrameOf(c, s) > gapStart))
+                return "Something else is in the gap between them. Move it or delete it first — joining would cover it.";
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Joins sections of one song back into one (Daniel, 2026-10-12): the first is stretched to
+    /// end where the last does, and any gap between them — where a piece was taken out — is the song
+    /// again. Pieces that were only split play exactly as before; the piece taken out, wherever it
+    /// went, is left alone. The outer fades are kept.
+    /// </summary>
+    public static EditResult Join(TrackModel track, IEnumerable<ClipModel> sections, ProjectSession s)
+    {
+        var parts = sections.Distinct().OrderBy(c => StartFrameOf(c, s)).ToList();
+        if (JoinProblem(track, parts, s) is { } why) return EditResult.No(why);
+
+        long missing = 0;
+        for (int i = 0; i + 1 < parts.Count; i++) missing += StartFrameOf(parts[i + 1], s) - EndFrameOf(parts[i], s);
+
+        var first = parts[0];
+        var last = parts[^1];
+        first.SourceEndSeconds = last.SourceEndSeconds;       // "to the end of the file" stays that
+        first.FadeOutSeconds = last.FadeOutSeconds;
+        foreach (var c in parts.Skip(1)) track.Clips.Remove(c);
+        Normalise(track);
+
+        string message = missing > 0
+            ? $"Joined {parts.Count} sections into one. The {SecondsOf(missing, s):0.0}s that was missing between them is the song again."
+            : $"Joined {parts.Count} sections into one. It plays exactly as before.";
+        return new EditResult(true, message, first);
+    }
+
     // ---------------------------------------------------------------- paste and repeat
 
     /// <summary>

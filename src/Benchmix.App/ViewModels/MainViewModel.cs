@@ -1077,6 +1077,45 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         AfterClipEdit(track, result, result.Clip);
     }
 
+    /// <summary>
+    /// Joins sections of one song back into one (Daniel, 2026-10-12), filling any gap between them
+    /// with the song again. Several selected on one track: those. One selected: it and the section
+    /// next to it that lines up with it in the song.
+    /// </summary>
+    [RelayCommand]
+    private void JoinSections()
+    {
+        if (_session is null) return;
+        if (HeldUnderTheMouse()) return;
+
+        var selected = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
+        TrackViewModel track;
+        List<ClipModel> parts;
+        if (selected.Count >= 2)
+        {
+            var tracks = selected.Select(c => c.Track).Distinct().ToList();
+            if (tracks.Count > 1) { Status = "Select sections on one track to join them."; return; }
+            track = tracks[0];
+            parts = selected.Select(c => c.Model).ToList();
+        }
+        else if (TargetClip() is { } one)
+        {
+            track = one.Track;
+            if (TimelineEditor.JoinPartner(track.Model, one.Model, Session) is not { } partner)
+            {
+                Status = "Nothing next to this section lines up with it in the song, so there is nothing to join it to. Select the pieces to join with Ctrl+click.";
+                return;
+            }
+            parts = new() { one.Model, partner };
+        }
+        else { Status = "Click one of the pieces to join, or Ctrl+click them all."; return; }
+
+        if (TimelineEditor.JoinProblem(track.Model, parts, Session) is { } why) { Status = why; return; }
+        PushUndo($"{track.Name}: join sections");
+        var result = TimelineEditor.Join(track.Model, parts, Session);
+        AfterClipEdit(track, result, result.Clip);
+    }
+
     [RelayCommand]
     private void CopyClip()
     {

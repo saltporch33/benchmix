@@ -723,6 +723,15 @@ public partial class MainWindow : Window
             _vm.StopCommand.Execute(null);
         }
 
+        // --- joining sections back together ---
+        try { RunJoinGestures(Check, notes); }
+        finally
+        {
+            if (_dragClip is not null) LaneUp(LaneOf(_dragTrack!) ?? this);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+
         // --- tempo ramps ---
         try { RunTempoRampGestures(Check, notes); }
         finally
@@ -1927,6 +1936,80 @@ public partial class MainWindow : Window
         _scriptedModifiers = null;
         Check($"two sections {0.3 * pps:0} px wide can be grabbed by the middle and dragged as a group",
               Math.Abs(C(a).TimelineStartSeconds - sa - 2) <= frame && Math.Abs(C(b).TimelineStartSeconds - sb - 2) <= frame);
+    }
+
+    /// <summary>
+    /// Joining sections back into one (Daniel, 2026-10-12), as he described it: split out a piece,
+    /// move it to another track, then put the song back — through Ctrl+J's command and the lane
+    /// menu's own Click handler. Leaves the project as it found it.
+    /// </summary>
+    private void RunJoinGestures(Action<string, bool> Check, List<string> notes)
+    {
+        bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+J is bound to joining sections", Bound(Key.J, _vm.JoinSectionsCommand));
+
+        UpdateLayout();
+        var song = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Clips.Any(c => c.TimelineLengthSeconds > 12));
+        if (song is null) { notes.Add("no section longer than 12 s, so joining is untested - pass a file to cover it"); return; }
+        var songId = song.Id;
+        double frame = 1.0 / _vm.Session.SampleRate;
+        TrackViewModel Song() => _vm.Tracks.First(t => t.Id == songId);
+        int tracks = _vm.Tracks.Count, sections = song.Clips.Count;
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+
+        var piece = song.Clips.First(c => c.TimelineLengthSeconds > 12);
+        double from = piece.TimelineStartSeconds, to = piece.TimelineEndSeconds, u = from + 2;
+        _vm.SelectedTrack = song;
+        foreach (var at in new[] { u, u + 4 }) { _vm.SeekTo(at); _vm.SplitAtPlayheadCommand.Execute(null); }
+        ClipViewModel On(double start) => Song().Clips.First(c => Math.Abs(c.TimelineStartSeconds - start) < 0.01);
+        var middle = On(u);
+        var middleId = middle.Id;
+
+        // Take the middle piece out onto a track of its own, as he does.
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var other = _vm.Tracks[^1];
+        _vm.BeginMove(middle);
+        _vm.DragMoveTo(other, u, free: true);
+        _vm.EndDrag();
+        bool holed = Song().Clips.All(c => c.Id != middleId) && other.Clips.Any(c => c.Id == middleId);
+
+        // One of the pieces left behind, and Ctrl+J.
+        _vm.SelectClip(On(from));
+        _vm.JoinSectionsCommand.Execute(null);
+        var joined = Song().Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - from) < 0.01);
+        Check($"after taking a piece out to another track, Ctrl+J on what is left puts the song back in one ({_vm.Status})",
+              holed && joined is not null && Math.Abs(joined.TimelineEndSeconds - to) <= frame && _vm.Status.Contains("missing"));
+        Check("the piece taken out stays where it was put", other.Clips.Any(c => c.Id == middleId && Math.Abs(c.TimelineStartSeconds - u) <= frame));
+
+        Undo(() => Song().Clips.Any(c => Math.Abs(c.TimelineStartSeconds - (u + 4)) < 0.01));
+        Check("one Ctrl+Z takes the join back, gap and all", Song().Clips.Count(c => c.TimelineStartSeconds >= from - 0.01 && c.TimelineStartSeconds < to) == 2);
+
+        // The lane menu's item, with both pieces selected.
+        _vm.SelectClip(On(from));
+        _vm.ToggleClipSelection(On(u + 4));
+        OnJoinSections(this, new RoutedEventArgs());
+        joined = Song().Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - from) < 0.01);
+        Check("Join sections in the lane menu joins the two selected", joined is not null && Math.Abs(joined.TimelineEndSeconds - to) <= frame);
+        Undo(() => Song().Clips.Any(c => Math.Abs(c.TimelineStartSeconds - (u + 4)) < 0.01));
+
+        // A loop's repeat is not part of the song carrying on.
+        _vm.SelectClip(On(from));
+        _vm.DuplicateClipCommand.Execute(null);
+        int before = Song().Clips.Count;
+        _vm.SelectClip(On(from));
+        _vm.ToggleClipSelection(On(u));
+        _vm.JoinSectionsCommand.Execute(null);
+        Check($"a repeat is not joined to what it repeats, and the status says why ({_vm.Status})",
+              Song().Clips.Count == before && _vm.Status.Contains("do not line up"));
+
+        // Put everything back: the repeat, the move, the empty track, the two splits.
+        for (int i = 0; i < 8 && (_vm.Tracks.Count != tracks || Song().Clips.Count != sections); i++)
+        {
+            var state = (_vm.Tracks.Count, Song().Clips.Count);
+            Undo(() => (_vm.Tracks.Count, Song().Clips.Count) != state);
+        }
+        if (_vm.Tracks.Count != tracks || Song().Clips.Count != sections) notes.Add("the join checks could not undo back to where they started");
     }
 
     /// <summary>
@@ -4131,6 +4214,7 @@ public partial class MainWindow : Window
     }
 
     private void OnSplitHere(object sender, RoutedEventArgs e) => _vm.SplitAtPlayheadCommand.Execute(null);
+    private void OnJoinSections(object sender, RoutedEventArgs e) => _vm.JoinSectionsCommand.Execute(null);
     private void OnCutSection(object sender, RoutedEventArgs e) => _vm.CutClipCommand.Execute(null);
     private void OnCopySection(object sender, RoutedEventArgs e) => _vm.CopyClipCommand.Execute(null);
     private void OnPasteSection(object sender, RoutedEventArgs e) => _vm.PasteClipCommand.Execute(null);

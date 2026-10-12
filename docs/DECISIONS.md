@@ -505,3 +505,21 @@ start point of project, also focuses screen back to true start point (0:00)"*.
 | **While playing, it plays on from the new spot**; stopped, it just moves the playhead. It stops at 0:00 and at the end of the mix. | As a click on the ruler while playing does. |
 | **The view follows the playhead** when the wheel takes it off either edge. | Otherwise turning the wheel loses the playhead off screen. |
 | **A double-click of the wheel stops, and puts the playhead and the view at 0:00.** A single click still stops and goes back to where play last started. | His words. Its first click is a single click, so it has already stopped. |
+
+## 2026-10-12 — joining sections back into one
+
+Daniel, 2026-10-12, verbatim: *"need to be able to join two clips, especially after making a split.
+sometimes i split to extract just a part of a song, and move it to a diff track, but then I just
+want the original song to go back to normal. Alternatively, perhaps we could improve the actual
+split functionality so I can instead just visually demarcate a start and end point within a track
+and copy, or cut, and then paste that chunk elsewhere?"* Asked, he chose the offered option "Join
+now, range later" — the option's words, not his: join first, marking a start and end to copy or cut
+as its own feature afterwards.
+
+| Decision | Why |
+| --- | --- |
+| **Ctrl+J, or right-click → *Join sections*.** Several selected on one track: those are joined. One selected: it and the section straight after it — or, failing that, straight before it — if that one lines up. | The pieces he wants back together are the ones either side of the piece he took out. Ctrl+J was free; every editing shortcut is Ctrl-modified. |
+| **Pieces "line up" when the later one sits exactly where the song carries on from the earlier one**: the same file, and as far apart on the track as in the song — exact, in frames, as the seam rule is. | That is what "the original song" means for pieces of it. A loop's repeat jumps back in the song, and a piece that has been moved sits somewhere else; neither lines up. |
+| **Joining fills any gap between them with the song again**, and pieces that were only split play exactly as before (measured: not one sample changes). The piece that was taken out stays wherever it was put. | "I just want the original song to go back to normal." |
+| **Refused, and the status bar says why**, when they come from different songs, do not line up, or something else has been put in the gap between them. | Joining over something else would delete it without a word. |
+| **The outer fades are kept**; one Ctrl+Z takes the join back. | As for every other edit. |

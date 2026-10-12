@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**311 tests, 0 failures, 0 skipped** (2026-10-12). `dotnet test` — about 90 seconds (the stem
+**319 tests, 0 failures, 0 skipped** (2026-10-12). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -697,6 +697,24 @@ Benchmix was open.
 
 **Not verified:** a real wheel, including a smooth-scrolling one that sends part-notches, and a
 real double-click of the wheel, have not been tried by hand.
+
+## 2026-10-12 — joining sections back into one
+
+**In the test project.** `SectionJoinTests` (8), on a ramp source: splitting a section in three
+and joining it back changes not one sample (`==` over 30 s); cutting a 4 s piece out and joining
+around the gap renders exactly the song before it was cut (`==`), also under a tempo ramp; one
+selected section finds the neighbour that lines up, the next one first; a loop's repeat, a section
+of another song, and a section put into the gap each stop a join, with nothing changed; the outer
+fades are kept. Broken on purpose — the line-up rule made to accept any later piece of the same
+song — the repeat test failed. **319 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 196 to **202 checks**: Ctrl+J is bound; split a
+song, move the middle piece to another track, select what is left and Ctrl+J — one section again,
+the 4.0 s gap filled, the moved piece left where it was put; one Ctrl+Z takes it back; *Join
+sections* in the lane menu joins the two selected; a repeat is refused with the reason. Run on a
+staged build, because his copy of Benchmix was open.
+
+**Not verified:** by hand.
 
 ## The stretch engine
 

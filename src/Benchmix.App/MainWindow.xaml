@@ -36,6 +36,7 @@
         <KeyBinding Key="T" Modifiers="Ctrl" Command="{Binding AddEmptyTrackCommand}"/>
         <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding ToggleLoopModeCommand}"/>
         <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding ToggleRampModeCommand}"/>
+        <KeyBinding Key="J" Modifiers="Ctrl" Command="{Binding JoinSectionsCommand}"/>
     </Window.InputBindings>
 
     <Grid>
@@ -388,6 +389,7 @@
                                                 <MenuItem Header="Clear trim"             Click="OnClearTrim"/>
                                                 <Separator/>
                                                 <MenuItem Header="Split at playhead"      Click="OnSplitHere"      InputGestureText="Ctrl+I"/>
+                                                <MenuItem Header="Join sections"          Click="OnJoinSections"   InputGestureText="Ctrl+J"/>
                                                 <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D"/>
                                                 <Separator/>
                                                 <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X"/>

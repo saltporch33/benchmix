@@ -65,6 +65,7 @@ control on screen is one you asked for.
 | <kbd>Shift</kbd>+drag the ruler | set a listening loop |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
+| <kbd>Ctrl</kbd>+<kbd>J</kbd>, or right-click → *Join sections* | join pieces of a song back into one: the selected ones, or the one you clicked and the piece next to it. Any gap between them — where you took a piece out — is the song again |
 | <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
