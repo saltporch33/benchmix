@@ -623,6 +623,16 @@ public partial class MainWindow : Window
             _scriptedModifiers = null;
         }
 
+        // --- dragging a group of selected sections ---
+        try { RunGroupGestures(Check, notes); }
+        finally
+        {
+            if (_dragClip is not null) LaneUp(LaneOf(_dragTrack!) ?? this);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _vm.StopCommand.Execute(null);
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -1474,6 +1484,266 @@ public partial class MainWindow : Window
         Check("a box over empty space selects nothing, and lets go of what was selected", _vm.SelectedClips.Count == 0);
     }
 
+    /// <summary>
+    /// Dragging several selected sections at once (Daniel, 2026-10-11), through the lanes' own
+    /// press, move and release handlers with a scripted pointer. Sections are found again by id
+    /// after every edit, because each one rebuilds the rows' sections.
+    /// </summary>
+    private void RunGroupGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        var song = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Clips.Any(c => c.TimelineLengthSeconds > 12));
+        if (song is null) { notes.Add("no section longer than 12 s, so dragging a group is untested - pass a file to cover it"); return; }
+        var songId = song.Id;
+        double frame = 1.0 / _vm.Session.SampleRate, pps = _vm.PixelsPerSecond;
+        TrackViewModel Track(Guid id) => _vm.Tracks.First(t => t.Id == id);
+        ClipViewModel C(Guid id) => _vm.Tracks.SelectMany(t => t.Clips).First(c => c.Id == id);
+        HashSet<Guid> Selected() => _vm.SelectedClips.Select(c => c.Id).ToHashSet();
+        void Select(params Guid[] ids)
+        {
+            _vm.SelectClip(C(ids[0]));
+            foreach (var id in ids.Skip(1)) _vm.ToggleClipSelection(C(id));
+        }
+        Point On(ClipViewModel c, double atSeconds)
+        {
+            var lane = LaneOf(c.Track)!;
+            var o = lane.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (atSeconds - _vm.ScrollSeconds) * pps, o.Y + lane.ActualHeight / 2);
+        }
+        Point Mid(ClipViewModel c) => On(c, (c.TimelineStartSeconds + c.TimelineEndSeconds) / 2);
+        // Press, move through the middle, let go; returns what was held mid-way through.
+        (bool Held, int Selected) Drag(ClipViewModel c, Point from, Point to)
+        {
+            var lane = LaneOf(c.Track)!;
+            _scriptedWindowPoint = from;
+            LaneDown(lane, from);
+            var mid = new Point((from.X + to.X) / 2, (from.Y + to.Y) / 2);
+            _scriptedWindowPoint = mid;
+            LaneMove(lane, mid, true);
+            _scriptedWindowPoint = to;
+            LaneMove(lane, to, true);
+            var during = (_vm.DragInProgress, _vm.SelectedClips.Count);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            return during;
+        }
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+
+        // Cut a long section into 2 s pieces to work with.
+        var piece = song.Clips.First(c => c.TimelineLengthSeconds > 12);
+        double U = piece.TimelineStartSeconds + 2;
+        _vm.SelectedTrack = song;
+        foreach (var at in new[] { U, U + 2, U + 4, U + 6 }) { _vm.SeekTo(at); _vm.SplitAtPlayheadCommand.Execute(null); }
+        song = Track(songId);
+        Guid IdAt(double t) => song.Clips.First(c => Math.Abs(c.TimelineStartSeconds - t) < 0.01).Id;
+        var p1 = IdAt(U);
+        var p2 = IdAt(U + 2);
+        var p3 = IdAt(U + 4);
+        _vm.ScrollSeconds = Math.Max(0, U - 2);
+        UpdateLayout();
+
+        // --- a click on one of several keeps them all while held; let go, it is just that one ---
+        Select(p1, p2);
+        var lane0 = LaneOf(song)!;
+        _scriptedWindowPoint = Mid(C(p2));
+        LaneDown(lane0, Mid(C(p2)));
+        Check($"a plain press on one of several selected sections keeps them all selected while the button is down ({Selected().Count})",
+              Selected().SetEquals(new[] { p1, p2 }));
+        LaneUp(lane0);
+        _scriptedWindowPoint = null;
+        Check("letting go without moving leaves just that one selected", Selected().SetEquals(new[] { p2 }) && _vm.SelectedClip?.Id == p2);
+
+        // --- dragging one drags them all, by the same amount, and the seam between them holds ---
+        Select(p1, p2);
+        double s1 = C(p1).TimelineStartSeconds, s2 = C(p2).TimelineStartSeconds;
+        _scriptedModifiers = ModifierKeys.Control;                    // free, so the landing point is exact
+        Drag(C(p2), Mid(C(p2)), new Point(Mid(C(p2)).X + 3 * pps, Mid(C(p2)).Y));
+        _scriptedModifiers = null;
+        Check($"dragging one of several selected sections moves them all by the same amount (+{C(p1).TimelineStartSeconds - s1:0.0000}s and +{C(p2).TimelineStartSeconds - s2:0.0000}s)",
+              Math.Abs(C(p1).TimelineStartSeconds - s1 - 3) <= frame && Math.Abs(C(p2).TimelineStartSeconds - s2 - 3) <= frame);
+        var timeline = _vm.Session.VoiceFor(song.Model)?.Timeline;
+        long p1Start = Benchmix.Core.TimelineEditor.StartFrameOf(C(p1).Model, _vm.Session);
+        Check("the seam between two sections moved together is still a seam, so it plays straight through",
+              timeline is not null && Enumerable.Range(0, timeline.Count).Any(i => timeline[i].TrackStartFrame == p1Start && timeline.SeamAfter(i)));
+        Check("both stay selected after the drop, and the one grabbed is the one commands act on",
+              Selected().SetEquals(new[] { p1, p2 }) && _vm.SelectedClip?.Id == p2);
+        Check($"the status bar says what moved (\"{_vm.Status}\")", _vm.Status.StartsWith("2 sections moved"));
+        Undo(() => Math.Abs(C(p1).TimelineStartSeconds - s1) <= frame);
+        Check("one undo puts the whole group back", Math.Abs(C(p1).TimelineStartSeconds - s1) <= frame && Math.Abs(C(p2).TimelineStartSeconds - s2) <= frame);
+
+        // --- a group on one track goes onto another: an empty track, moved to sit just below ---
+        song = Track(songId);
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var empty = _vm.Tracks[^1];
+        var emptyId = empty.Id;
+        _vm.MoveTrack(empty, _vm.Tracks.IndexOf(song) + 1);
+        UpdateLayout();
+        empty = Track(emptyId);
+        if (LaneOf(empty) is not { ActualHeight: > 0 } emptyLane)
+        {
+            notes.Add("the empty track's lane is not laid out, so dragging a group onto another track is untested");
+            return;
+        }
+        Select(p1, p2);
+        var downTo = new Point(Mid(C(p1)).X, emptyLane.TranslatePoint(new Point(0, emptyLane.ActualHeight / 2), this).Y);
+        _scriptedModifiers = ModifierKeys.Control;
+        Drag(C(p1), Mid(C(p1)), downTo);
+        _scriptedModifiers = null;
+        empty = Track(emptyId);
+        Check($"a group on one track follows the pointer onto another track, together ({empty.Clips.Count} landed there)",
+              empty.Clips.Any(c => c.Id == p1) && empty.Clips.Any(c => c.Id == p2)
+              && Math.Abs(C(p1).TimelineStartSeconds - s1) <= frame && Math.Abs(C(p2).TimelineStartSeconds - s2) <= frame);
+        Check("the empty track took the group's tempo and pitch", empty.Model.Speed == Track(songId).Model.Speed && empty.Model.Semitones == Track(songId).Model.Semitones);
+        Check($"the status bar names the count and the track (\"{_vm.Status}\")", _vm.Status.Contains($"2 sections moved to {empty.Name}"));
+        Undo(() => Track(songId).Clips.Any(c => c.Id == p1));
+
+        // --- on two tracks: sideways only, each staying on its own ---
+        _vm.SelectClip(C(p3));
+        _vm.CopyClipCommand.Execute(null);
+        _vm.SelectedTrack = Track(emptyId);
+        _vm.SeekTo(U + 4);
+        _vm.PasteClipCommand.Execute(null);
+        PumpUntil(() => Track(emptyId).Clips.Count == 1);
+        var copy = Track(emptyId).Clips.FirstOrDefault();
+        if (copy is null) notes.Add("could not paste onto the empty track, so a group across tracks is untested");
+        else
+        {
+            var copyId = copy.Id;
+            double c3 = C(p3).TimelineStartSeconds, cc = copy.TimelineStartSeconds;
+            Select(p3, copyId);
+            var start = Mid(C(copyId));
+            var downAndRight = new Point(start.X + 2 * pps, start.Y - LaneOf(Track(emptyId))!.ActualHeight);   // up a row and 2 s on
+            _scriptedModifiers = ModifierKeys.Control;
+            Drag(C(copyId), start, downAndRight);
+            _scriptedModifiers = null;
+            Check("a group on two tracks moves sideways only: each stays on its own track, both 2 s later",
+                  Track(songId).Clips.Any(c => c.Id == p3) && Track(emptyId).Clips.Any(c => c.Id == copyId)
+                  && Math.Abs(C(p3).TimelineStartSeconds - c3 - 2) <= frame && Math.Abs(C(copyId).TimelineStartSeconds - cc - 2) <= frame);
+            Undo(() => Math.Abs(C(p3).TimelineStartSeconds - c3) <= frame);
+
+            // Pulled straight up, a group on two tracks does not move — and that is no click either.
+            Select(p3, copyId);
+            var pullFrom = Mid(C(copyId));
+            Drag(C(copyId), pullFrom, new Point(pullFrom.X + 1, pullFrom.Y - 60));
+            Check($"a straight pull on a group across two tracks keeps the whole group selected ({Selected().Count} of 2)",
+                  Selected().SetEquals(new[] { p3, copyId }) && Math.Abs(C(p3).TimelineStartSeconds - c3) <= frame);
+        }
+
+        // --- an edge of one is a trim of that one, and lets go of the rest ---
+        Select(p1, p2);
+        double len2 = C(p2).LengthSeconds, len1 = C(p1).LengthSeconds;
+        var edge = new Point(On(C(p1), C(p1).TimelineStartSeconds).X + 2, Mid(C(p1)).Y);
+        _scriptedWindowPoint = edge;
+        LaneDown(LaneOf(Track(songId))!, edge);
+        int onPress = Selected().Count;
+        var edgeTo = new Point(edge.X + pps, edge.Y);
+        _scriptedWindowPoint = edgeTo;
+        LaneMove(LaneOf(Track(songId))!, edgeTo, true);
+        int whileTrimming = Selected().Count;
+        LaneUp(LaneOf(Track(songId))!);
+        _scriptedWindowPoint = null;
+        Check($"a drag on the edge of a selected section trims just that one and lets go of the rest ({onPress} selected on the press, {whileTrimming} once trimming)",
+              onPress == 2 && whileTrimming == 1 && C(p1).LengthSeconds < len1 && C(p2).LengthSeconds == len2);
+        Undo(() => C(p1).LengthSeconds == len1);
+
+        // --- edits wait while a group is held: pressed, and then dragging ---
+        HashSet<Guid> Ids() => _vm.Tracks.SelectMany(t => t.Clips).Select(c => c.Id).ToHashSet();
+        // Each command on its own: refused, said so, and nothing added, removed or reloaded.
+        string Refused(string phase)
+        {
+            var wrong = new List<string>();
+            foreach (var (name, command) in new (string, ICommand)[]
+                     { ("Ctrl+I", _vm.SplitAtPlayheadCommand), ("Ctrl+D", _vm.DuplicateClipCommand),
+                       ("Ctrl+X", _vm.CutClipCommand), ("Ctrl+Z", _vm.UndoCommand) })
+            {
+                var before = Ids();
+                _vm.Status = "";
+                command.Execute(null);
+                if (_vm.Status != "Let go of the section first." || !Ids().SetEquals(before) || _vm.IsBusy) wrong.Add(name);
+            }
+            return wrong.Count == 0 ? "" : $"{string.Join(", ", wrong)} went ahead {phase}";
+        }
+        Select(p1, p2);
+        var lane1 = LaneOf(Track(songId))!;
+        var grab = Mid(C(p1));
+        _vm.SeekTo(C(p1).TimelineStartSeconds + 0.5);                   // a split here would cut the held section
+        _scriptedModifiers = ModifierKeys.Control;
+        _scriptedWindowPoint = grab;
+        LaneDown(lane1, grab);
+        string pressed = Refused("while a section was only pressed");
+        var away = new Point(grab.X + 40, grab.Y);
+        _scriptedWindowPoint = away;
+        LaneMove(lane1, away, true);
+        string dragging = _vm.DragInProgress ? Refused("during the drag") : "the drag did not start";
+        _scriptedWindowPoint = grab;
+        LaneMove(lane1, grab, true);
+        LaneUp(lane1);
+        _scriptedWindowPoint = null;
+        _scriptedModifiers = null;
+        Check($"Ctrl+I, Ctrl+D, Ctrl+X and Ctrl+Z each wait while a group is held, from the press on {pressed}{dragging}".TrimEnd(),
+              pressed.Length == 0 && dragging.Length == 0);
+
+        // --- double-clicking one of a group plays and keeps the group ---
+        _vm.StopCommand.Execute(null);
+        Select(p1, p2);
+        var lane2 = LaneOf(Track(songId))!;
+        var dbl = Mid(C(p2));
+        _scriptedWindowPoint = dbl;
+        LaneDown(lane2, dbl, 1); LaneUp(lane2);
+        LaneDown(lane2, dbl, 2); LaneUp(lane2);
+        _scriptedWindowPoint = null;
+        Check($"double-clicking one of several selected sections plays and keeps them all selected ({Selected().Count})",
+              _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Selected().SetEquals(new[] { p1, p2 }));
+
+        // --- and on a member's edge, where a press would trim, it is still a double-click ---
+        _vm.StopCommand.Execute(null);
+        Select(p1, p2);
+        var lane3 = LaneOf(Track(songId))!;
+        var nearEdge = new Point(On(C(p2), C(p2).TimelineStartSeconds).X + 2, Mid(C(p2)).Y);
+        _scriptedWindowPoint = nearEdge;
+        LaneDown(lane3, nearEdge, 1); LaneUp(lane3);
+        LaneDown(lane3, nearEdge, 2); LaneUp(lane3);
+        _scriptedWindowPoint = null;
+        Check($"double-clicking a selected section's edge plays and keeps the group selected ({Selected().Count})",
+              _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Selected().SetEquals(new[] { p1, p2 })
+              && C(p1).LengthSeconds == len1);
+
+        // --- double-clicking empty space plays and keeps what was selected ---
+        _vm.StopCommand.Execute(null);
+        Select(p1, p2);
+        double past = Track(songId).Clips.Max(c => c.TimelineEndSeconds) + 3;
+        _vm.ScrollSeconds = Math.Max(0, past - 5);
+        UpdateLayout();
+        var gapLane = LaneOf(Track(songId))!;
+        var o = gapLane.TranslatePoint(new Point(0, 0), this);
+        var gap = new Point(o.X + (past - _vm.ScrollSeconds) * pps, o.Y + gapLane.ActualHeight / 2);
+        _scriptedWindowPoint = gap;
+        LaneDown(gapLane, gap, 1); LaneUp(gapLane);
+        LaneDown(gapLane, gap, 2); LaneUp(gapLane);
+        _scriptedWindowPoint = null;
+        Check($"double-clicking empty space plays from there and keeps what was selected ({Selected().Count})",
+              _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Selected().SetEquals(new[] { p1, p2 }));
+        _vm.StopCommand.Execute(null);
+
+        // --- short sections can still be grabbed by the middle and dragged as a group ---
+        _vm.ScrollSeconds = Math.Max(0, U - 2);
+        UpdateLayout();
+        _vm.SelectedTrack = Track(songId);
+        double V = U + 6.5;
+        foreach (var at in new[] { V, V + 0.3, V + 0.6 }) { _vm.SeekTo(at); _vm.SplitAtPlayheadCommand.Execute(null); }
+        var shortA = Track(songId).Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - V) < 0.01);
+        var shortB = Track(songId).Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - (V + 0.3)) < 0.01);
+        if (shortA is null || shortB is null) { notes.Add("could not cut short sections, so dragging them as a group is untested"); return; }
+        var (a, b) = (shortA.Id, shortB.Id);
+        double sa = shortA.TimelineStartSeconds, sb = shortB.TimelineStartSeconds;
+        Select(a, b);
+        _scriptedModifiers = ModifierKeys.Control;
+        Drag(C(a), Mid(C(a)), new Point(Mid(C(a)).X + 2 * pps, Mid(C(a)).Y));
+        _scriptedModifiers = null;
+        Check($"two sections {0.3 * pps:0} px wide can be grabbed by the middle and dragged as a group",
+              Math.Abs(C(a).TimelineStartSeconds - sa - 2) <= frame && Math.Abs(C(b).TimelineStartSeconds - sb - 2) <= frame);
+    }
+
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
     {
         // The shortcuts are XAML wiring, which no unit test can see.
@@ -2308,8 +2578,15 @@ public partial class MainWindow : Window
     {
         double at = SecondsAtLaneX(LaneX(surface, window));
         bool shift = Modifiers.HasFlag(ModifierKeys.Shift), ctrl = Modifiers.HasFlag(ModifierKeys.Control);
+        var memo = _clickMemo;
+        _clickMemo = null;
 
-        if (clickCount >= 2 && !shift && !ctrl) { _vm.PlayFrom(at); return true; }
+        if (clickCount >= 2 && !shift && !ctrl)
+        {
+            if (memo is { } before) _vm.RestoreSelection(before);
+            _vm.PlayFrom(at);
+            return true;
+        }
         if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
         BandDown(surface, window, additive: shift || ctrl);
         return true;
@@ -2353,6 +2630,7 @@ public partial class MainWindow : Window
             Additive = additive,
             Keep = additive ? _vm.SelectedClips.Select(c => c.Id).ToHashSet() : new HashSet<Guid>(),
         };
+        _vm.PointerHeld = true;
         if (_scriptedWindowPoint is null) surface.CaptureMouse();
     }
 
@@ -2413,10 +2691,15 @@ public partial class MainWindow : Window
         var b = _band;
         _band = null;                                  // state first: the release re-enters via LostMouseCapture
         if (b is null) return;
+        _vm.PointerHeld = false;
         BandRect.Visibility = Visibility.Collapsed;
         if (_scriptedWindowPoint is null && b.Surface.IsMouseCaptured) b.Surface.ReleaseMouseCapture();
         if (b.Started) _vm.FinishBand();
-        else if (!b.Additive) _vm.SelectClip(null);    // a click on empty space lets go of the selection
+        else if (!b.Additive)
+        {
+            _clickMemo = _vm.CaptureSelection();      // a double-click there to listen keeps the selection
+            _vm.SelectClip(null);                      // a click on empty space lets go of the selection
+        }
         _vm.EndGesture();
     }
 
@@ -2424,6 +2707,7 @@ public partial class MainWindow : Window
     private void BandLost()
     {
         if (_band is { Started: true }) { BandUp(); return; }
+        if (_band is not null) _vm.PointerHeld = false;
         _band = null;
         BandRect.Visibility = Visibility.Collapsed;
     }
@@ -2479,6 +2763,7 @@ public partial class MainWindow : Window
         _reorderOrigin = window;
         _reordering = false;
         _reorderTo = -1;
+        _vm.PointerHeld = true;
         if (_scriptedWindowPoint is null) area.CaptureMouse();
         return true;
     }
@@ -2536,6 +2821,7 @@ public partial class MainWindow : Window
     private void EndReorder()
     {
         var area = _reorderArea;
+        if (_reorderTrack is not null) _vm.PointerHeld = false;
         _reorderTrack = null;
         _reorderArea = null;
         _reordering = false;
@@ -2688,6 +2974,14 @@ public partial class MainWindow : Window
     /// </summary>
     private ClipViewModel? _pendingToggle;
 
+    /// <summary>A plain press on one of several selected sections: they stay selected unless it is let go without moving.</summary>
+    private ClipViewModel? _pendingCollapse;
+    private bool _dragGroup;
+    private bool _groupCanChangeTrack;
+
+    /// <summary>The selection before a click's release changed it, for that click's double-click to put back.</summary>
+    private MainViewModel.SelectionMemo? _clickMemo;
+
     /// <summary>The gesture test's stand-in for the focused element; a scripted run never holds the keyboard.</summary>
     private IInputElement? _scriptedFocus;
     private IInputElement? FocusedForKeys => _scriptedFocus ?? Keyboard.FocusedElement;
@@ -2734,8 +3028,14 @@ public partial class MainWindow : Window
         double left = (clip.TimelineStartSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
         double right = (clip.TimelineEndSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
 
-        if (Math.Abs(x - left) <= EdgeGrabPixels) return DragKind.TrimStart;
-        if (Math.Abs(x - right) <= EdgeGrabPixels) return DragKind.TrimEnd;
+        // One of several selected sections, if short, would be all edge at 7 px a side and could
+        // never be grabbed by its middle to drag the group. Its edges get a quarter of it each. A
+        // section on its own keeps its full handles, so trimming and looping it are as they were.
+        double grab = clip.IsSelected && _vm.SelectedClips.Count > 1
+            ? Math.Min(EdgeGrabPixels, (right - left) / 4)
+            : EdgeGrabPixels;
+        if (Math.Abs(x - left) <= grab) return DragKind.TrimStart;
+        if (Math.Abs(x - right) <= grab) return DragKind.TrimEnd;
         return DragKind.Move;
     }
 
@@ -2818,6 +3118,7 @@ public partial class MainWindow : Window
     private void OnLaneLostCapture(object sender, MouseEventArgs e)
     {
         _pendingToggle = null;                         // losing the mouse is not a click
+        _pendingCollapse = null;
         if (_band is not null) BandLost();
         else if (_dragClip is not null) LaneUp((FrameworkElement)sender);
     }
@@ -2828,13 +3129,18 @@ public partial class MainWindow : Window
 
         _vm.SelectedTrack = vm;
         double x = LaneX(lane, window);
+        var memo = _clickMemo;
+        _clickMemo = null;
 
         // A double-click plays from where it lands (Daniel, 2026-10-11), on a section or between
         // them, and that is all the second press does: it arms no drag and no trim, so a hand that
-        // moves a little before letting go moves nothing. With Shift or Ctrl held it is two ordinary
-        // clicks — as on the ruler, where Shift+double-click still sets a loop.
+        // moves a little before letting go moves nothing. It also puts back what the first click's
+        // release changed — a group collapsed to one, a selection let go — so double-clicking to
+        // listen keeps a group. With Shift or Ctrl held it is two ordinary clicks — as on the
+        // ruler, where Shift+double-click still sets a loop.
         if (clickCount >= 2 && !Modifiers.HasFlag(ModifierKeys.Shift) && !Modifiers.HasFlag(ModifierKeys.Control))
         {
+            if (memo is { } before) _vm.RestoreSelection(before);
             _vm.PlayFrom(SecondsAtLaneX(x));
             return true;
         }
@@ -2865,19 +3171,31 @@ public partial class MainWindow : Window
             return true;
         }
 
+        // A section whose audio never loaded has no usable source span, so there is nothing to
+        // trim or repeat. Treat it as a move instead.
+        var kind = clip.SourceDurationSeconds <= 0.001 ? DragKind.Move : KindAt(clip, x);
+
+        // A press on the body of one of several selected sections grabs them all (Daniel,
+        // 2026-10-11). The selection is kept while the button is down and collapses to this one
+        // only if it is let go without moving, as in Explorer. An edge is one section's trim.
+        bool member = clip.IsSelected && _vm.SelectedClips.Count > 1;
+        bool group = kind == DragKind.Move && member;
+
         // Ctrl+click flips this section in or out of the selection — but only if the press is
         // released without moving, because Ctrl held through a drag means "place it freely" and
-        // that drag must still start from here. The press only arms the toggle.
+        // that drag must still start from here. The press only arms the toggle. A press on one of
+        // several — its edge too, so a double-click there to listen keeps the group — keeps them all
+        // until it is let go; a trim, once it starts, is of that one section alone.
         if (Modifiers.HasFlag(ModifierKeys.Control)) _pendingToggle = clip;
+        else if (member) { _vm.MakePrimary(clip); _pendingCollapse = clip; }
         else _vm.SelectClip(clip);
 
         _dragTrack = vm;
         _dragClip = clip;
-        _dragKind = KindAt(clip, x);
-
-        // A section whose audio never loaded has no usable source span, so there is nothing to
-        // trim or repeat. Treat it as a move instead.
-        if (clip.SourceDurationSeconds <= 0.001) _dragKind = DragKind.Move;
+        _dragKind = kind;
+        _dragGroup = group;
+        _groupCanChangeTrack = group && _vm.SelectedClips.Select(c => c.Track).Distinct().Count() == 1;
+        _vm.PointerHeld = true;
 
         _dragOrigin = window;
         _dragStartTimelineStart = clip.TimelineStartSeconds;
@@ -2916,13 +3234,27 @@ public partial class MainWindow : Window
         if (!_dragging)
         {
             // A few pixels of slop so a click does not nudge a section by accident. A move also
-            // starts on a vertical pull alone, which is how a section goes to the track below.
-            bool started = Math.Abs(dx) >= 4 || (_dragKind == DragKind.Move && Math.Abs(dy) >= 8);
-            if (!started) return;
+            // starts on a vertical pull alone, which is how a section goes to the track below —
+            // but not a group spread over several tracks, which only goes sideways.
+            bool vertical = _dragKind == DragKind.Move && (!_dragGroup || _groupCanChangeTrack);
+            bool started = Math.Abs(dx) >= 4 || (vertical && Math.Abs(dy) >= 8);
+            if (!started)
+            {
+                // Pulled up or down a group that can only go sideways: that is not a click, so it
+                // must not collapse the group, or toggle the section out of it, when let go.
+                if (Math.Abs(dy) >= 8 && (_pendingCollapse is not null || _pendingToggle is not null))
+                {
+                    _pendingCollapse = null;
+                    _pendingToggle = null;
+                    _vm.Status = "Sections on more than one track move sideways only.";
+                }
+                return;
+            }
             _dragging = true;
 
             switch (_dragKind)
             {
+                case DragKind.Move when _dragGroup: _dragGroup = _vm.BeginGroupMove(_dragClip); break;
                 case DragKind.Move: _vm.BeginMove(_dragClip); break;
                 case DragKind.TrimStart: _vm.BeginTrim(_dragClip, start: true); break;
                 case DragKind.TrimEnd: _vm.BeginTrim(_dragClip, start: false); break;
@@ -2938,6 +3270,9 @@ public partial class MainWindow : Window
 
         switch (_dragKind)
         {
+            case DragKind.Move when _dragGroup:
+                _vm.DragGroupTo(_vm.GroupCanChangeTrack ? TrackAtWindowY(window.Y) : null, _dragStartTimelineStart + delta, free);
+                break;
             case DragKind.Move:
                 _vm.DragMoveTo(TrackAtWindowY(window.Y), _dragStartTimelineStart + delta, free);
                 break;
@@ -2960,16 +3295,27 @@ public partial class MainWindow : Window
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
         var toggle = _pendingToggle;
+        var collapse = _pendingCollapse;
         _dragTrack = null;
         _dragClip = null;
         _dragging = false;
+        _dragGroup = false;
         _pendingToggle = null;
+        _pendingCollapse = null;
+        _vm.PointerHeld = false;
 
         if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
         if (dragging) _vm.EndDrag();
         else
         {
             if (toggle is not null) _vm.ToggleClipSelection(toggle);   // a Ctrl+click that stayed put
+            else if (collapse is not null)
+            {
+                // A click on one of several selected sections: just that one, now. Remembered,
+                // so the second press of a double-click can put the group back.
+                _clickMemo = _vm.CaptureSelection();
+                _vm.SelectClip(collapse);
+            }
             _vm.EndGesture();
         }
     }

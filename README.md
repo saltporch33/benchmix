@@ -65,6 +65,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
 | drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges (never to bars); <kbd>Ctrl</kbd> frees it |
+| drag one of several selected sections | move them all together. All on one track: sideways, or onto another track. On several tracks: sideways only. They keep their exact spacing, snap as one to other sections' edges, and one <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts them all back |
 | drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
 | <kbd>Alt</kbd>+click a lane | move the playhead without moving anything |
 | <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |
@@ -82,8 +83,9 @@ name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> past
 other, but only sections wholly inside that stretch of time. Or drag a box across empty space: it
 takes every section it **touches**, even partly, on every track it covers — but only what is on
 screen, as it does not scroll the view. <kbd>Delete</kbd> removes the whole
-selection in one undo step and leaves the gaps. Cut, copy, repeat and the drags still act on one
-section: the one you clicked last. Every button, knob and slider explains itself in a tooltip.
+selection in one undo step and leaves the gaps. Dragging any one of them moves them all; a click on
+one without dragging keeps just that one. Cut, copy and repeat act on one section: the one you
+clicked last. Every button, knob and slider explains itself in a tooltip.
 
 **Loop mode.** Click a section, press *LOOP MODE* (or <kbd>Ctrl</kbd>+<kbd>L</kbd>), then drag
 either of its ends: instead of trimming, the section repeats to fill the space, in whole repeats.

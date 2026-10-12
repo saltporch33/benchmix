@@ -380,13 +380,13 @@ public static class TimelineEditor
     /// </summary>
     /// <returns>How many sections were cut back or removed.</returns>
     internal static int ClearRange(TrackModel track, long start, long end, ProjectSession session,
-                                   ClipModel? except = null)
+                                   ClipModel? except = null, IReadOnlySet<ClipModel>? exceptAll = null)
     {
         int touched = 0;
         var cut = new List<ClipModel>();
         foreach (var c in track.Clips.ToList())
         {
-            if (ReferenceEquals(c, except)) continue;
+            if (ReferenceEquals(c, except) || exceptAll?.Contains(c) == true) continue;
             long length = LengthFramesOf(c, session);
             if (length <= 0) continue;                          // no audio: nothing to collide with
 

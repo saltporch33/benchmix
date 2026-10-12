@@ -156,6 +156,9 @@ would be right for a large model and would only add ways to be wrong here.
 - **Sections on one track never overlap.** A track is one read position, one stretcher and one EQ;
   two sections sounding at once is not representable in that. Two things at once is a second track.
   A dropped section or a loop overwrites what it lands on; a trim stops at the next section.
+- **A group moved onto a track at another tempo keeps its joins**, so it plays at that tempo and
+  spreads or tightens on the timeline, as one dragged section's length does.
+- **No auto-scroll** while dragging a section, a group, a box or a track.
 - **A join between two tracks is not seamless.** Drag a section onto another track without moving
   it in time, and each track still renders on its own: the end left behind and the start of the
   moved section each get the normal 5 ms declick, so the level dips at both ends of the moved

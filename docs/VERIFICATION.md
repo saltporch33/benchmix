@@ -4,7 +4,7 @@
 
 ## The test suite
 
-**220 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
+**240 tests, 0 failures, 0 skipped** (2026-10-11). `dotnet test` — about 90 seconds (the stem
 tests dominate).
 
 The ones that matter most:
@@ -448,6 +448,69 @@ arms a box.
 **Not verified:** the box under a real hand with real mouse capture (a scripted run takes none), a
 box dragged while the rows are scrolled part-way, and the box's look — it is drawn as a translucent
 blue rectangle, but no probe picture shows one mid-drag.
+
+## 2026-10-11 — dragging several sections at once
+
+**In the test project.** `GroupMoveTests` (16), on a ramp source:
+- two sections moved together at speed 0.93 to a point off a whole frame still meet at a seam (`==`
+  on frames and source, `SeamAfter`);
+- a split section moved as a group renders the same as the unsplit one moved the same way (every
+  sample `==`);
+- a group on two tracks at different tempos moves the same time on both (within a frame), and
+  stays on its own tracks whatever track it is dragged over;
+- a one-track group dropped on an empty track lands together, plays at the speed it had, and the
+  empty track is put back as it was when only passed over;
+- the group stops at 0:00 as a whole without being squeezed; dragged before a track's start it
+  moves the start back, and dragged back again puts it back (`==`);
+- any member snaps to another section's exact frame (a butt join), never to its own old edges,
+  never to a bar, and not with Ctrl;
+- the drop overwrites what is under it but never its own sections;
+- a knob turned during the drag is kept;
+- a group pushed against 0:00 is not snapped further back on one track only — run first without
+  that guard, it failed (the two decks landed 0.03 s apart).
+
+`SectionFuzzTests.NoSequenceOfGroupMovesLeavesATrackBroken` (4 seeds × 150 steps): groups of two
+to four sections from anywhere, dragged anywhere; every track keeps its rules, and sections that
+started on one track end on one track, the same frames apart. **240 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 140 to **158 checks**, through the lanes'
+own handlers with a scripted pointer:
+
+```
+PASS  a plain press on one of several selected sections keeps them all selected while the button is down (2)
+PASS  letting go without moving leaves just that one selected
+PASS  dragging one of several selected sections moves them all by the same amount (+3.0000s and +3.0000s)
+PASS  the seam between two sections moved together is still a seam, so it plays straight through
+PASS  both stay selected after the drop, and the one grabbed is the one commands act on
+PASS  one undo puts the whole group back
+PASS  a group on one track follows the pointer onto another track, together (2 landed there)
+PASS  the empty track took the group's tempo and pitch
+PASS  a group on two tracks moves sideways only: each stays on its own track, both 2 s later
+PASS  a straight pull on a group across two tracks keeps the whole group selected (2 of 2)
+PASS  a drag on the edge of a selected section trims just that one and lets go of the rest (2 selected on the press, 1 once trimming)
+PASS  Ctrl+I, Ctrl+D, Ctrl+X and Ctrl+Z each wait while a group is held, from the press on
+PASS  double-clicking one of several selected sections plays and keeps them all selected (2)
+PASS  double-clicking a selected section's edge plays and keeps the group selected (2)
+PASS  double-clicking empty space plays from there and keeps what was selected (2)
+PASS  two sections 12 px wide can be grabbed by the middle and dragged as a group
+```
+
+**The review** (one reader over the diff) found seven things, all fixed before anything was
+committed: a straight pull on a group across two tracks counted as a click and threw the group
+away; a double-click near a member's edge lost the group; Ctrl+X, Delete and Clear trim did not
+wait while a section was pressed but not yet moved, so a cut section could come back under the
+drag; the held-edits check proved only Ctrl+I (it now checks each command, pressed and dragging);
+the snap guard at 0:00 had no test; the smaller edge handles also changed single short sections
+(now only selected ones in a group); and the wait-while-busy rule blocked single moves during a
+song split (now groups only). The three window fixes were run first against a build without them:
+those three checks failed, then passed.
+
+`scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way (gesturetest 158,
+buttontest 36).
+
+**Not verified:** the drag under a real hand with real mouse capture, a group dragged while the rows
+are scrolled part-way, and how a group dropped across many sections sounds — what lands is checked,
+not listened to.
 
 ## The stretch engine
 

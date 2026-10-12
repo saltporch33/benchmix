@@ -46,6 +46,23 @@ public static class Snapping
         return edges;
     }
 
+    /// <summary>Every section edge in the project except those of the sections in <paramref name="except"/>.</summary>
+    public static List<SnapEdge> EdgesExcept(IEnumerable<TrackModel> tracks, ProjectSession s, IReadOnlySet<ClipModel> except)
+    {
+        var edges = new List<SnapEdge>();
+        foreach (var t in tracks)
+            foreach (var c in t.Clips)
+            {
+                if (except.Contains(c)) continue;
+                long length = TimelineEditor.LengthFramesOf(c, s);
+                if (length <= 0) continue;
+                long start = TimelineEditor.StartFrameOf(c, s);
+                edges.Add(new SnapEdge(TimelineEditor.TimelineSecondsOfFrame(t, start, s), t, c, false));
+                edges.Add(new SnapEdge(TimelineEditor.TimelineSecondsOfFrame(t, start + length, s), t, c, true));
+            }
+        return edges;
+    }
+
     /// <summary>
     /// The frame an edge falls on in <paramref name="track"/>'s own timebase. Exact — the very
     /// frame the engine will use — when the edge is on that same track, which is what makes two
@@ -212,6 +229,254 @@ public sealed class SectionMove
                 : " It now plays at this track's tempo and pitch.";
         }
         return new EditResult(true, $"{where}{snapped}.{over}{how}", Clip);
+    }
+}
+
+/// <summary>
+/// Dragging several selected sections at once (Daniel, 2026-10-11), by the one grabbed.
+///
+/// <para>
+/// The rule is fixed when the drag starts: all on one track, they go sideways and onto another
+/// track, together; spread over several, they go sideways only. On each track every section moves
+/// by ONE whole number of the track's frames, so a seam or a butt join between two of them is still
+/// exactly that — the seam rule. Each track turns the same move in time into its own frames. The
+/// group stops at 0:00 as a whole and is never squeezed. It snaps as a unit, to other sections'
+/// edges only, and on the drop overwrites what it lands on — never its own sections.
+/// </para>
+/// <para>
+/// The picture is put back before every pointer move and the group placed afresh, as
+/// <see cref="LoopDrag"/> does, so passing over an empty track, or dragging back from before a
+/// track's origin, leaves no trace. Only the arrangement and an empty track's adopted settings are
+/// put back: a knob turned during the drag keeps its new value.
+/// </para>
+/// </summary>
+public sealed class GroupMove
+{
+    private sealed class Member
+    {
+        public required ClipModel Clip;
+        public required TrackModel Home;
+        public required long StartFrame;
+        public required long Length;
+    }
+
+    private sealed record Before(double Offset, ClipModel[] Clips, double[] Starts);
+
+    private readonly ProjectSession _s;
+    private readonly List<Member> _members = new();
+    private readonly Member _grabbed;
+    private readonly HashSet<ClipModel> _memberSet = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TrackModel, Member> _refOnHome = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TrackModel, double> _refStartOnHome = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TrackModel, Before> _before = new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<TrackModel, TimelineEditor.DeckSettings> _adopted = new(ReferenceEqualityComparer.Instance);
+    private readonly List<SnapEdge> _edges;
+    private readonly TimelineEditor.DeckSettings? _playedAs;
+    private readonly double _grabbedStart;
+
+    public GroupMove(ProjectSession session, IEnumerable<(TrackModel Track, ClipModel Clip)> selected, ClipModel grabbed)
+    {
+        _s = session;
+        foreach (var (t, c) in selected)
+        {
+            long length = TimelineEditor.LengthFramesOf(c, session);
+            if (length <= 0 || !t.Clips.Contains(c) || !_memberSet.Add(c)) continue;    // a missing file is never moved
+            _members.Add(new Member { Clip = c, Home = t, StartFrame = TimelineEditor.StartFrameOf(c, session), Length = length });
+        }
+        _grabbed = _members.FirstOrDefault(m => ReferenceEquals(m.Clip, grabbed))
+                   ?? throw new ArgumentException("The grabbed section is not one of the group.", nameof(grabbed));
+
+        var homes = _members.Select(m => m.Home).Distinct(ReferenceEqualityComparer.Instance).Cast<TrackModel>().ToList();
+        CanChangeTrack = homes.Count == 1;
+        Origin = CanChangeTrack ? homes[0] : null;
+        Destination = Origin;
+        if (Origin is not null) _playedAs = TimelineEditor.SettingsOf(Origin);
+
+        foreach (var home in homes)
+        {
+            var reference = ReferenceEquals(_grabbed.Home, home)
+                ? _grabbed
+                : _members.Where(m => ReferenceEquals(m.Home, home)).MinBy(m => m.StartFrame)!;
+            _refOnHome[home] = reference;
+            _refStartOnHome[home] = TimelineEditor.TimelineSecondsOfFrame(home, reference.StartFrame, session);
+            Remember(home);
+        }
+        _grabbedStart = _refStartOnHome[_grabbed.Home];
+        _edges = Snapping.EdgesExcept(session.Project.Tracks, session, _memberSet);     // its own edges are never targets
+    }
+
+    /// <summary>True when every section is on one track, so the group may go onto another.</summary>
+    public bool CanChangeTrack { get; }
+    public TrackModel? Origin { get; }
+    /// <summary>The track a one-track group is on now; null for a group across tracks.</summary>
+    public TrackModel? Destination { get; private set; }
+    public bool DestinationAdopted => Destination is not null && _adopted.ContainsKey(Destination);
+    public int Count => _members.Count;
+    public ClipModel Grabbed => _grabbed.Clip;
+    public string? SnappedTo { get; private set; }
+    public double? SnapLineSeconds { get; private set; }
+
+    /// <summary>Every track this drag has changed, so the caller can redraw them.</summary>
+    public IEnumerable<TrackModel> Touched => _before.Keys;
+
+    /// <summary>
+    /// Puts the group with the grabbed section's start at <paramref name="proposedGrabbedStart"/>
+    /// on the timeline — on <paramref name="target"/> when it may change track (null: where it is).
+    /// </summary>
+    public void DragTo(TrackModel? target, double proposedGrabbedStart, SnapSettings snap)
+    {
+        Restore();
+        if (CanChangeTrack)
+        {
+            Destination = target ?? Destination ?? Origin;
+            if (!ReferenceEquals(Destination, Origin)) HopTo(Destination!);
+        }
+
+        double delta = proposedGrabbedStart - _grabbedStart;
+        double lowest = -_members.Min(m => StartAt(m, 0));         // so the whole group stays after 0:00
+        delta = Math.Max(delta, lowest);
+
+        SnappedTo = null;
+        SnapLineSeconds = null;
+        (Member M, SnapEdge E, bool End)? hit = null;
+        if (snap.Enabled)
+        {
+            double best = snap.RadiusSeconds, shift = 0;
+            foreach (var m in _members)
+            {
+                double s0 = StartAt(m, delta), e0 = EndAt(m, delta);
+                foreach (var e in _edges)
+                {
+                    double d = e.TimelineSeconds - s0;              // ties go to a start, as in SectionMove
+                    if (Math.Abs(d) <= best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, false); }
+                    d = e.TimelineSeconds - e0;
+                    if (Math.Abs(d) < best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, true); }
+                }
+            }
+            if (hit is { } h)
+            {
+                delta += shift;
+                SnappedTo = "a section";
+                SnapLineSeconds = h.E.TimelineSeconds;
+            }
+        }
+        Place(delta, hit);
+    }
+
+    private void Place(double delta, (Member M, SnapEdge E, bool End)? hit)
+    {
+        foreach (var dest in Destinations())
+        {
+            var here = _members.Where(m => ReferenceEquals(Dest(m), dest)).ToList();
+            // Room before the track's origin is made by moving the origin back, never by squeezing.
+            TimelineEditor.EnsureOriginAtOrBefore(dest, Math.Max(0, here.Min(m => StartAt(m, delta))), _s);
+            long anchor = AnchorFrame(dest, delta);
+            if (hit is { } h && ReferenceEquals(Dest(h.M), dest) && ReferenceEquals(h.E.Track, dest))
+            {
+                // An edge on the same track is taken to its exact frame: a true butt join, not a near miss.
+                long at = Snapping.FrameOn(dest, h.E, _s);
+                anchor = (h.End ? at - h.M.Length : at) - FromRef(h.M);
+            }
+            long first = anchor + here.Min(FromRef);
+            if (first < 0) { anchor += TimelineEditor.ShiftOrigin(dest, -first, _s); first = anchor + here.Min(FromRef); }
+            if (first < 0) anchor -= first;                          // already at 0:00: on, together
+            foreach (var m in here) m.Clip.TrackStartSeconds = TimelineEditor.SecondsOf(anchor + FromRef(m), _s);
+            TimelineEditor.Normalise(dest);
+        }
+    }
+
+    /// <summary>Drops the group where it is, overwriting what is under it but never one of its own.</summary>
+    public EditResult Commit()
+    {
+        int covered = 0;
+        var dests = Destinations();
+        foreach (var dest in dests)
+        {
+            foreach (var m in _members.Where(m => ReferenceEquals(Dest(m), dest)))
+            {
+                long start = TimelineEditor.StartFrameOf(m.Clip, _s);
+                covered += TimelineEditor.ClearRange(dest, start, start + m.Length, _s, exceptAll: _memberSet);
+            }
+            TimelineEditor.Normalise(dest);
+        }
+
+        int n = _members.Count;
+        string what;
+        if (CanChangeTrack && !ReferenceEquals(Destination, Origin))
+            what = $"{n} sections moved to {Destination!.Name}";
+        else
+        {
+            double now = TimelineEditor.TimelineSecondsOfFrame(_grabbed.Home, TimelineEditor.StartFrameOf(_grabbed.Clip, _s), _s);
+            double d = now - _grabbedStart;
+            string tracks = dests.Count > 1 ? $", on {dests.Count} tracks" : "";
+            what = Math.Abs(d) < 0.0005 ? $"{n} sections left where they were"
+                 : $"{n} sections moved {Math.Abs(d):0.00}s {(d > 0 ? "later" : "earlier")}{tracks}";
+        }
+        string snapped = SnappedTo is null ? "" : $", snapped to {SnappedTo}";
+        string over = covered > 0 ? " They replaced what was underneath." : "";
+        string how = "";
+        if (CanChangeTrack && !ReferenceEquals(Destination, Origin) && _playedAs is not null)
+        {
+            var dest = Destination!;
+            bool sameFeel = dest.Speed == _playedAs.Speed && dest.Semitones == _playedAs.Semitones && dest.Mode == _playedAs.Mode;
+            how = DestinationAdopted ? " The empty track took their tempo and pitch."
+                : sameFeel ? "" : " They now play at this track's tempo and pitch.";
+        }
+        return new EditResult(true, $"{what}{snapped}.{over}{how}", _grabbed.Clip);
+    }
+
+    // ---- the only timeline <-> track conversions here, all through TimelineEditor ----
+
+    private long AnchorFrame(TrackModel dest, double delta) => TimelineEditor.TrackFrameAt(dest, RefStart(dest) + delta, _s);
+
+    private double StartAt(Member m, double delta)
+        => TimelineEditor.TimelineSecondsOfFrame(Dest(m), AnchorFrame(Dest(m), delta) + FromRef(m), _s);
+
+    private double EndAt(Member m, double delta)
+        => TimelineEditor.TimelineSecondsOfFrame(Dest(m), AnchorFrame(Dest(m), delta) + FromRef(m) + m.Length, _s);
+
+    private TrackModel Dest(Member m) => CanChangeTrack ? Destination! : m.Home;
+    private Member Ref(TrackModel dest) => CanChangeTrack ? _grabbed : _refOnHome[dest];
+    private double RefStart(TrackModel dest) => CanChangeTrack ? _grabbedStart : _refStartOnHome[dest];
+
+    /// <summary>Where a section sits relative to its track's reference section, in track frames — kept exactly.</summary>
+    private long FromRef(Member m) => m.StartFrame - Ref(Dest(m)).StartFrame;
+
+    private List<TrackModel> Destinations()
+        => _members.Select(Dest).Distinct(ReferenceEqualityComparer.Instance).Cast<TrackModel>().ToList();
+
+    private void HopTo(TrackModel dest)
+    {
+        Remember(dest);
+        if (TimelineEditor.IsEmptyDeck(dest))
+        {
+            var before = TimelineEditor.SettingsOf(dest);
+            if (TimelineEditor.Adopt(dest, _playedAs!)) _adopted[dest] = before;   // before anything lands on it
+        }
+        foreach (var m in _members)
+        {
+            m.Home.Clips.Remove(m.Clip);
+            dest.Clips.Add(m.Clip);
+        }
+    }
+
+    private void Remember(TrackModel t)
+    {
+        if (_before.ContainsKey(t)) return;
+        _before[t] = new Before(t.TimelineOffsetSeconds, t.Clips.ToArray(), t.Clips.Select(c => c.TrackStartSeconds).ToArray());
+    }
+
+    private void Restore()
+    {
+        foreach (var (t, b) in _before)
+        {
+            t.Clips.Clear();
+            t.Clips.AddRange(b.Clips);
+            for (int i = 0; i < b.Clips.Length; i++) b.Clips[i].TrackStartSeconds = b.Starts[i];
+            t.TimelineOffsetSeconds = b.Offset;
+        }
+        foreach (var (t, deck) in _adopted) TimelineEditor.Restore(t, deck);
+        _adopted.Clear();
     }
 }
 

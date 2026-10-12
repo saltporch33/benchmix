@@ -133,6 +133,67 @@ public class SectionFuzzTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task NoSequenceOfGroupMovesLeavesATrackBroken(int seed)
+    {
+        // Groups of two to four sections, from anywhere, dragged anywhere (2026-10-11). On top of
+        // the rules every track must keep, the sections of a group that started on one track must
+        // end up on one track again, exactly the same number of frames apart: the seam rule.
+        var rng = new Random(seed);
+        using var session = ProjectSession.CreateOffline(Rate);
+        var a = await session.AddTrackAsync(_wav, 3.7);
+        var b = await session.AddTrackAsync(_wav, 11.25);
+        b.Speed = 0.93;
+        session.AddEmptyTrack();
+        session.AddEmptyTrack().Speed = 1.07;
+        session.ApplyAll();
+
+        double R(double lo, double hi) => lo + rng.NextDouble() * (hi - lo);
+        TrackModel AnyTrack() => session.Project.Tracks[rng.Next(session.Project.Tracks.Count)];
+        SnapSettings Snap() => rng.Next(3) == 0 ? SnapSettings.Off : new SnapSettings(true, R(5, 200));
+        TrackModel? TrackOf(ClipModel c) => session.Project.Tracks.FirstOrDefault(t => t.Clips.Contains(c));
+
+        for (int step = 0; step < 150; step++)
+        {
+            string what;
+            var all = session.Project.Tracks.SelectMany(t => t.Clips.Select(c => (Track: t, Clip: c)))
+                             .Where(x => TimelineEditor.LengthFramesOf(x.Clip, session) > 0).ToList();
+            if (all.Count < 2 || rng.Next(10) < 4)
+            {
+                TimelineEditor.Split(AnyTrack(), R(0, 90), session);
+                what = "split";
+            }
+            else
+            {
+                var members = all.OrderBy(_ => rng.Next()).Take(Math.Min(all.Count, rng.Next(2, 5))).ToList();
+                var grabbed = members[rng.Next(members.Count)].Clip;
+                var pairs = (from x in members from y in members
+                             where !ReferenceEquals(x.Clip, y.Clip) && ReferenceEquals(x.Track, y.Track)
+                             select (x.Clip, y.Clip, TimelineEditor.StartFrameOf(y.Clip, session) - TimelineEditor.StartFrameOf(x.Clip, session))).ToList();
+
+                var move = new GroupMove(session, members, grabbed);
+                for (int k = rng.Next(1, 4); k > 0; k--) move.DragTo(rng.Next(3) == 0 ? null : AnyTrack(), R(-5, 90), Snap());
+                move.Commit();
+                what = $"group of {members.Count}";
+
+                foreach (var (x, y, apart) in pairs)
+                {
+                    Assert.True(TrackOf(x) is { } tx && ReferenceEquals(tx, TrackOf(y)),
+                        $"seed {seed}, step {step} ({what}): two sections that started on one track ended on two");
+                    Assert.True(TimelineEditor.StartFrameOf(y, session) - TimelineEditor.StartFrameOf(x, session) == apart,
+                        $"seed {seed}, step {step} ({what}): two sections of the group are no longer the same frames apart — a seam between them would tick");
+                }
+            }
+
+            session.ApplyAll();
+            foreach (var t in session.Project.Tracks) CheckTrack(session, t, seed, step, what);
+        }
+    }
+
     private void CheckTrack(ProjectSession s, TrackModel t, int seed, int step, string what)
     {
         string where = $"seed {seed}, step {step} ({what}), track '{t.Name}'";

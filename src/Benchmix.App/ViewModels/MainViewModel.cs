@@ -431,6 +431,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         track ??= SelectedTrack;
         if (track is null || _session is null) return;
+        if (HeldUnderTheMouse()) return;
 
         PushUndo($"remove {track.Name}");
         Session.RemoveTrack(track.Model);
@@ -782,7 +783,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void Undo()
     {
-        if (_session is null) return;
+        if (_session is null || HeldUnderTheMouse()) return;
         var restored = _undo.Undo(Session.Project);
         if (restored is null) { Status = "Nothing to undo."; return; }
         _ = ReloadFromProjectAsync(restored, "Undone.");
@@ -791,7 +792,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void Redo()
     {
-        if (_session is null) return;
+        if (_session is null || HeldUnderTheMouse()) return;
         var restored = _undo.Redo(Session.Project);
         if (restored is null) { Status = "Nothing to redo."; return; }
         _ = ReloadFromProjectAsync(restored, "Redone.");
@@ -1011,7 +1012,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             0 => "Nothing selected.",
             1 => "1 section selected. Ctrl+click adds another; Shift+click selects a range.",
-            _ => $"{selected.Count} sections selected on {tracks} track{(tracks == 1 ? "" : "s")}. Delete removes them; Ctrl+click adds or removes one.",
+            _ => $"{selected.Count} sections selected on {tracks} track{(tracks == 1 ? "" : "s")}. Drag any one to move them all; Delete removes them; Ctrl+click adds or removes one.",
         };
     }
 
@@ -1044,6 +1045,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void SplitAtPlayhead()
     {
         if (_session is null || SelectedTrack is not { } track) { Status = "Select a track first."; return; }
+        if (HeldUnderTheMouse()) return;
 
         PushUndo($"{track.Name}: split");
         var result = TimelineEditor.Split(track.Model, PositionSeconds, Session);
@@ -1061,7 +1063,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CutClip()
     {
-        if (DragInProgress) { Status = "Let go of the section first."; return; }
+        if (HeldUnderTheMouse()) return;
         if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
 
         Remember(clip);
@@ -1083,7 +1085,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool DeleteSelection(bool fallBackToPlayhead)
     {
         if (_session is null) return false;
-        if (DragInProgress) { Status = "Let go of the section first."; return false; }
+        if (HeldUnderTheMouse()) return false;
 
         var selected = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
         if (selected.Count == 0)
@@ -1122,7 +1124,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task PasteClipAsync()
     {
-        if (_session is null) return;
+        if (_session is null || HeldUnderTheMouse()) return;
 
         var files = NewerAudioFilesOnClipboard();
         var track = SelectedTrack;
@@ -1239,7 +1241,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void DuplicateClip()
     {
-        if (_session is null) return;
+        if (_session is null || HeldUnderTheMouse()) return;
         if (TargetClip() is not { } clip) { Status = "Click a section to repeat it."; return; }
 
         var track = clip.Track;
@@ -1298,9 +1300,33 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// True while a section is being dragged. Removing a section then would leave the drag holding
     /// one that is no longer on the track, and its drop would clear what is under the ghost.
     /// </summary>
-    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null;
+    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null;
     private TrackViewModel? _dragHome;
     private Guid _dragClipId;
+
+    private GroupMove? _group;
+    private HashSet<Guid> _groupIds = new();
+
+    /// <summary>True when the group being dragged is all on one track, so it may go onto another.</summary>
+    public bool GroupCanChangeTrack => _group?.CanChangeTrack ?? false;
+
+    /// <summary>
+    /// Set by the window while the left button holds something on the timeline — a section, a
+    /// box, a track's name — from the press, before any drag has started.
+    /// </summary>
+    public bool PointerHeld { get; set; }
+
+    /// <summary>
+    /// Refuses an edit while something is held under the mouse. A group drag puts the picture back
+    /// before every pointer move, so an edit made meanwhile would be undone by the next one; and an
+    /// undo would rebuild every row under a press that is about to become a drag.
+    /// </summary>
+    private bool HeldUnderTheMouse()
+    {
+        if (!DragInProgress && !PointerHeld) return false;
+        Status = "Let go of the section first.";
+        return true;
+    }
 
     /// <summary>Where a drag is lined up against another section's edge, for the guide line.</summary>
     [ObservableProperty] private double? _snapLineSeconds;
@@ -1313,9 +1339,68 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void BeginMove(ClipViewModel clip)
     {
         EndDrag();
+        if (!clip.Track.Model.Clips.Contains(clip.Model)) { Status = "That section is no longer there."; return; }
         PushUndo($"{clip.Track.Name}: move section");
         _move = new SectionMove(Session, clip.Track.Model, clip.Model);
         _dragClipId = clip.Id;
+    }
+
+    /// <summary>
+    /// Starts dragging every selected section, by the one grabbed (Daniel, 2026-10-11). One undo
+    /// step for the whole drag. False when there is only the one to drag: then it is a plain move.
+    /// </summary>
+    public bool BeginGroupMove(ClipViewModel grabbed)
+    {
+        EndDrag();
+        var members = SelectedClips.Where(c => Tracks.Contains(c.Track) && c.TimelineLengthSeconds > 0
+                                               && c.Track.Model.Clips.Contains(c.Model)).ToList();
+        if (members.Count < 2 || !members.Contains(grabbed)) { BeginMove(grabbed); return false; }
+        // A group puts the picture back on every pointer move, so a file still landing on one of its
+        // tracks, or a reload, would be wiped by the next one.
+        if (IsBusy) { Status = "Wait for that to finish, then move the sections."; return true; }
+
+        PushUndo($"move {members.Count} sections");
+        _group = new GroupMove(Session, members.Select(c => (c.Track.Model, c.Model)), grabbed.Model);
+        _groupIds = members.Select(c => c.Id).ToHashSet();
+        _dragClipId = grabbed.Id;
+        return true;
+    }
+
+    /// <summary>Moves the group being dragged. A null target keeps a one-track group where it is.</summary>
+    public void DragGroupTo(TrackViewModel? target, double proposedStart, bool free)
+    {
+        if (_group is null) return;
+        _group.DragTo(target?.Model, proposedStart, SnapFor(free));
+        foreach (var t in Tracks.Where(t => _group.Touched.Contains(t.Model)).ToList()) Redraw(t);
+        SelectIds(_groupIds, _dragClipId);
+        SnapLineSeconds = _group.SnapLineSeconds;
+
+        var g = Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == _dragClipId);
+        Status = $"{_group.Count} sections: the one you grabbed at {g?.TimelineStartSeconds ?? 0:0.00}s"
+               + (_group.SnappedTo is { } s ? $" — on {s}" : "");
+    }
+
+    /// <summary>Selects exactly these, and makes one of them the one commands act on.</summary>
+    private void SelectIds(IReadOnlySet<Guid> ids, Guid primary)
+    {
+        var all = Tracks.SelectMany(t => t.Clips).ToList();
+        foreach (var c in all) c.IsSelected = ids.Contains(c.Id);
+        SelectedClip = all.FirstOrDefault(c => c.Id == primary);
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+    }
+
+    /// <summary>What was selected, so a double-click can put back what its first click's release changed.</summary>
+    public readonly record struct SelectionMemo(IReadOnlySet<Guid> Ids, Guid? Primary, Guid? Anchor);
+
+    public SelectionMemo CaptureSelection() => new(SelectedClips.Select(c => c.Id).ToHashSet(), SelectedClip?.Id, _rangeAnchorId);
+
+    public void RestoreSelection(SelectionMemo memo)
+    {
+        var all = Tracks.SelectMany(t => t.Clips).ToList();
+        foreach (var c in all) c.IsSelected = memo.Ids.Contains(c.Id);
+        SelectedClip = all.FirstOrDefault(c => c.Id == memo.Primary);
+        _rangeAnchorId = memo.Anchor;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
     }
 
     /// <summary>Moves the section being dragged. A null target keeps it on the track it is on.</summary>
@@ -1342,7 +1427,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void ClearTrim(ClipViewModel clip)
     {
-        if (DragInProgress) { Status = "Let go of the section first."; return; }
+        if (HeldUnderTheMouse()) return;
         var track = clip.Track;
         PushUndo($"{track.Name}: clear trim");
         SectionTrim.Clear(Session, track.Model, clip.Model);
@@ -1414,6 +1499,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SelectById(_dragClipId);
             Status = result.Message;
         }
+        else if (_group is not null)
+        {
+            var result = _group.Commit();
+            foreach (var t in Tracks.Where(t => _group.Touched.Contains(t.Model)).ToList()) Redraw(t);
+            var grabbed = Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == _dragClipId);
+            if (grabbed is not null) SelectedTrack = grabbed.Track;
+            SelectIds(_groupIds, _dragClipId);
+            Status = result.Message;
+        }
         else if (_trim is not null && _dragHome is not null)
         {
             Status = $"{_dragHome.Name}: section is {SelectedClip?.LengthSeconds ?? 0:0.0}s.";
@@ -1425,10 +1519,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 : $"{_dragHome.Name}: looped {_loopDrag.Repeats + 1}×{(_loopDrag.Partial ? " and a part" : "")}. Each repeat is its own section now.";
         }
 
-        bool changed = _move is not null || _trim is not null || _loopDrag is not null;
+        bool changed = _move is not null || _trim is not null || _loopDrag is not null || _group is not null;
         _move = null;
         _trim = null;
         _loopDrag = null;
+        _group = null;
+        _groupIds = new();
         _dragHome = null;
         SnapLineSeconds = null;
         EndGesture();
