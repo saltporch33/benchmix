@@ -152,7 +152,7 @@
                     SizeChanged="OnLaneSizeChanged"
                     BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,0,1"
                     MouseLeftButtonDown="OnRulerMouseDown" MouseMove="OnRulerMouseMove"
-                    MouseLeftButtonUp="OnRulerMouseUp" Cursor="Hand">
+                    MouseLeftButtonUp="OnRulerMouseUp" PreviewMouseWheel="OnRulerWheel" Cursor="Hand">
                 <c:TimelineRuler x:Name="Ruler"
                                  PixelsPerSecond="{Binding PixelsPerSecond}"
                                  ScrollSeconds="{Binding ScrollSeconds}"

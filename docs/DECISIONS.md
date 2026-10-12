@@ -488,3 +488,20 @@ Trying out the 2026-10-11 features, Daniel, verbatim: *"i actually LOVE the exis
 | Decision | Why |
 | --- | --- |
 | **A section or group dropped onto another section trims away the part it covered, permanently.** Dragging it off again later leaves the covered part trimmed; Ctrl+Z is the way back. | His words. It was built on purpose (2026-09-24: "the drop overwrites what is under it", because sections on one track never overlap), and he has now confirmed it is what he wants. It is not to be reported as a defect or changed. |
+
+## 2026-10-12 — the wheel over the ruler moves the playhead; a double-click of it goes to 0:00
+
+Daniel, 2026-10-12, verbatim: *"scroll wheel scrubs (if scrubs means just seeking back and forth on
+the rule, i.e. fastforward or rewind"*. Asked where, he chose the offered option "Wheel over the
+ruler" (offered as: over the ruler, wheel up moves the playhead forward, down moves it back, a small
+step on screen per notch; over the tracks the wheel still scrolls them up and down). These are the
+option's words, not his. Then, verbatim: *"double click mouse wheel brings playhead back to true
+start point of project, also focuses screen back to true start point (0:00)"*.
+
+| Decision | Why |
+| --- | --- |
+| **Over the ruler, a plain turn of the wheel moves the playhead**: up is later, down is earlier. Over the tracks the wheel still scrolls them up and down; Ctrl+wheel still zooms and Shift+wheel still scrolls sideways, over the ruler too. | His choice. Nothing he already uses changes. |
+| **A notch is 20 pixels on screen**, so it is a fine step zoomed in and a big one zoomed out (half a second at the default zoom). | A fixed step in seconds is too coarse zoomed in and too slow zoomed out. |
+| **While playing, it plays on from the new spot**; stopped, it just moves the playhead. It stops at 0:00 and at the end of the mix. | As a click on the ruler while playing does. |
+| **The view follows the playhead** when the wheel takes it off either edge. | Otherwise turning the wheel loses the playhead off screen. |
+| **A double-click of the wheel stops, and puts the playhead and the view at 0:00.** A single click still stops and goes back to where play last started. | His words. Its first click is a single click, so it has already stopped. |

@@ -53,6 +53,8 @@ control on screen is one you asked for.
 | <kbd>Space</kbd> | play / pause (not while typing a name or a tempo) |
 | double-click a lane, the ruler, or the empty room under the tracks | play from there; if already playing, jump there and keep playing |
 | click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again. (The ■ button goes back to 0:00.) |
+| double-click the scroll wheel | stop, and go back to the very start: the playhead and the view both to 0:00 |
+| turn the scroll wheel over the ruler | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | undo / redo |

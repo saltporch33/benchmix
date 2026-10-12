@@ -565,6 +565,15 @@ public partial class MainWindow : Window
             _vm.StopCommand.Execute(null);
         }
 
+        // --- the wheel over the ruler moves the playhead ---
+        try { RunScrubGestures(Check, notes); }
+        finally
+        {
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _vm.StopCommand.Execute(null);
+        }
+
         // --- a double-click on a lane, or under the tracks, plays from there ---
         try { RunDoubleClickGestures(Check, notes); }
         finally
@@ -984,6 +993,17 @@ public partial class MainWindow : Window
         lane.RaiseEvent(left);
         Check("a left press is not a stop", !Stopped() && !left.Handled);
 
+        // A double-click of the wheel: stop, and the playhead and the view go back to 0:00 (2026-10-12).
+        _vm.ScrollSeconds = 20;
+        _vm.PlayFrom(30);
+        Listen(1);
+        bool scrolledAway = _vm.ScrollSeconds > 0;
+        WindowPress(MouseButton.Middle, lane, clickCount: 1);
+        WindowPress(MouseButton.Middle, lane, clickCount: 2);
+        Check($"a double-click of the scroll wheel stops, and the playhead and the view go back to 0:00 " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, view from {_vm.ScrollSeconds:0.0}s)",
+              scrolledAway && Stopped() && s.Engine.PositionFrames == 0 && _vm.ScrollSeconds == 0);
+
         // In the middle of dragging a section: playback stops, and the drag carries on to its drop.
         var clip = track.Clips.FirstOrDefault(c => c.TimelineLengthSeconds > 4);
         if (clip is null) { notes.Add("no section longer than 4 s, so a wheel-click mid-drag is untested"); return; }
@@ -1017,6 +1037,79 @@ public partial class MainWindow : Window
         _vm.UndoCommand.Execute(null);                             // put the song back for the checks that follow
         PumpUntil(() => _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id) is { } c
                         && Math.Abs(c.TimelineStartSeconds - before) <= frame);
+    }
+
+    /// <summary>
+    /// The wheel over the ruler moves the playhead back and forth (Daniel, 2026-10-12), through the
+    /// ruler's and the tracks' own wheel handlers with a scripted pointer and modifiers. The engine
+    /// itself is asked where the playhead is.
+    /// </summary>
+    private void RunScrubGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (RulerHost.ActualWidth < 400 || _vm.Tracks.FirstOrDefault() is not { IsLoaded: true } track || LaneOf(track) is not { ActualHeight: > 0 } lane)
+        {
+            notes.Add("no laid-out ruler and track, so the wheel over the ruler is untested - pass a file to cover it");
+            return;
+        }
+        var engine = _vm.Session.Engine;
+        double frame = 1.0 / _vm.Session.SampleRate;
+        _vm.StopCommand.Execute(null);
+        _vm.PixelsPerSecond = 40;
+        _vm.ScrollSeconds = 0;
+        UpdateLayout();
+        double notch = ScrubPixelsPerNotch / _vm.PixelsPerSecond;           // 0.5 s at 40 px/s
+        var r = RulerHost.TranslatePoint(new Point(0, 0), this);
+        var overRuler = new Point(r.X + 300, r.Y + RulerHost.ActualHeight / 2);
+        var l = lane.TranslatePoint(new Point(0, 0), this);
+        var overLane = new Point(l.X + 300, l.Y + lane.ActualHeight / 2);
+        bool Turn(Point at, int delta, bool ruler, ModifierKeys keys = ModifierKeys.None)
+        {
+            var e = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, delta) { RoutedEvent = PreviewMouseWheelEvent };
+            _scriptedWindowPoint = at;
+            _scriptedModifiers = keys;
+            if (ruler) OnRulerWheel(RulerHost, e); else OnTimelineWheel(TrackScroller, e);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            return e.Handled;
+        }
+        bool At(double seconds) => Math.Abs(engine.PositionSeconds - seconds) <= frame;
+
+        _vm.SeekTo(10);
+        bool used = Turn(overRuler, 120, ruler: true);
+        Check($"a notch of the wheel up over the ruler moves the playhead {notch:0.00}s later (engine at {engine.PositionSeconds:0.000}s)", used && At(10 + notch));
+        Turn(overRuler, -240, ruler: true);
+        Check($"two notches down move it back {2 * notch:0.00}s (engine at {engine.PositionSeconds:0.000}s)", At(10 - notch));
+
+        _vm.SeekTo(0.2);
+        Turn(overRuler, -360, ruler: true);
+        Check("it stops at 0:00", engine.PositionSeconds == 0);
+
+        _vm.PlayFrom(30);
+        Turn(overRuler, 120, ruler: true);
+        Check($"while playing it carries on playing from the new spot (engine at {engine.PositionSeconds:0.000}s)",
+              engine.State == Benchmix.Engine.Audio.TransportState.Playing && At(30 + notch));
+        _vm.StopCommand.Execute(null);
+
+        _vm.SeekTo(10);
+        bool passedOn = !Turn(overLane, 120, ruler: false);
+        Check("over the tracks the wheel still scrolls them up and down, and leaves the playhead alone", passedOn && At(10));
+
+        double pps = _vm.PixelsPerSecond;
+        Turn(overRuler, 120, ruler: true, ModifierKeys.Control);
+        Check("Ctrl+wheel over the ruler still zooms, and leaves the playhead alone", _vm.PixelsPerSecond > pps && At(10));
+        _vm.PixelsPerSecond = 40;
+        _vm.ScrollSeconds = 20;
+        Turn(overRuler, -120, ruler: true, ModifierKeys.Shift);
+        Check("Shift+wheel over the ruler still scrolls sideways, and leaves the playhead alone", _vm.ScrollSeconds != 20 && At(10));
+
+        _vm.ScrollSeconds = 0;
+        double edge = _vm.ViewportSeconds - 0.2;
+        _vm.SeekTo(edge);
+        Turn(overRuler, 240, ruler: true);
+        Check($"turned past the right edge of the view, the view follows the playhead (playhead {_vm.PositionSeconds:0.0}s, view {_vm.ScrollSeconds:0.0}s to {_vm.ScrollSeconds + _vm.ViewportSeconds:0.0}s)",
+              _vm.ScrollSeconds > 0 && _vm.PositionSeconds >= _vm.ScrollSeconds && _vm.PositionSeconds <= _vm.ScrollSeconds + _vm.ViewportSeconds);
+        _vm.ScrollSeconds = 0;
     }
 
     /// <summary>
@@ -3306,7 +3399,7 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnWindowPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (WindowPress(e.ChangedButton, e.OriginalSource as DependencyObject)) e.Handled = true;
+        if (WindowPress(e.ChangedButton, e.OriginalSource as DependencyObject, e.ClickCount)) e.Handled = true;
     }
 
     /// <summary>
@@ -3315,7 +3408,7 @@ public partial class MainWindow : Window
     /// Explorer — a click on a lane moves no keyboard focus, so the box's own focus loss cannot be
     /// relied on for that.
     /// </summary>
-    private bool WindowPress(MouseButton button, DependencyObject? pressedOn)
+    private bool WindowPress(MouseButton button, DependencyObject? pressedOn, int clickCount = 1)
     {
         if (!IsInRenameBox(pressedOn)) _vm.CommitOpenRenames();
 
@@ -3328,7 +3421,10 @@ public partial class MainWindow : Window
             _pressEndedRampEntry = true;
         }
         if (button != MouseButton.Middle) return false;
-        _vm.StopAndReturn();
+        // A double-click of the wheel goes all the way back: the playhead and the view to 0:00
+        // (Daniel, 2026-10-12). Its first click has already stopped, as a single click does.
+        if (clickCount >= 2) _vm.StopToStart();
+        else _vm.StopAndReturn();
         return true;
     }
 
@@ -4139,26 +4235,61 @@ public partial class MainWindow : Window
         _panning = false;
     }
 
-    // ---------------- wheel: zoom and scroll ----------------
+    // ---------------- wheel: zoom, scroll and scrub ----------------
 
     private void OnTimelineWheel(object sender, MouseWheelEventArgs e)
     {
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        // Over the tracks a plain turn falls through to the ScrollViewer's own vertical scrolling.
+        if (TimelineWheel(WindowPoint(e), e.Delta, overRuler: false)) e.Handled = true;
+    }
+
+    private void OnRulerWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (TimelineWheel(WindowPoint(e), e.Delta, overRuler: true)) e.Handled = true;
+    }
+
+    /// <summary>How far one notch of the wheel over the ruler moves the playhead, on screen.</summary>
+    private const double ScrubPixelsPerNotch = 20;
+
+    /// <summary>
+    /// A turn of the wheel on the timeline: Ctrl zooms about the pointer, Shift scrolls sideways,
+    /// and over the ruler a plain turn moves the playhead back and forth (Daniel, 2026-10-12) — up is
+    /// later, a notch is the same distance on screen whatever the zoom, and the view follows it.
+    /// True when it was used.
+    /// </summary>
+    private bool TimelineWheel(Point window, int delta, bool overRuler)
+    {
+        if (Modifiers.HasFlag(ModifierKeys.Control))
         {
             // Zoom about the pointer, so the thing under the cursor stays under the cursor.
-            double x = Math.Max(0, e.GetPosition(this).X - 392);
+            double x = Math.Max(0, window.X - 392);
             double timeUnderCursor = _vm.ScrollSeconds + x / _vm.PixelsPerSecond;
 
-            double factor = e.Delta > 0 ? 1.2 : 1 / 1.2;
+            double factor = delta > 0 ? 1.2 : 1 / 1.2;
             _vm.PixelsPerSecond = Math.Clamp(_vm.PixelsPerSecond * factor, 2, 400);
             _vm.ScrollSeconds = Math.Max(0, timeUnderCursor - x / _vm.PixelsPerSecond);
-            e.Handled = true;
+            return true;
         }
-        else if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        if (Modifiers.HasFlag(ModifierKeys.Shift))
         {
-            _vm.ScrollSeconds = Math.Max(0, _vm.ScrollSeconds - e.Delta / 120.0 * (60 / _vm.PixelsPerSecond) * 4);
-            e.Handled = true;
+            _vm.ScrollSeconds = Math.Max(0, _vm.ScrollSeconds - delta / 120.0 * (60 / _vm.PixelsPerSecond) * 4);
+            return true;
         }
-        // otherwise fall through to the ScrollViewer's own vertical scrolling
+        if (!overRuler) return false;
+
+        double notches = delta / (double)Mouse.MouseWheelDeltaForOneLine;
+        double to = _vm.PositionSeconds + notches * ScrubPixelsPerNotch / Math.Max(0.01, _vm.PixelsPerSecond);
+        if (_vm.TotalSeconds > 0) to = Math.Min(to, _vm.TotalSeconds);
+        to = Math.Max(0, to);
+        _vm.SeekTo(to);
+
+        // Keep the playhead on screen while it is being turned along.
+        double view = _vm.ViewportSeconds;
+        if (view > 0)
+        {
+            if (to < _vm.ScrollSeconds) _vm.ScrollSeconds = Math.Max(0, to - view * 0.1);
+            else if (to > _vm.ScrollSeconds + view) _vm.ScrollSeconds = to - view * 0.9;
+        }
+        return true;
     }
 }

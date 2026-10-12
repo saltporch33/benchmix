@@ -673,6 +673,31 @@ buttontest 41).
 and the dots under a real hand, have not been tried — the checks drive the handlers with a scripted
 pointer and focus; the window checks were not re-run against a deliberately broken build.
 
+## 2026-10-12 — the wheel over the ruler, and a double-click of the wheel
+
+**In the real window.** `--gesturetest` grew from 187 to **196 checks**, through the ruler's and
+the tracks' own wheel handlers with a scripted pointer and modifiers, and the window's own press
+handler for the wheel button:
+
+```
+PASS  a double-click of the scroll wheel stops, and the playhead and the view go back to 0:00
+PASS  a notch of the wheel up over the ruler moves the playhead 0.50s later (engine at 10.500s)
+PASS  two notches down move it back 1.00s (engine at 9.500s)
+PASS  it stops at 0:00
+PASS  while playing it carries on playing from the new spot
+PASS  over the tracks the wheel still scrolls them up and down, and leaves the playhead alone
+PASS  Ctrl+wheel over the ruler still zooms, and leaves the playhead alone
+PASS  Shift+wheel over the ruler still scrolls sideways, and leaves the playhead alone
+PASS  turned past the right edge of the view, the view follows the playhead
+```
+
+The engine itself is asked where the playhead is. **311 tests, 0 failed, 0 skipped**; `--playtest`
+still lands a wheel-click back where play started. Run on a staged build, because his copy of
+Benchmix was open.
+
+**Not verified:** a real wheel, including a smooth-scrolling one that sends part-notches, and a
+real double-click of the wheel, have not been tried by hand.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

@@ -292,6 +292,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Status = $"Stopped, back at {PositionSeconds:0.00}s where it started playing.";
     }
 
+    /// <summary>
+    /// A double-click of the scroll wheel (Daniel, 2026-10-12): stops, and the playhead and the view
+    /// both go back to the very start, 0:00.
+    /// </summary>
+    public void StopToStart()
+    {
+        if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
+        Stop();
+        ScrollSeconds = 0;
+        Status = "Stopped, back at 0:00.";
+    }
+
     public void SeekTo(double seconds)
     {
         if (_session is null || _rendering) return;
