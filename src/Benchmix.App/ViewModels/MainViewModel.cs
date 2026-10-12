@@ -1342,7 +1342,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private bool _loopMode;
 
     [RelayCommand]
-    private void ToggleLoopMode() => LoopMode = !LoopMode;
+    private void ToggleLoopMode()
+    {
+        if (HeldUnderTheMouse()) return;
+        LoopMode = !LoopMode;
+    }
 
     partial void OnLoopModeChanged(bool value)
     {
@@ -1389,7 +1393,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                : "Ramp mode off: clicking and dragging sections works again.";
     }
 
-    private sealed record RampDraftState(Guid TrackId, double Start, double FromBpm, double? End, int? Retype);
+    /// <param name="Raw">Where the first click really was, before it snapped — to snap it again as an end if the ramp is drawn right to left.</param>
+    /// <param name="Prefill">What the box was filled in with. Left as it is, it means the exact tempo behind it, not that rounded number.</param>
+    private sealed record RampDraftState(Guid TrackId, double Start, double FromBpm, double? End, int? Retype, double Raw = 0, string Prefill = "");
 
     private RampDraftState? _ramp;
     private RampEdgeDrag? _rampDrag;
@@ -1412,7 +1418,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (t.Model.Bpm <= 0) { Status = $"{t.Name}'s tempo is unknown, so a ramp has no BPM to start from."; return false; }
 
         bool second = _ramp is { End: null, Retype: null } d0 && d0.TrackId == t.Id;
-        double at = TempoRamps.SnapPoint(t.Model, seconds, isEnd: second, except: -1, SnapFor(free), Session, out var snapped);
+        // A ramp runs forward in time, so a second click before the first is the ramp's start, and
+        // the first click its end: each is snapped for the end it will be. An end must not snap to
+        // its own track's sections, which move as soon as the ramp changes the tempo.
+        bool backwards = second && seconds < _ramp!.Start;
+        double at = TempoRamps.SnapPoint(t.Model, seconds, isEnd: second && !backwards, except: -1, SnapFor(free), Session, out var snapped);
         SnapLineSeconds = snapped;
 
         if (!second)
@@ -1425,7 +1435,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             bool moved = _ramp is not null;
             ClearRampDraft();
             double from = TempoRamps.BpmAt(t.Model, at);
-            _ramp = new RampDraftState(t.Id, at, from, null, null);
+            _ramp = new RampDraftState(t.Id, at, from, null, null, Raw: seconds);
             ShowRampDraft(t);
             Status = (moved ? $"Started the ramp on {t.Name} instead. " : "")
                    + $"Ramp starts at {at:0.00}s at {from:0.0} BPM, the tempo {t.Name} is playing there. Now click where it should arrive.";
@@ -1438,7 +1448,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Status = "Click further along — a ramp needs some length.";
             return false;
         }
-        if (b < a) (a, b) = (b, a);                                  // a ramp runs forward in time
+        if (backwards)
+        {
+            a = at;
+            b = TempoRamps.SnapPoint(t.Model, _ramp.Raw, isEnd: true, except: -1, SnapFor(free), Session, out var asEnd);
+            SnapLineSeconds = snapped ?? asEnd;
+            if (b - a < TempoRamps.MinimumSeconds) { Status = "Click further along — a ramp needs some length."; return false; }
+        }
         var (lo, hi) = TempoRamps.RoomAround(t.Model, _ramp.Start);
         string clamped = b > hi || a < lo ? " It stops where the next ramp begins." : "";
         a = Math.Max(a, lo);
@@ -1446,8 +1462,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (b - a < TempoRamps.MinimumSeconds) { Status = "There is no room for a ramp there: it would run into the next one."; return false; }
 
         double fromBpm = TempoRamps.BpmAt(t.Model, a);
-        _ramp = new RampDraftState(t.Id, a, fromBpm, b, null);
-        t.RampBpmDraft = fromBpm.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        string prefill = fromBpm.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        _ramp = new RampDraftState(t.Id, a, fromBpm, b, null, Prefill: prefill);
+        t.RampBpmDraft = prefill;
         t.RampBoxSeconds = b;
         t.IsTypingRampBpm = true;
         ShowRampDraft(t);
@@ -1468,6 +1485,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         var (ok, speed, why) = TempoRamps.ParseBpm(t.Model, typed);
         if (!ok) { Status = why; return false; }
+        // Left as it was filled in, the box means the exact tempo behind that rounded number: the
+        // one the ramp already reaches, or for a new ramp the one it starts at. Taken literally, a
+        // look at a ramp and a click away would move everything after it by the rounding.
+        if ((typed ?? "").Trim() == d.Prefill)
+            speed = d.Retype is int k && k < t.Model.Ramps.Count ? t.Model.Ramps[k].ToSpeed : TimelineEditor.SpeedAt(t.Model, d.Start);
 
         EditResult result;
         if (d.Retype is int i)
@@ -1539,8 +1561,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ClearRampDraft();
         var r = t.Model.Ramps[i];
         double to = t.Model.Bpm * r.ToSpeed;
-        _ramp = new RampDraftState(t.Id, r.StartSeconds, TempoRamps.BpmAt(t.Model, r.StartSeconds), r.EndSeconds, i);
-        t.RampBpmDraft = to.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        string prefill = to.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        _ramp = new RampDraftState(t.Id, r.StartSeconds, TempoRamps.BpmAt(t.Model, r.StartSeconds), r.EndSeconds, i, Prefill: prefill);
+        t.RampBpmDraft = prefill;
         t.RampBoxSeconds = r.EndSeconds;
         t.IsTypingRampBpm = true;
         ShowRampDraft(t);

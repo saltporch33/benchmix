@@ -743,6 +743,40 @@ shows the box open over a TEMPO number; looked at, it sits over the number. **31
 
 **Not verified:** typing into the box with the real keyboard and real focus.
 
+## 2026-10-12 — the review of everything after tempo ramps part 1
+
+Two readers over `552a2f8..b73d9fc` (tempo ramps part 2, the wheel, joining, typing knob values),
+about 536,000 tokens between them. They found **13 things, all real, all fixed**:
+- a knob's box opened only to read it wrote the value back rounded to what it showed (after Match
+  BPM, −8.8235% became −8.82%); the same for a ramp's tempo box, and a new ramp left as filled in
+  ended 0.04 BPM off and held it — **the two that mattered**;
+- a double-click's second press in ramp mode closed the tempo box the first had opened;
+- Ctrl+L was not refused while a ramp's dot was held;
+- a right-click inside the ramp's box finished the typing;
+- *Remove tempo ramp* could act on a ramp from an earlier right-click, by an index that had moved;
+- a ramp clicked right to left was snapped for the wrong ends;
+- a twitch on the first click of a double-click on a knob's number turned the knob;
+- a knob's box stayed open over rows that New, Open or undo had rebuilt;
+- turned fast while playing, the wheel over the ruler lost notches;
+- four checks could not fail against what they were named for: the three "never given the
+  keyboard" checks (a queued focus had not run yet when they looked — they now let it run first),
+  the one-undo-step check for typed knob values (every step was on a different knob), and the
+  wheel double-click check (it skipped the window's own handler, where the click count comes in).
+
+**In the real window**, `--gesturetest` grew from 214 to **221 checks**: a double-click's second
+press leaves the tempo box open; a right-click inside it leaves the typing open; Ctrl+R and Ctrl+L
+wait while a dot is held; a ramp's box opened only to look keeps 99.03 exactly where it shows 99.0;
+a right-click while a dot is held offers no *Remove tempo ramp* left over; a knob's box opened only
+to read it leaves 93/102 exactly; a value typed straight after turning the same knob is its own
+undo step; an undo that rebuilds the rows closes a knob's box. **Broken on purpose** — the two
+"only to look" fixes, the click count reaching the window's handler, and the knob's own undo step
+taken out together — the checks for each failed (7 of 221 with what followed from them), then
+passed again once put back.
+
+Not checked by a test, and said so: the right-to-left snapping, the knob's 4 px slop (it needs a
+real mouse), and the fast-wheel notches (the offline engine seeks at once). **319 tests, 0 failed,
+0 skipped**; `scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

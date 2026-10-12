@@ -60,6 +60,13 @@ public sealed class Knob : FrameworkElement
     private Point _lastDragPoint;
     private bool _dragging;
 
+    // A press on the number underneath does not turn the knob until it has moved a few pixels:
+    // it is usually the first click of a double-click to type the value, and a twitch then would
+    // change the value the box opens with.
+    private const double NumberDragSlop = 4;
+    private bool _heldOnNumber;
+    private Point _pressPoint;
+
     /// <summary>Creates a knob that can take keyboard focus and draws its own focus ring.</summary>
     public Knob()
     {
@@ -290,7 +297,8 @@ public sealed class Knob : FrameworkElement
         Focus();
         if (Press(e.GetPosition(this), e.ClickCount)) { e.Handled = true; return; }
 
-        _lastDragPoint = e.GetPosition(this);
+        _lastDragPoint = _pressPoint = e.GetPosition(this);
+        _heldOnNumber = EditUnit != KnobUnit.None && IsOnNumber(_pressPoint);
         _dragging = CaptureMouse();
         e.Handled = true;
     }
@@ -374,6 +382,13 @@ public sealed class Knob : FrameworkElement
         }
 
         var p = e.GetPosition(this);
+        if (_heldOnNumber)
+        {
+            if (Math.Abs(p.Y - _pressPoint.Y) < NumberDragSlop) return;
+            _heldOnNumber = false;
+            _lastDragPoint = p;
+            return;
+        }
 
         // Screen Y grows downward, so the previous point minus the current one makes "drag up"
         // positive. Deltas are accumulated move-by-move rather than measured from the press

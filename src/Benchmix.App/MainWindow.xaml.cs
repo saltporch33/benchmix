@@ -27,6 +27,8 @@ public partial class MainWindow : Window
         DataContext = _vm;
         AddHandler(Controls.Knob.EditRequestedEvent, new RoutedEventHandler(OnKnobEditRequested));
         TrackScroller.ScrollChanged += (_, e) => { if (_editingKnob is not null && e.VerticalChange != 0) FinishKnobEdit(); };
+        // Every row rebuilt — New, Open, undo — takes its knobs with it: a box left open over one is dropped.
+        _vm.Tracks.CollectionChanged += (_, _) => { if (_editingKnob is not null) { _editingKnob = null; KnobValueBox.Visibility = Visibility.Collapsed; } };
         if (App.IsScriptedRun) KeepOutOfTheWay();
         Loaded += OnLoaded;
         Closing += OnClosing;
@@ -1021,8 +1023,15 @@ public partial class MainWindow : Window
         _vm.PlayFrom(30);
         Listen(1);
         bool scrolledAway = _vm.ScrollSeconds > 0;
-        WindowPress(MouseButton.Middle, lane, clickCount: 1);
-        WindowPress(MouseButton.Middle, lane, clickCount: 2);
+        // Through the window's own Preview handler, as the wheel's presses arrive: the click count the
+        // event carries is what tells a double-click from two single clicks.
+        var setCount = typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.GetSetMethod(nonPublic: true)!;
+        foreach (int count in new[] { 1, 2 })
+        {
+            var click = Press(MouseButton.Middle);
+            setCount.Invoke(click, new object[] { count });
+            lane.RaiseEvent(click);
+        }
         Check($"a double-click of the scroll wheel stops, and the playhead and the view go back to 0:00 " +
               $"(engine at {s.Engine.PositionSeconds:0.000}s, view from {_vm.ScrollSeconds:0.0}s)",
               scrolledAway && Stopped() && s.Engine.PositionFrames == 0 && _vm.ScrollSeconds == 0);
@@ -1290,7 +1299,8 @@ public partial class MainWindow : Window
         UpdateLayout();
         Check("double-clicking a track's name opens it for typing", track.IsRenaming && box.Visibility == Visibility.Visible);
         Check($"the box starts with the current name ('{box.Text}')", box.Text == original);
-        Check("the box is never given the keyboard in a scripted run", !box.IsKeyboardFocusWithin);
+        Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);   // let a queued focus run, if one was queued
+        Check("the box is never given the keyboard in a scripted run", !box.IsKeyboardFocusWithin && !ReferenceEquals(Keyboard.FocusedElement, box));
 
         box.Text = original + " (renamed)";
         OnRenameKeyDown(box, Press(Key.Enter));
@@ -1993,7 +2003,8 @@ public partial class MainWindow : Window
         tempo.Press(OnNumber(tempo), 2);
         Check($"double-clicking TEMPO's number opens a box over it, filled in with its value ({KnobValueBox.Text})",
               Open() && KnobValueBox.Text == tempo.EditText() && LabelFor(KnobValueBox) == "textbox:knobValue");
-        Check("the box is never given the keyboard in a scripted run", !KnobValueBox.IsKeyboardFocusWithin);
+        Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);   // let a queued focus run, if one was queued
+        Check("the box is never given the keyboard in a scripted run", Open() && !KnobValueBox.IsKeyboardFocusWithin && !ReferenceEquals(Keyboard.FocusedElement, KnobValueBox));
         KnobValueBox.Text = "-4.21";
         OnKnobValueKeyDown(KnobValueBox, Press(Key.Enter));
         Check($"typing -4.21 and Enter sets TEMPO to 4.21% slower, exactly, and shows it ({KnobOf("TEMPO")!.ValueText})",
@@ -2033,7 +2044,11 @@ public partial class MainWindow : Window
 
         // Each typed value, and the reset, is one undo step.
         void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+        var tempoNow = KnobOf("TEMPO")!;
+        tempoNow.Press(OnNumber(tempoNow), 2);
+        bool openBefore = Open();
         Undo(() => Track().Model.Speed != 1);
+        Check("an undo that rebuilds the rows closes a knob's box left open over them", openBefore && !Open());
         bool resetUndone = Track().Model.Speed == 1 + Math.Round(-4.21, 2) / 100;
         Undo(() => Track().Model.EqHigh != Math.Pow(10, 3.0 / 20));
         bool highUndone = Track().Model.EqHigh == was.EqHigh;
@@ -2045,6 +2060,23 @@ public partial class MainWindow : Window
         var back = Track().Model;
         if ((back.Speed, back.Semitones, back.EqLow, back.EqHigh, back.Gain) != (was.Speed, was.Semitones, was.EqLow, was.EqHigh, was.Gain))
             notes.Add("the knob typing checks could not undo back to where they started");
+
+        // Opened only to read it, the box changes nothing; and a turn of a knob followed straight
+        // away by a value typed into the same knob are two undo steps, not one.
+        var tk = KnobOf("TEMPO")!;
+        _vm.EndGesture();
+        tk.Value = 93.0 / 102;                    // a turn, to a value off the box's 0.01% grid, as Match BPM makes
+        double turned = Track().Model.Speed;
+        tk.Press(OnNumber(tk), 2);
+        WindowPress(MouseButton.Left, LaneOf(Track()));
+        Check($"opening a knob's box only to read it ('{tk.EditText()}'), then clicking away, leaves the value exactly as it was",
+              !Open() && Track().Model.Speed == turned);
+        Type("TEMPO", "-3");
+        double typedSpeed = Track().Model.Speed;
+        Undo(() => Track().Model.Speed != 1 + Math.Round(-3.0, 2) / 100);
+        Check($"a value typed straight after turning the same knob is its own undo step (turned {turned}, typed {typedSpeed}, after one undo {Track().Model.Speed})", Track().Model.Speed == turned);
+        Undo(() => Track().Model.Speed != turned);
+        if (Track().Model.Speed != was.Speed) notes.Add("the knob checks could not undo the last turn");
         Track().LinkPitchToTempo = was.Link;
     }
 
@@ -2240,9 +2272,22 @@ public partial class MainWindow : Window
         double wantLeft = Math.Max(2, x45 + 70 <= gridWidth ? x45 + 10 : x45 - 70);
         Check($"the second click opens the tempo box beside the end point, filled in with {fromText}",
               box is { Visibility: Visibility.Visible } && box.Text == fromText && Math.Abs(box.Margin.Left - wantLeft) <= 1);
-        Check("the box is never given the keyboard in a scripted run", box is not null && !box.IsKeyboardFocusWithin);
+        Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);   // let a queued focus run, if one was queued
+        Check("the box is never given the keyboard in a scripted run", box is { IsVisible: true } && !box.IsKeyboardFocusWithin && !ReferenceEquals(Keyboard.FocusedElement, box));
         Check("the control map labels the box textbox:rampBpm", box is not null && LabelFor(box) == "textbox:rampBpm");
         if (box is null) { notes.Add("the ramp's tempo box was not found, so typing a tempo is untested"); return; }
+
+        // The second press of a double-click there, the lane's usual play gesture, leaves the box open.
+        var again = At(Lane(), 45);
+        _scriptedWindowPoint = again;
+        WindowPress(MouseButton.Left, Lane(), clickCount: 2);
+        LaneDown(Lane(), again, 2);
+        LaneUp(Lane());
+        _scriptedWindowPoint = null;
+        Check("the second press of a double-click leaves the tempo box open and places no ramp", box.Visibility == Visibility.Visible && Track().Model.Ramps.Count == 0);
+        var right = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = PreviewMouseRightButtonDownEvent };
+        box.RaiseEvent(right);
+        Check("a right-click inside the tempo box, for its own Cut, Copy and Paste, leaves the typing open", box.Visibility == Visibility.Visible && _vm.RampEntryOpen);
 
         string to1 = (from + 4.5).ToString("0.0", inv);
         double v1 = double.Parse(to1, inv) / bpm;
@@ -2290,13 +2335,14 @@ public partial class MainWindow : Window
         _scriptedWindowPoint = midway;
         LaneMove(lane, midway, true);
         _vm.ToggleRampModeCommand.Execute(null);
-        bool stayedOn = _vm.RampMode;
+        _vm.ToggleLoopModeCommand.Execute(null);
+        bool stayedOn = _vm.RampMode && !_vm.LoopMode;
         _scriptedWindowPoint = to;
         LaneMove(lane, to, true);
         LaneUp(lane);
         _scriptedWindowPoint = null;
         _scriptedModifiers = null;
-        Check("Ctrl+R waits while a ramp's dot is held", stayedOn);
+        Check("Ctrl+R and Ctrl+L wait while a ramp's dot is held", stayedOn);
         Check("dragging the end dot to 50 s moves only the end", m.Ramps.Count == 1 && m.Ramps[0].EndSeconds == OnFrame(50) && m.Ramps[0].StartSeconds == OnFrame(30));
 
         // --- clicking the end dot retypes its tempo ---
@@ -2304,11 +2350,19 @@ public partial class MainWindow : Window
         UpdateLayout();
         box = RampBpmBoxOf(Track())!;
         Check($"clicking the end dot opens the box with {to1}", box.Visibility == Visibility.Visible && box.Text == to1 && _vm.RampEntryOpen);
-        string to2 = (from + 6).ToString("0.0", inv);
+        string to2 = (from + 6.03).ToString("0.00", inv);
         double v2 = double.Parse(to2, inv) / bpm;
         box.Text = to2;
         OnRampBpmKeyDown(box, Press(Key.Enter));
         Check($"typing {to2} and Enter changes only the end tempo", m.Ramps.Count == 1 && m.Ramps[0].ToSpeed == v2 && m.Ramps[0].EndSeconds == OnFrame(50));
+
+        // The box shows it rounded; opened only to look and clicked away from, it keeps it exactly.
+        Click(Lane(), At(Lane(), 50));
+        UpdateLayout();
+        string shown = RampBpmBoxOf(Track())!.Text;
+        Click(Lane(), At(Lane(), 10));
+        Check($"opening the box only to look ('{shown}'), then clicking away, keeps {to2} exactly",
+              shown == (bpm * v2).ToString("0.0", inv) && m.Ramps[0].ToSpeed == v2 && !Track().IsTypingRampBpm && _vm.Status.Contains("Kept"));
 
         Click(Lane(), At(Lane(), 50));
         UpdateLayout();
@@ -2359,6 +2413,21 @@ public partial class MainWindow : Window
         var items = RemoveItems(lane);
         Check("the right-click menu offers Remove tempo ramp over a ramp, and not elsewhere",
               hiddenAway && items.Count == 2 && items.All(i => i.Visibility == Visibility.Visible));
+
+        // A right-press while a dot is held does not look under the pointer — and must not leave the
+        // ramp from the right-click before it on offer, by an index that may now be another ramp.
+        var dotPress = At(lane, 30);
+        _scriptedWindowPoint = dotPress;
+        LaneDown(lane, dotPress);
+        LaneRightDown(lane, At(lane, 5));
+        PrepareLaneMenu(lane);
+        bool staleHidden = RemoveItems(lane).All(i => i.Visibility == Visibility.Collapsed);
+        LaneUp(lane);
+        _scriptedWindowPoint = null;
+        Check("a right-click while a ramp's dot is held offers no Remove tempo ramp left over from an earlier right-click", staleHidden);
+        LaneRightDown(lane, At(lane, 40));
+        PrepareLaneMenu(lane);
+        items = RemoveItems(lane);
         if (items.OfType<MenuItem>().FirstOrDefault() is { } remove)
         {
             OnRemoveRampMenu(remove, new RoutedEventArgs());
@@ -3577,6 +3646,9 @@ public partial class MainWindow : Window
     /// <summary>The knob whose value is being typed, or null.</summary>
     private Controls.Knob? _editingKnob;
 
+    /// <summary>What the box opened with. Left as it is, nothing is set: the value it rounds stays exact.</summary>
+    private string _knobOpenedWith = "";
+
     private void OnKnobEditRequested(object sender, RoutedEventArgs e)
     {
         if (e.OriginalSource is Controls.Knob k) BeginKnobEdit(k);
@@ -3599,7 +3671,7 @@ public partial class MainWindow : Window
         KnobValueBox.Width = width;
         Canvas.SetLeft(KnobValueBox, at.X + (k.ActualWidth - width) / 2);
         Canvas.SetTop(KnobValueBox, at.Y - KnobValueBox.Height);
-        KnobValueBox.Text = k.EditText();
+        KnobValueBox.Text = _knobOpenedWith = k.EditText();
         KnobValueBox.Visibility = Visibility.Visible;
         string how = k.EditUnit switch
         {
@@ -3618,7 +3690,10 @@ public partial class MainWindow : Window
     private bool CommitKnobEdit(string? text)
     {
         if (_editingKnob is not { } k) return false;
-        if (k.DataContext is TrackViewModel t && !_vm.Tracks.Contains(t)) { CloseKnobEdit(); return false; }   // its track was rebuilt
+        if (k.DataContext is not TrackViewModel t || !_vm.Tracks.Contains(t) || PresentationSource.FromVisual(k) is null) { CloseKnobEdit(); return false; }   // its row was rebuilt
+        // Opened only to read it: nothing changes, so a value off the box's rounding — after Match
+        // BPM, say — stays exactly what it was, and no undo step is made.
+        if ((text ?? "").Trim() == _knobOpenedWith) { CancelKnobEdit(); return true; }
         var (ok, value, why) = k.ParseTyped(text);
         if (!ok) { _vm.Status = why; return false; }
         CloseKnobEdit();
@@ -3710,7 +3785,7 @@ public partial class MainWindow : Window
         // A press anywhere but in a ramp's BPM box keeps the tempo typed there, if the track can
         // reach it, and is used up doing so: it does not also start a new ramp.
         _pressEndedRampEntry = false;
-        if (_vm.RampEntryOpen && !IsInRampBox(pressedOn))
+        if (_vm.RampEntryOpen && !IsInRampBox(pressedOn) && clickCount < 2)
         {
             _vm.FinishRampEntry(applyIfValid: true);
             _pressEndedRampEntry = true;
@@ -3949,7 +4024,9 @@ public partial class MainWindow : Window
         if (lane.DataContext is not TrackViewModel vm) return false;
 
         _vm.SelectedTrack = vm;
-        if (_vm.RampMode) { _clickMemo = null; return RampDown(lane, vm, window); }
+        // In ramp mode a double-click's second press does nothing: its first press already put a
+        // point down, and may have opened the box it would otherwise close straight away.
+        if (_vm.RampMode) { _clickMemo = null; return clickCount >= 2 || RampDown(lane, vm, window); }
         double x = LaneX(lane, window);
         var memo = _clickMemo;
         _clickMemo = null;
@@ -4186,10 +4263,17 @@ public partial class MainWindow : Window
     /// menu acts on what was clicked — "Paste at playhead" included, which pastes onto the
     /// selected track.
     /// </summary>
-    private void OnLaneRightButtonDown(object sender, MouseButtonEventArgs e) => LaneRightDown((FrameworkElement)sender, WindowPoint(e));
+    private void OnLaneRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        // A right-click in a ramp's tempo box is for the box's own Cut, Copy and Paste: it must not
+        // take the keyboard away from it, which would finish the typing.
+        if (IsInRampBox(e.OriginalSource as DependencyObject)) return;
+        LaneRightDown((FrameworkElement)sender, WindowPoint(e));
+    }
 
     private void LaneRightDown(FrameworkElement lane, Point window)
     {
+        _rampUnderMenu = null;                       // never one from an earlier right-click
         if (lane.DataContext is not TrackViewModel vm) return;
 
         // The left button is still holding a box or a section: a right-press — the start of a pan,
@@ -4199,7 +4283,7 @@ public partial class MainWindow : Window
         _vm.SelectedTrack = vm;
         double x = LaneX(lane, window);
         int under = Benchmix.Core.TempoRamps.IndexUnder(vm.Model, SecondsAtLaneX(x), 4 / Math.Max(0.01, _vm.PixelsPerSecond));
-        _rampUnderMenu = under >= 0 ? (vm, under) : null;
+        _rampUnderMenu = under >= 0 ? (vm, vm.Model.Ramps[under]) : null;
         var clip = ClipAtLaneX(vm, x);
 
         // Right-clicking one of several selected sections keeps the selection, so the menu's
@@ -4224,7 +4308,12 @@ public partial class MainWindow : Window
 
     private void OnRemoveRampMenu(object sender, RoutedEventArgs e)
     {
-        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t && _rampUnderMenu is { } r && ReferenceEquals(r.Track, t)) _vm.RemoveRamp(t, r.Index);
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t && _rampUnderMenu is { } r && ReferenceEquals(r.Track, t))
+        {
+            int i = t.Model.Ramps.IndexOf(r.Ramp);     // the ramp right-clicked, wherever it now sorts
+            if (i >= 0) _vm.RemoveRamp(t, i);
+            else _vm.Status = "That tempo ramp is no longer there.";
+        }
         else _vm.Status = "Right-click on a tempo ramp to remove it.";
     }
 
@@ -4234,7 +4323,7 @@ public partial class MainWindow : Window
     private (TrackViewModel Track, int Index, bool End, double Seconds)? _rampGrab;
     private bool _rampDragging;
     private Point _rampGrabOrigin;
-    private (TrackViewModel Track, int Index)? _rampUnderMenu;
+    private (TrackViewModel Track, Benchmix.Core.Model.TempoRamp Ramp)? _rampUnderMenu;
 
     /// <summary>Set by <see cref="WindowPress"/>: that press kept the tempo being typed, and does nothing else.</summary>
     private bool _pressEndedRampEntry;
@@ -4573,8 +4662,12 @@ public partial class MainWindow : Window
         }
         if (!overRuler) return false;
 
+        // From where the playhead is going: while playing, a seek can still be waiting for the audio
+        // thread, and a tick can put the old position on screen meanwhile. Turned fast, notches built
+        // on that would be lost.
         double notches = delta / (double)Mouse.MouseWheelDeltaForOneLine;
-        double to = _vm.PositionSeconds + notches * ScrubPixelsPerNotch / Math.Max(0.01, _vm.PixelsPerSecond);
+        double here = _vm.Session.Graph.TargetPositionFrames / (double)_vm.Session.SampleRate;
+        double to = here + notches * ScrubPixelsPerNotch / Math.Max(0.01, _vm.PixelsPerSecond);
         if (_vm.TotalSeconds > 0) to = Math.Min(to, _vm.TotalSeconds);
         to = Math.Max(0, to);
         _vm.SeekTo(to);

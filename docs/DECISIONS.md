@@ -539,3 +539,18 @@ whatever level of granularity you recommend."*
 | **Enter keeps it, Esc keeps the old value, clicking elsewhere keeps what was typed** if the knob can take it; leaving the app does not. Each typed value is one undo step. | As the name and ramp boxes behave. |
 | **With LINK on, PITCH cannot be typed**, and the status bar says why. | Under LINK the pitch follows TEMPO. |
 | **One box for every knob, in the window itself**, not a popup; a scripted run never gives it the keyboard. | A popup is a window of its own, which a verification run would put on his screen. |
+
+## 2026-10-12 — from the review of everything after tempo ramps part 1
+
+He asked for a review only when he says so (2026-10-12: *"cue me when it's time to begin it and ask
+my approval"*), and said *"review"*. Decisions taken in fixing what it found:
+
+| Decision | Why |
+| --- | --- |
+| **A box opened only to look changes nothing.** A knob's box, or a ramp's tempo box, left as it was filled in, keeps the exact value behind the rounded number it shows — and makes no undo step. A new ramp whose box is left as filled in ends at exactly the tempo it starts at. | Otherwise a look at TEMPO after Match BPM wrote back −8.82% for −8.8235% (about 7 ms of drift in three minutes), and an untouched ramp ended 0.04 BPM off and held it for the rest of the song. |
+| **In ramp mode the second press of a double-click does nothing.** | It used to close the tempo box the first press had just opened, placing the ramp at its pre-filled tempo. |
+| **A ramp clicked right to left is snapped for the ends it becomes**: the later click as the start, the first as the end. | An end must not snap to its own track's sections, which move once the ramp changes the tempo. |
+| **Ctrl+L, like Ctrl+R, waits while a ramp's dot is held.** A right-click inside the ramp's box is the box's own. A right-click offers *Remove tempo ramp* only for the ramp under it now. | As already decided for held sections; the old index could name another ramp. |
+| **A press on a knob's number turns it only after 4 px of movement.** | It is usually the first click of a double-click to type; a twitch then changed the value the box opened with. |
+| **A knob's box closes when the rows are rebuilt** (New, Open, undo). | It was left floating over a knob that no longer existed. |
+| **The wheel over the ruler counts from where the playhead is going**, not where the last screen refresh saw it. | While playing, a seek can still be waiting for the audio thread; turned fast, notches were lost. |

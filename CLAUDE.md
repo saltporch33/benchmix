@@ -48,6 +48,10 @@ mistakes, not by describing the project.
   under a ramp changes the tempo it plays at. A ramp stores only its end speed: the start is
   whatever is in effect there, so the tempo cannot jump. Never multiply or divide by `Speed` to
   place anything on a track that may have ramps — ask `TimelineEditor` or the map.
+- **A box opened only to look changes nothing.** A knob's box or a ramp's tempo box shows the value
+  rounded (−8.82%, 99.0 BPM); left as it was filled in and closed, the exact value behind it stays
+  — no rounding written back, no undo step. Do not "simplify" that to committing what the box shows:
+  after Match BPM it drifted the deck about 7 ms in three minutes (review, 2026-10-12).
 - **A track with any tempo ramp goes through the stretcher for its whole length**, even where it
   plays at 1.0, so it is not bit-identical anywhere. That is deliberate: dropping in and out of the
   stretcher would restart it, and its delay, mid-song.
@@ -103,7 +107,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so does a track through a tempo ramp (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value — 214 checks |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value — 221 checks |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, and the box for typing a knob's value |
