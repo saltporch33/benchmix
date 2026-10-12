@@ -22,6 +22,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   double-time readings first.
 - **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
   110 to 115 BPM while it mixes into the next.
+- **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
+  the keys you already use act on exactly that part, wherever its ends fall.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
 - **Render** to 16/24-bit or 32-bit float WAV, with a safety limiter.
 
@@ -66,11 +68,14 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
 | <kbd>Ctrl</kbd>+<kbd>J</kbd>, or right-click → *Join sections* | join pieces of a song back into one: the selected ones, or the one you clicked and the piece next to it. Any gap between them — where you took a piece out — is the song again |
-| <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section |
+| <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section — or, in mark mode, the marked stretch |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
-| <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section straight after itself |
+| <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section — or, in mark mode, the marked stretch — straight after itself |
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
 | <kbd>Ctrl</kbd>+<kbd>R</kbd> | ramp mode on / off |
+| <kbd>Ctrl</kbd>+<kbd>M</kbd> | mark mode on / off |
+| in mark mode: drag across a track | mark that stretch of it; drag either end of the mark to move it |
+| in mark mode: click / <kbd>Shift</kbd>+click a track | put the playhead there / mark from the playhead to there |
 | in ramp mode: click a track, then click it again further along | start and end a tempo ramp, then type the tempo to reach (<kbd>Enter</kbd> keeps it, <kbd>Esc</kbd> cancels) |
 | in ramp mode: drag a ramp's dot / click its end dot | move that end / change the tempo it reaches |
 | right-click on a tempo ramp → *Remove tempo ramp* | take it away; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts it back |
@@ -81,7 +86,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+click a section | add it to the selection, or take it out again |
 | <kbd>Shift</kbd>+click a section | select every section between the section you clicked before and this one |
 | drag across empty space (a gap, an empty track, or under the tracks) | draw a box: every section it touches is selected, as on the Windows desktop. <kbd>Ctrl</kbd> or <kbd>Shift</kbd> held as you start adds to what is selected |
-| <kbd>Delete</kbd> | delete the selected sections, leaving the gaps (not while typing in a text box) |
+| <kbd>Delete</kbd> | delete the selected sections — or, in mark mode, what is in the marked stretch — leaving the gaps (not while typing in a text box) |
 | drag a track's name (or its ≡) up or down | move the track; a blue line shows where it will land |
 | double-click a track's name, or right-click its strip → *Rename track* | rename it: type, then <kbd>Enter</kbd> keeps it (so does clicking anywhere else), <kbd>Esc</kbd> keeps the old name |
 
@@ -95,7 +100,8 @@ takes every section it **touches**, even partly, on every track it covers — bu
 screen, as it does not scroll the view. <kbd>Delete</kbd> removes the whole
 selection in one undo step and leaves the gaps. Dragging any one of them moves them all; a click on
 one without dragging keeps just that one. Cut, copy and repeat act on one section: the one you
-clicked last. Every button, knob and slider explains itself in a tooltip.
+clicked last. To cut or copy part of a track, or several sections and the gaps between them, mark
+it (below). Every button, knob and slider explains itself in a tooltip.
 
 **Loop mode.** Click a section, press *LOOP MODE* (or <kbd>Ctrl</kbd>+<kbd>L</kbd>), then drag
 either of its ends: instead of trimming, the section repeats to fill the space, in whole repeats.
@@ -120,6 +126,25 @@ end dot to type a new tempo. Holding <kbd>Ctrl</kbd> while you click or drag sto
 to nearby edges. Each track's ramps are its own; *TEMPO* is the tempo before the first ramp,
 *Reset* removes the ramps, and each change is one <kbd>Ctrl</kbd>+<kbd>Z</kbd>. While ramp mode is
 on, clicks place dots instead of selecting or moving sections; turn it off to edit sections again.
+
+**Mark mode.** To copy, cut, delete or repeat part of a track without splitting it first:
+
+1. Press *MARK MODE* (or <kbd>Ctrl</kbd>+<kbd>M</kbd>).
+2. Drag across a track from where the part starts to where it ends. It lights up, with its length
+   at its top left. The ends snap to the edges of sections on any track and to the playhead; hold
+   <kbd>Ctrl</kbd> to place them exactly. Drag either end of the mark to move it. Or click where it
+   should start and <kbd>Shift</kbd>+click where it should end.
+3. <kbd>Ctrl</kbd>+<kbd>C</kbd> copies it, <kbd>Ctrl</kbd>+<kbd>X</kbd> cuts it, <kbd>Delete</kbd>
+   removes it and <kbd>Ctrl</kbd>+<kbd>D</kbd> repeats it straight after itself. Cut and Delete
+   leave a gap, as always.
+4. To paste: click a track where it should go — in mark mode a click puts the playhead there — and
+   press <kbd>Ctrl</kbd>+<kbd>V</kbd>. The mark moves onto what was pasted.
+
+A mark can start or end anywhere: in the middle of a section, across several, or in a gap. What is
+copied is the whole stretch, gaps included, and pasting it covers the whole stretch it lands on —
+a gap in it clears what was under it. While mark mode is on, a drag never moves a section, and a
+double-click still plays. The mark is one stretch on one track; it goes when mark mode is turned
+off, and an undo leaves it where it is. Mark mode, loop mode and ramp mode are never on together.
 
 **Empty tracks.** *+ Empty track* makes a track with nothing on it. Paste or drag a section onto it
 and it takes on the tempo and pitch that section was playing at, so it sounds and lands exactly as
@@ -220,7 +245,7 @@ benchmix mashup <bed> <topper> <out.wav> [opts]  tempo-match and render
 | `Benchmix.Engine` | audio and analysis. No UI types. Clips, stretch, EQ, mixer, render, tempo/key detection. |
 | `Benchmix.Core` | the project model, its file format, undo, and the bridge that keeps the live graph matching the model. |
 | `Benchmix.App` | WPF shell — timeline, waveforms, knobs, transport. |
-| `Benchmix.Tests` | 190 tests, engine-level and model-level, plus end-to-end on real files. |
+| `Benchmix.Tests` | 331 tests, engine-level and model-level, plus end-to-end on real files. |
 
 The signal chain per track is `clip → stretch → EQ → clip envelope → gain/pan → mix`, and **live preview and the
 final render are the same chain** — the renderer just pulls blocks as fast as the CPU allows

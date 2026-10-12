@@ -21,7 +21,9 @@ mistakes, not by describing the project.
   (`VoiceClip.JoinsSeamlesslyTo`) and it is load-bearing — it is why hand-built loops do not tick.
   It rests on an **exact** equality between one section's `SourceEnd` and the next one's
   `SourceStart`. Do not "improve" it with a tolerance: that would start suppressing declicks
-  between sections the user meant to be separate.
+  between sections the user meant to be separate. ("Not one sample" is exact at 100% speed. Through
+  the stretcher a split can move samples by up to 7e-6, −103 dB — measured 2026-10-12 at 90–92% —
+  because the stretcher is then fed in different blocks; the split is still a seam, with no declick.)
 - **Neither side of a butt join gets a declick.** Two abutting 5 ms ramps do not sum to unity —
   they punch a hole at every loop repeat. The join is covered by a crossfade from the outgoing
   section's handle, rendered through the real stretcher and EQ at the join (`CaptureHandle`), on
@@ -32,6 +34,10 @@ mistakes, not by describing the project.
   the drag gestures never add seconds together to place a section: the engine rounds each position
   separately, and a sum of seconds can land a frame off — which silently turns a seam or a butt join
   into a gap with two declicks. Keep new placement code in frames.
+- **While a stretch is marked, Ctrl+C, Ctrl+X, Delete and Ctrl+D act on it, not on the selected
+  sections** (MARK MODE, 2026-10-12), and the lane menu's items say so. **A pasted stretch covers the
+  whole of itself, gaps included**: a gap in it clears what was under it. Both on purpose
+  (`docs/DECISIONS.md`). The mark is kept in the track's own frames and is not part of the project.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.
@@ -80,6 +86,8 @@ mistakes, not by describing the project.
   backwards. Every seam test is about splitting and *not* moving. They do not cover loops.
 - A **ramp** in a test is a source signal whose value is its own position. A **tempo ramp** is a
   change of tempo over time. The tempo-ramp tests use both.
+- A **stretch** (a marked stretch) is a span of one track marked in MARK MODE. The **stretcher** is
+  the time-stretch engine (Signalsmith). `MarkedStretchTests` is about the first.
 
 ## How to prove a change
 
@@ -107,10 +115,10 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so does a track through a tempo ramp (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value — 221 checks |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo) — 244 checks |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
-| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, and the box for typing a knob's value |
+| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, and a marked stretch |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), and a scroll-wheel click lands back on the frame play started from |

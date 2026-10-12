@@ -36,6 +36,7 @@
         <KeyBinding Key="T" Modifiers="Ctrl" Command="{Binding AddEmptyTrackCommand}"/>
         <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding ToggleLoopModeCommand}"/>
         <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding ToggleRampModeCommand}"/>
+        <KeyBinding Key="M" Modifiers="Ctrl" Command="{Binding ToggleMarkModeCommand}"/>
         <KeyBinding Key="J" Modifiers="Ctrl" Command="{Binding JoinSectionsCommand}"/>
     </Window.InputBindings>
 
@@ -75,6 +76,10 @@
                               VerticalAlignment="Center"
                               IsChecked="{Binding RampMode, Mode=TwoWay}"
                               ToolTip="While on, click a track twice to change its tempo gradually between the two points (Ctrl+R): the first click starts at the tempo it is playing, at the second you type the tempo to reach. Drag a dot to move it, click the end dot to change its tempo, right-click the line to remove it. Sections stay put while it is on."/>
+                <ToggleButton Content="MARK MODE" Style="{StaticResource PillToggle}" Margin="6,0,0,0" Padding="0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding MarkMode, Mode=TwoWay}"
+                              ToolTip="While on, drag across a track to mark a stretch of it (Ctrl+M). Ctrl+C copies the marked stretch, Ctrl+X cuts it, Delete removes it and Ctrl+D repeats it; drag either end of the mark to move it. A click puts the playhead there, so Ctrl+V pastes there; Shift+click marks from the playhead. Sections stay put while it is on."/>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"
                             ToolTip="Zoom so the whole mix fits the window (Ctrl+0)."/>
@@ -390,12 +395,13 @@
                                                 <Separator/>
                                                 <MenuItem Header="Split at playhead"      Click="OnSplitHere"      InputGestureText="Ctrl+I"/>
                                                 <MenuItem Header="Join sections"          Click="OnJoinSections"   InputGestureText="Ctrl+J"/>
-                                                <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D"/>
+                                                <MenuItem Header="Repeat this section"    Click="OnDuplicateSection" InputGestureText="Ctrl+D" Tag="repeat"/>
                                                 <Separator/>
-                                                <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X"/>
-                                                <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C"/>
+                                                <!-- Tagged: with a stretch marked they act on it, and say so (PrepareLaneMenu). -->
+                                                <MenuItem Header="Cut section"            Click="OnCutSection"     InputGestureText="Ctrl+X" Tag="cut"/>
+                                                <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C" Tag="copy"/>
                                                 <MenuItem Header="Paste at playhead"      Click="OnPasteSection"   InputGestureText="Ctrl+V"/>
-                                                <MenuItem Header="Delete section"         Click="OnDeleteSection"/>
+                                                <MenuItem Header="Delete section"         Click="OnDeleteSection"  Tag="delete"/>
                                                 <Separator/>
                                                 <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
                                                 <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
@@ -419,6 +425,7 @@
                                                 ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 Ramps="{Binding RampVisuals}"
+                                                Mark="{Binding MarkVisual}"
                                                 IsMuted="{Binding Muted}"
                                                 WaveBrush="{Binding ColorBrush}"
                                                 ClipBackground="{Binding ClipBackground}"/>

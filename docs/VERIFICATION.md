@@ -777,6 +777,48 @@ Not checked by a test, and said so: the right-to-left snapping, the knob's 4 px 
 real mouse), and the fast-wheel notches (the offline engine seeks at once). **319 tests, 0 failed,
 0 skipped**; `scripts/verify-exe.ps1`: all eight runs passed and stayed out of the way.
 
+## 2026-10-12 — marking a stretch to copy, cut, delete or repeat
+
+**In the test project.** `MarkedStretchTests` (12), on a ramp source (value == position), renders
+checked against renders with `==`:
+- a stretch copied across a seam plays the very audio that was marked wherever it is pasted, the
+  seam inside it untouched (no guard around it);
+- cut and pasted straight back where it was, a stretch that starts inside one section, crosses a
+  seam and ends inside another changes **not one sample** over 30 s at 100% speed, and none under a
+  tempo ramp;
+- at 92% speed it equals the same song split at the stretch's two ends, exactly. Not against the
+  unsplit song: measured while writing it, **a plain split on a slowed track moves samples by up to
+  6.8e-6 at 90% and 2.3e-6 at 92% (about −103 dB)**, starting just after the split — the stretcher
+  is fed in different blocks. At 100% and at 110% the same splits change nothing. This predates
+  marking: Ctrl+I does it too. The split is still a seam (no declick);
+- a stretch with a gap in it pastes the gap too and clears what was under it;
+- delete leaves silence in the stretch and moves nothing outside it; repeat lands on the very frame
+  the stretch ends; a stretch ending in a gap repeats every stretch-length;
+- a section's own fade is kept and the side a stretch cuts has none; a stretch wholly in a gap has
+  nothing to copy, and deleting it changes nothing;
+- a mark's end snaps to the exact frame of an edge on its own track (at 90% speed, where that edge
+  is not on a whole frame of the timeline), and to the playhead when that is nearer.
+
+**Broken on purpose** — the copied piece's start moved one frame later — 6 of the 12 failed, then
+passed again once put back. **331 tests, 0 failed, 0 skipped.**
+
+**In the real window.** `--gesturetest` grew from 221 to **244 checks**, through the MARK MODE toggle's
+own automation peer, the lane's own press, move and release handlers, the window's key handler and
+the commands the keys are bound to: Ctrl+M is bound; the mode is never on with loop or ramp mode; a
+drag marks the stretch where the pointer went, moves no section and lets go of the selection; the
+lane is handed the mark to draw; an end snaps to the exact frame of a section's edge, and Ctrl lets
+go; dragging an end moves only that end; a click puts the playhead there and keeps the mark; the lane
+menu names the marked stretch; Ctrl+C copies across a seam; a click on an empty track and Ctrl+V
+lands it at that frame with the seam intact and moves the mark onto it; Ctrl+X takes it out and one
+undo puts it back, mark and all; Shift+click marks from the playhead; Delete, Ctrl+X and Ctrl+D wait
+while the mouse is held; Delete removes exactly the stretch; Ctrl+D repeats on the frame it ends and
+the mark walks onto the repeat; a double-click plays; turning the mode off takes the mark away and
+the menu goes back to sections. `--demoediting` draws a mark on the song from 0:29 to 0:33; looked at,
+it is the lit band with a bar at each end and "4.00 s" at its top left. `scripts/verify-exe.ps1`:
+all eight runs passed and stayed out of the way (gesturetest 244, buttontest 41).
+
+**Not verified:** marking with a real mouse, and how the band reads on his screen.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

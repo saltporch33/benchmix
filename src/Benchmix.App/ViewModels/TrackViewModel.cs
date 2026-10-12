@@ -114,11 +114,56 @@ public sealed partial class TrackViewModel : ObservableObject
             TrackStartSeconds: c.TrackStartSeconds)).ToArray();
 
         OnPropertyChanged(nameof(ClipVisuals));
+        NotifyMarkChanged();                                    // a turn of TEMPO moves the audio a mark covers
         NotifyRampsChanged();                                   // a turn of TEMPO changes where the first ramp starts from
         OnPropertyChanged(nameof(TimelineDurationSeconds));
         OnPropertyChanged(nameof(TimelineEndSeconds));
         OnPropertyChanged(nameof(TrimText));
         OnPropertyChanged(nameof(IsEmpty));
+    }
+
+    // ---- a marked stretch (Daniel, 2026-10-12) ----
+
+    /// <summary>
+    /// The stretch marked on this track in MARK MODE, in its own frames, [Start, End); null when
+    /// there is none. In frames, like the sections, so it stays on the audio it covers when TEMPO
+    /// turns. Only one track has one at a time; the main view-model sees to that.
+    /// </summary>
+    public (long Start, long End)? Mark { get; private set; }
+
+    /// <summary>The track's origin when <see cref="Mark"/> was last worked out.</summary>
+    public double MarkOrigin { get; private set; }
+
+    /// <summary>What the lane draws for the mark: where it starts and ends on the timeline.</summary>
+    public Controls.MarkVisual? MarkVisual { get; private set; }
+
+    /// <summary>Marks a stretch of this track, or with null takes the mark away.</summary>
+    public void SetMark((long Start, long End)? span) => RestoreMark(span, Model.TimelineOffsetSeconds);
+
+    /// <summary>Puts back a mark as it was worked out against an origin, after undo rebuilt the rows.</summary>
+    public void RestoreMark((long Start, long End)? span, double origin)
+    {
+        Mark = span;
+        MarkOrigin = origin;
+        NotifyMarkChanged();
+    }
+
+    private void NotifyMarkChanged()
+    {
+        // Something put before the track's origin moves the origin back and every frame on the
+        // track forward by as much, so that nothing is heard to move (TimelineEditor.ShiftOrigin).
+        // The mark moves with the frames, or it would slide off the audio it was put on.
+        if (Mark is { } m && Model.TimelineOffsetSeconds != MarkOrigin)
+        {
+            long shift = TimelineEditor.TrackFrameAt(Model, MarkOrigin, _session);
+            Mark = (m.Start + shift, m.End + shift);
+            MarkOrigin = Model.TimelineOffsetSeconds;
+        }
+        MarkVisual = Mark is { } k
+            ? new Controls.MarkVisual(TimelineEditor.TimelineSecondsOfFrame(Model, k.Start, _session),
+                                      TimelineEditor.TimelineSecondsOfFrame(Model, k.End, _session))
+            : null;
+        OnPropertyChanged(nameof(MarkVisual));
     }
 
     // ---- tempo ramps (Daniel, 2026-10-11) ----

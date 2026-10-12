@@ -841,6 +841,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var keepTrack = SelectedTrack?.Id;
         var keepClip = SelectedClip?.Id;
         var keepSelected = SelectedClips.Select(c => c.Id).ToHashSet();
+        // The mark is not part of the project, so an undo leaves it where it is — on the same audio,
+        // should the step undone have moved the track's origin.
+        (Guid Id, (long Start, long End) Span, double Origin)? keepMark =
+            MarkedTrack is { Mark: { } span } marked ? (marked.Id, span, marked.MarkOrigin) : null;
 
         // Undo changes the edit, not where you are listening: the playhead and the listening loop
         // stay as they are. Reloading rewinds to 0:00, so until 2026-10-03 every Ctrl+Z sent the
@@ -869,6 +873,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SelectClip(Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == keepClip));
             foreach (var c in Tracks.SelectMany(t => t.Clips))
                 if (keepSelected.Contains(c.Id)) c.IsSelected = true;      // the rest of a multi-selection
+            if (keepMark is { } km && MarkMode)
+                Tracks.FirstOrDefault(t => t.Id == km.Id)?.RestoreMark(km.Span, km.Origin);
             foreach (var t in Tracks) t.NotifyClipsChanged();
             ProjectBpm = project.ProjectBpm;
             MasterGain = project.MasterGain;
@@ -882,19 +888,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     // ---------------- sections: split, cut, copy, paste ----------------
 
     /// <summary>
-    /// The section commands all act on one selected section, not on a time range.
+    /// The section commands act on one selected section — or, in MARK MODE, on the stretch marked
+    /// on a track (Daniel, 2026-10-12), which wins while there is one.
     ///
     /// <para>
-    /// A time range would have meant reusing the loop region, which is a <i>transport</i> gesture —
-    /// shift-dragging the ruler to audition a passage would then also be arming a destructive one.
-    /// Selecting the block you can already see and click is both smaller to learn and impossible
-    /// to trigger by accident, and it costs one extra keystroke: split at each end, click the
-    /// middle, then repeat.
+    /// Never on the listening loop, which is a <i>transport</i> gesture: shift-dragging the ruler to
+    /// audition a passage must not also be arming a destructive one. A mark is made only in MARK
+    /// MODE, on one track, and goes when the mode does.
     /// </para>
     /// </summary>
     [ObservableProperty] private ClipViewModel? _selectedClip;
 
-    private ClipModel? _clipboard;
+    /// <summary>What Ctrl+V puts down: one section, or a marked stretch with the gaps in it.</summary>
+    private Piece? _clipboard;
 
     /// <summary>
     /// The track the clipboard's section was copied off, as it was then. Pasted onto an empty
@@ -918,10 +924,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>True when something has been copied and can be pasted.</summary>
     public bool HasClipboard => _clipboard is not null;
 
-    private void Remember(ClipViewModel clip)
+    private void Remember(ClipViewModel clip) => Remember(Piece.Of(clip.Model, Session), clip.Track);
+
+    private void Remember(Piece piece, TrackViewModel from)
     {
-        _clipboard = TimelineEditor.Copy(clip.Model);
-        _clipboardFrom = clip.Track.Model.Clone();
+        _clipboard = piece;
+        _clipboardFrom = from.Model.Clone();
         try { _clipboardSequenceAtCopy = GetClipboardSequenceNumber(); } catch { _clipboardSequenceAtCopy = 0; }
         OnPropertyChanged(nameof(HasClipboard));
     }
@@ -1052,6 +1060,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>Republishes a track after its sections changed, and reports what happened.</summary>
     private void AfterClipEdit(TrackViewModel track, EditResult result, ClipModel? select = null)
+        => AfterClipEdit(track, result, select is null ? Array.Empty<ClipModel>() : new[] { select });
+
+    /// <summary>The same, selecting several: the first is the one commands act on.</summary>
+    private void AfterClipEdit(TrackViewModel track, EditResult result, IReadOnlyList<ClipModel> select)
     {
         if (!result.Changed) { Status = result.Message; return; }
 
@@ -1061,8 +1073,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         RecomputeLength();
         MarkDirty();
 
-        var chosen = select is null ? null : track.Clips.FirstOrDefault(c => c.Id == select.Id);
+        var chosen = select.Count == 0 ? null : track.Clips.FirstOrDefault(c => c.Id == select[0].Id);
         SelectClip(chosen);
+        if (select.Count > 1)
+        {
+            var ids = select.Select(c => c.Id).ToHashSet();
+            foreach (var c in track.Clips) if (ids.Contains(c.Id)) c.IsSelected = true;
+            track.NotifyClipsChanged();
+        }
         Status = result.Message;
     }
 
@@ -1119,6 +1137,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private void CopyClip()
     {
+        if (MarkedTrack is { } marked) { CopyMark(marked, cut: false); return; }
         if (TargetClip() is not { } clip) { Status = "Click a section to copy it."; return; }
         Remember(clip);
         Status = $"Copied {clip.LengthSeconds:0.0}s. Click a track, then Ctrl+V drops it there at the playhead.";
@@ -1128,6 +1147,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void CutClip()
     {
         if (HeldUnderTheMouse()) return;
+        if (MarkedTrack is { } marked) { CopyMark(marked, cut: true); return; }
         if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
 
         Remember(clip);
@@ -1150,6 +1170,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_session is null) return false;
         if (HeldUnderTheMouse()) return false;
+        if (MarkedTrack is { } marked) return ClearMarkedStretch(marked);
 
         var selected = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
         if (selected.Count == 0)
@@ -1205,7 +1226,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         PushUndo($"{track.Name}: paste section");
         var result = TimelineEditor.Paste(track.Model, _clipboard, PositionSeconds, Session, _clipboardFrom);
-        AfterClipEdit(track, result with { Message = $"{track.Name}: {result.Message}" }, result.Clip);
+        result = result with { Message = $"{track.Name}: {result.Message}" };
+
+        // In MARK MODE the mark moves onto what landed, so it shows exactly what was put down and
+        // Ctrl+X takes it straight back out; otherwise what landed is selected, to drag as one.
+        if (MarkMode && result.Changed && result.Span is { } span)
+        {
+            AfterClipEdit(track, result);
+            SetMark(track, span.Start, span.End);
+            Status = result.Message;
+        }
+        else AfterClipEdit(track, result, result.Placed);
     }
 
     private static readonly string[] AudioExtensions =
@@ -1306,6 +1337,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void DuplicateClip()
     {
         if (_session is null || HeldUnderTheMouse()) return;
+        if (MarkedTrack is { } marked) { RepeatMark(marked); return; }
         if (TargetClip() is not { } clip) { Status = "Click a section to repeat it."; return; }
 
         var track = clip.Track;
@@ -1350,10 +1382,205 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnLoopModeChanged(bool value)
     {
-        if (value) RampMode = false;
+        if (value)
+        {
+            RampMode = false;
+            MarkMode = false;
+        }
         Status = value
             ? "Loop mode on: drag either end of a section to repeat it. Hold Ctrl for part of a repeat."
             : "Loop mode off: dragging the end of a section trims it again.";
+    }
+
+    // ---------------- marking a stretch (Daniel, 2026-10-12) ----------------
+    //
+    // His words: "visually demarcate a start and end point within a track and copy, or cut, and
+    // then paste that chunk elsewhere". What a stretch does to the project lives in Core
+    // (TimelineEditor.CopyStretch, ClearStretch, RepeatStretch and Paste); this is the glue, one
+    // undo step per edit. The mark itself is not part of the project: it is not saved and not undone.
+
+    /// <summary>
+    /// While on, a drag across a track marks a stretch of it instead of moving sections, and a click
+    /// puts the playhead there. Never on together with LOOP MODE or RAMP MODE: all three change
+    /// what a press in a lane does.
+    /// </summary>
+    [ObservableProperty] private bool _markMode;
+
+    [RelayCommand]
+    private void ToggleMarkMode()
+    {
+        if (HeldUnderTheMouse()) return;
+        MarkMode = !MarkMode;
+    }
+
+    partial void OnMarkModeChanged(bool value)
+    {
+        if (value)
+        {
+            LoopMode = false;
+            RampMode = false;
+            Status = "Mark mode on: drag across a track to mark a stretch of it. Then Ctrl+C copies it, Ctrl+X cuts it, Delete removes it and Ctrl+D repeats it; a click puts the playhead there for Ctrl+V (Ctrl+M turns it off).";
+            return;
+        }
+        _markDrag = null;
+        bool had = MarkedTrack is not null;
+        ClearMark();
+        SnapLineSeconds = null;
+        Status = had ? "Mark mode off, and the mark with it: clicking and dragging sections works again."
+                     : "Mark mode off: clicking and dragging sections works again.";
+    }
+
+    /// <summary>The track with a stretch marked on it, if any. There is only ever one.</summary>
+    public TrackViewModel? MarkedTrack => Tracks.FirstOrDefault(t => t.Mark is not null);
+
+    /// <summary>Marks a stretch of a track, in its own frames, either way round, taking any other mark away.</summary>
+    public void SetMark(TrackViewModel t, long a, long b)
+    {
+        foreach (var other in Tracks)
+            if (!ReferenceEquals(other, t) && other.Mark is not null) other.SetMark(null);
+        t.SetMark((Math.Min(a, b), Math.Max(a, b)));
+    }
+
+    public void ClearMark()
+    {
+        foreach (var t in Tracks)
+            if (t.Mark is not null) t.SetMark(null);
+    }
+
+    /// <summary>A stretch being marked, or one end of it being moved: the end that stays put, in the track's frames.</summary>
+    private sealed record MarkDragState(TrackViewModel Track, long Anchor);
+    private MarkDragState? _markDrag;
+
+    private long MinimumMarkFrames => Session.SecondsToFrames(TimelineEditor.MinimumSectionSeconds);
+
+    /// <summary>A stretch of a track as the status bar says it: where it starts and ends on the timeline, and how long that is.</summary>
+    private string Describe(TrackViewModel t, long start, long end)
+    {
+        double a = TimelineEditor.TimelineSecondsOfFrame(t.Model, start, Session);
+        double b = TimelineEditor.TimelineSecondsOfFrame(t.Model, end, Session);
+        return $"{b - a:0.00}s on {t.Name}, {a:0.00}s to {b:0.00}s";
+    }
+
+    /// <summary>
+    /// A press that has become a drag, in MARK MODE: a new stretch, from where it was pressed —
+    /// snapped to a section edge or the playhead nearby — to wherever the drag goes. The selected
+    /// sections are let go, so the mark is the one thing the section commands act on.
+    /// </summary>
+    public void BeginMark(TrackViewModel t, double pressedSeconds, bool free)
+    {
+        long anchor = TimelineEditor.SnapStretchEnd(t.Model, pressedSeconds, PositionSeconds, SnapFor(free), Session, out _);
+        _markDrag = new MarkDragState(t, anchor);
+        SelectClip(null);
+    }
+
+    /// <summary>Grabs one end of the marked stretch to move it; the other end stays where it is.</summary>
+    public void BeginMarkEdge(TrackViewModel t, bool startEnd)
+    {
+        if (t.Mark is not { } m) return;
+        _markDrag = new MarkDragState(t, startEnd ? m.End : m.Start);
+        SelectClip(null);
+    }
+
+    public void DragMarkTo(double seconds, bool free)
+    {
+        if (_markDrag is not { } d || !Tracks.Contains(d.Track)) return;
+        long at = TimelineEditor.SnapStretchEnd(d.Track.Model, seconds, PositionSeconds, SnapFor(free), Session, out var snapped);
+        SnapLineSeconds = snapped;
+        SetMark(d.Track, d.Anchor, at);
+        var m = d.Track.Mark!.Value;
+        Status = $"Marking {Describe(d.Track, m.Start, m.End)}{(snapped is null ? "" : " — on an edge")}";
+    }
+
+    /// <summary>The drag let go: a stretch too short to be meant is taken away again.</summary>
+    public void EndMarkDrag()
+    {
+        var d = _markDrag;
+        _markDrag = null;
+        SnapLineSeconds = null;
+        if (d is null || !Tracks.Contains(d.Track) || d.Track.Mark is not { } m) return;
+        if (m.End - m.Start < MinimumMarkFrames)
+        {
+            d.Track.SetMark(null);
+            Status = "That is too short to mark. Drag further along the track.";
+            return;
+        }
+        Status = $"Marked {Describe(d.Track, m.Start, m.End)}. Ctrl+C copies it, Ctrl+X cuts it, Delete removes it, Ctrl+D repeats it.";
+    }
+
+    /// <summary>A click in MARK MODE: the playhead goes there, ready for Ctrl+V on that track. The mark stays.</summary>
+    public void MarkModeClick(TrackViewModel t, double seconds)
+    {
+        SeekTo(seconds);
+        Status = $"Playhead at {PositionSeconds:0.00}s on {t.Name}{(HasClipboard ? " — Ctrl+V pastes there." : ".")}";
+    }
+
+    /// <summary>A Shift+click in MARK MODE: marks from the playhead to there, on that track.</summary>
+    public void MarkFromPlayhead(TrackViewModel t, double seconds, bool free)
+    {
+        long from = TimelineEditor.TrackFrameAt(t.Model, PositionSeconds, Session);
+        long to = TimelineEditor.SnapStretchEnd(t.Model, seconds, null, SnapFor(free), Session, out _);
+        if (Math.Abs(to - from) < MinimumMarkFrames)
+        {
+            Status = "That is where the playhead is. Shift+click further along to mark from the playhead to there.";
+            return;
+        }
+        SelectClip(null);
+        SetMark(t, from, to);
+        var m = t.Mark!.Value;
+        Status = $"Marked {Describe(t, m.Start, m.End)}. Ctrl+C copies it, Ctrl+X cuts it, Delete removes it, Ctrl+D repeats it.";
+    }
+
+    /// <summary>Ctrl+C or Ctrl+X with a stretch marked: what is in it goes on the clipboard, gaps and all; a cut leaves the gap.</summary>
+    private void CopyMark(TrackViewModel t, bool cut)
+    {
+        var (start, end) = t.Mark!.Value;
+        var piece = TimelineEditor.CopyStretch(t.Model, start, end, Session);
+        if (piece.Clips.Count == 0) { Status = $"There is nothing in the marked stretch to {(cut ? "cut" : "copy")}: it is all gap."; return; }
+
+        Remember(piece, t);
+        string what = Describe(t, start, end) + (piece.Clips.Count > 1 ? $" ({piece.Clips.Count} sections)" : "");
+        if (!cut)
+        {
+            Status = $"Copied {what}. Click where it should go, on any track, then Ctrl+V.";
+            return;
+        }
+        PushUndo($"{t.Name}: cut marked stretch");
+        var result = TimelineEditor.ClearStretch(t.Model, start, end, Session);
+        AfterClipEdit(t, result with { Message = $"Cut {what}. The gap is left as it is. Click where it should go, then Ctrl+V." });
+    }
+
+    /// <summary>Delete with a stretch marked: what is in it goes, leaving the gap. The mark stays on the gap.</summary>
+    private bool ClearMarkedStretch(TrackViewModel t)
+    {
+        var (start, end) = t.Mark!.Value;
+        if (TimelineEditor.CopyStretch(t.Model, start, end, Session).Clips.Count == 0)
+        {
+            Status = "There is nothing in the marked stretch to delete: it is all gap.";
+            return false;
+        }
+        PushUndo($"{t.Name}: delete marked stretch");
+        var result = TimelineEditor.ClearStretch(t.Model, start, end, Session);
+        AfterClipEdit(t, result with { Message = $"Removed {Describe(t, start, end)}. The gap is left as it is." });
+        return result.Changed;
+    }
+
+    /// <summary>
+    /// Ctrl+D with a stretch marked: a copy straight after it, and the mark moves onto the copy, so
+    /// pressing again adds another — as the repeat of a section becomes the selection.
+    /// </summary>
+    private void RepeatMark(TrackViewModel t)
+    {
+        var (start, end) = t.Mark!.Value;
+        if (TimelineEditor.CopyStretch(t.Model, start, end, Session).Clips.Count == 0)
+        {
+            Status = "There is nothing in the marked stretch to repeat: it is all gap.";
+            return;
+        }
+        PushUndo($"{t.Name}: repeat marked stretch");
+        var result = TimelineEditor.RepeatStretch(t.Model, start, end, Session);
+        AfterClipEdit(t, result);
+        if (result.Span is { } span) SetMark(t, span.Start, span.End);
+        if (result.Changed) Status = $"{t.Name}: {result.Message} The mark moved onto the repeat, so Ctrl+D again adds another.";
     }
 
     // ---------------- tempo ramps (Daniel, 2026-10-11) ----------------
@@ -1382,6 +1609,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (value)
         {
             LoopMode = false;
+            MarkMode = false;
             Status = "Ramp mode on: click a track where its tempo should start changing, then where the change should be complete, then type the tempo. Sections stay put while it is on (Ctrl+R turns it off).";
             return;
         }
@@ -1642,7 +1870,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// True while a section is being dragged. Removing a section then would leave the drag holding
     /// one that is no longer on the track, and its drop would clear what is under the ghost.
     /// </summary>
-    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null;
+    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null || _markDrag is not null;
     private TrackViewModel? _dragHome;
     private Guid _dragClipId;
 

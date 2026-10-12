@@ -180,6 +180,17 @@ public partial class MainWindow : Window
                 }
                 _vm.SnapLineSeconds = 38;                               // as a drag would show it
 
+                // A marked stretch on the song, 29 s to 33 s, between its two ramps. Put there directly:
+                // MARK MODE would turn LOOP MODE off, and the loop handles are in this picture too.
+                _vm.SetMark(song, Benchmix.Core.TimelineEditor.TrackFrameAt(song.Model, 29, _vm.Session),
+                                  Benchmix.Core.TimelineEditor.TrackFrameAt(song.Model, 33, _vm.Session));
+                if (song.MarkVisual is not { } mark || Math.Abs(mark.StartSeconds - 29) > 0.001 || Math.Abs(mark.EndSeconds - 33) > 0.001)
+                {
+                    App.Log("ui probe failed: the editing demo's marked stretch is not 29 s to 33 s on the song");
+                    EndVerificationRun(false);
+                    return;
+                }
+
                 // The box for typing a knob's value, open over the song's TEMPO number.
                 UpdateLayout();
                 if (StripOf(song) is { } strip && Descendants<Controls.Knob>(strip).FirstOrDefault(k => k.Label == "TEMPO") is { } knob)
@@ -754,6 +765,18 @@ public partial class MainWindow : Window
         {
             if (_rampGrab is { } held) LaneUp(LaneOf(held.Track) ?? this);
             _vm.RampMode = false;
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _scriptedFocus = null;
+        }
+
+        // --- marking a stretch ---
+        try { RunMarkGestures(Check, notes); }
+        finally
+        {
+            if (_markPress is { } held) LaneUp(LaneOf(held.Track) ?? this);
+            _vm.MarkMode = false;
+            _vm.StopCommand.Execute(null);
             _scriptedWindowPoint = null;
             _scriptedModifiers = null;
             _scriptedFocus = null;
@@ -2453,6 +2476,237 @@ public partial class MainWindow : Window
         Check("RAMP MODE turns off through its toggle and drops an unfinished ramp", pending && !_vm.RampMode && !_vm.RampPending && Track().RampVisuals.Count == 0);
     }
 
+    /// <summary>
+    /// Marking a stretch (Daniel, 2026-10-12) through the lane's own handlers, with a scripted pointer,
+    /// modifiers and focus: MARK MODE, a drag that marks, snapping, moving an end, a click that puts
+    /// the playhead there, Shift+click, and Ctrl+C, Ctrl+V, Ctrl+X, Delete and Ctrl+D on the mark —
+    /// one undo step each. Leaves the project as it found it.
+    /// </summary>
+    private void RunMarkGestures(Action<string, bool> Check, List<string> notes)
+    {
+        bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+M is bound to mark mode", Bound(Key.M, _vm.ToggleMarkModeCommand));
+
+        var toggle = Descendants<System.Windows.Controls.Primitives.ToggleButton>(this).FirstOrDefault(b => b.Content as string == "MARK MODE");
+        var source = PresentationSource.FromVisual(this);
+        UpdateLayout();
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Ramps.Count == 0 && t.Clips.Any(c => c.TimelineLengthSeconds > 30));
+        if (toggle is null || source is null || first is null || LaneOf(first) is not { ActualHeight: > 0 } lane0)
+        {
+            notes.Add("no MARK MODE toggle, or no laid-out track with a section over 30 s, so marking a stretch is untested in the window - pass a file to cover it");
+            return;
+        }
+        void Toggle()
+        {
+            bool was = _vm.MarkMode;
+            var peer = new System.Windows.Automation.Peers.ToggleButtonAutomationPeer(toggle);
+            ((System.Windows.Automation.Provider.IToggleProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Toggle)).Toggle();
+            PumpUntil(() => _vm.MarkMode != was);
+        }
+
+        var id = first.Id;
+        var s = _vm.Session;
+        int tracks = _vm.Tracks.Count, sections = first.Clips.Count;
+        TrackViewModel Song() => _vm.Tracks.First(t => t.Id == id);
+        FrameworkElement Lane() => LaneOf(Song())!;
+        long F(TrackViewModel t, double timeline) => Benchmix.Core.TimelineEditor.TrackFrameAt(t.Model, timeline, s);
+        bool Near(long a, long b) => Math.Abs(a - b) <= 1;          // a pointer lands to within a frame of where it was aimed
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+
+        var piece = Song().Clips.First(c => c.TimelineLengthSeconds > 30);
+        double p0 = piece.TimelineStartSeconds;
+        _vm.ScrollSeconds = p0;
+        _vm.PixelsPerSecond = Math.Min(20, Math.Max(4, (lane0.ActualWidth - 120) / 35));
+        double pps = _vm.PixelsPerSecond;
+        UpdateLayout();
+        Point At(FrameworkElement lane, double sec)
+        {
+            var o = lane.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (sec - _vm.ScrollSeconds) * pps, o.Y + lane.ActualHeight / 2);
+        }
+        void Drag(FrameworkElement lane, Point from, Point to, ModifierKeys mods)
+        {
+            _scriptedModifiers = mods;
+            _scriptedWindowPoint = from;
+            WindowPress(MouseButton.Left, lane);
+            LaneDown(lane, from);
+            var mid = new Point((from.X + to.X) / 2, from.Y);
+            _scriptedWindowPoint = mid;
+            LaneMove(lane, mid, true);
+            _scriptedWindowPoint = to;
+            LaneMove(lane, to, true);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+        void Click(FrameworkElement lane, Point p, ModifierKeys mods = ModifierKeys.None, int clickCount = 1)
+        {
+            _scriptedModifiers = mods;
+            _scriptedWindowPoint = p;
+            WindowPress(MouseButton.Left, lane, clickCount);
+            LaneDown(lane, p, clickCount);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+
+        // An edge to snap to inside the long section, 15 s in.
+        _vm.SelectedTrack = Song();
+        _vm.SeekTo(p0 + 15);
+        _vm.SplitAtPlayheadCommand.Execute(null);
+        long edge = Benchmix.Core.TimelineEditor.StartFrameOf(Song().Clips.First(c => Math.Abs(c.TimelineStartSeconds - (p0 + 15)) < 0.01).Model, s);
+        _vm.SeekTo(p0 + 32);                       // the playhead well away, so nothing snaps to it by accident
+
+        // --- MARK MODE ---
+        _vm.LoopMode = false;
+        _vm.RampMode = false;
+        _vm.MarkMode = false;
+        Toggle();
+        Check("MARK MODE turns on through its own toggle", _vm.MarkMode);
+        _vm.LoopMode = true;
+        bool offForLoop = !_vm.MarkMode;
+        Toggle();
+        bool loopOff = !_vm.LoopMode;
+        _vm.RampMode = true;
+        bool offForRamp = !_vm.MarkMode;
+        Toggle();
+        Check("mark mode is never on together with loop mode or ramp mode", offForLoop && loopOff && offForRamp && !_vm.RampMode && _vm.MarkMode);
+
+        // --- a drag marks a stretch; sections stay put and are let go ---
+        var placed = Song().Clips.Select(c => (c.Id, c.TimelineStartSeconds)).ToList();
+        _vm.SelectClip(Song().Clips.First());
+        Drag(Lane(), At(Lane(), p0 + 3), At(Lane(), p0 + 9), ModifierKeys.Control);
+        var m = Song().Mark;
+        Check($"a drag across the lane marks that stretch of the track, where the pointer went (\"{_vm.Status}\")",
+              m is { } m1 && Near(m1.Start, F(Song(), p0 + 3)) && Near(m1.End, F(Song(), p0 + 9)) && _vm.Status.StartsWith("Marked"));
+        Check("in mark mode a drag moves no section, and the selected sections are let go",
+              Song().Clips.Select(c => (c.Id, c.TimelineStartSeconds)).SequenceEqual(placed) && _vm.SelectedClips.Count == 0);
+        var wave = Descendants<Controls.WaveformView>(Lane()).FirstOrDefault();
+        Check("the lane is handed the mark to draw",
+              wave?.Mark is { } drawn && Math.Abs(drawn.StartSeconds - (p0 + 3)) < 0.001 && Math.Abs(drawn.EndSeconds - (p0 + 9)) < 0.001);
+
+        // --- snapping: a new mark ending 4 px past a section's edge ends exactly on it ---
+        var edgeAt = At(Lane(), Benchmix.Core.TimelineEditor.TimelineSecondsOfFrame(Song().Model, edge, s));
+        Drag(Lane(), At(Lane(), p0 + 11), new Point(edgeAt.X + 4, edgeAt.Y), ModifierKeys.None);
+        Check("a mark's end snaps onto the exact frame of a section's edge nearby", Song().Mark is { } m2 && m2.End == edge && Near(m2.Start, F(Song(), p0 + 11)));
+        Drag(Lane(), At(Lane(), p0 + 11), new Point(edgeAt.X + 4, edgeAt.Y), ModifierKeys.Control);
+        Check("Ctrl lets go of the edge", Song().Mark is { } m3 && Near(m3.End, F(Song(), (edgeAt.X + 4 - At(Lane(), _vm.ScrollSeconds).X) / pps + _vm.ScrollSeconds)) && m3.End != edge);
+
+        // --- dragging an end of the mark moves that end only ---
+        Drag(Lane(), At(Lane(), p0 + 3), At(Lane(), p0 + 9), ModifierKeys.Control);
+        long keptStart = Song().Mark!.Value.Start;
+        Drag(Lane(), At(Lane(), p0 + 9), At(Lane(), p0 + 13), ModifierKeys.Control);
+        Check("dragging the end of the mark moves that end, and the start stays exactly where it was",
+              Song().Mark is { } m4 && m4.Start == keptStart && Near(m4.End, F(Song(), p0 + 13)));
+
+        // --- a click puts the playhead there and keeps the mark ---
+        var markBefore = Song().Mark;
+        Click(Lane(), At(Lane(), p0 + 20));
+        Check($"a click in mark mode puts the playhead there and keeps the mark (playhead at {_vm.PositionSeconds:0.000}s)",
+              Math.Abs(_vm.PositionSeconds - (p0 + 20)) < 0.001 && Song().Mark == markBefore && ReferenceEquals(_vm.SelectedTrack, Song()));
+
+        // --- Ctrl+C across the edge at 15 s, then a click on an empty track and Ctrl+V ---
+        Drag(Lane(), At(Lane(), p0 + 12), At(Lane(), p0 + 18), ModifierKeys.Control);
+        var (ms, me) = Song().Mark!.Value;
+        var marked = Benchmix.Core.TimelineEditor.CopyStretch(Song().Model, ms, me, s);
+        PrepareLaneMenu(Lane());
+        var headers = Lane().ContextMenu!.Items.OfType<MenuItem>().Select(i => i.Header as string).ToList();
+        Check("with a stretch marked, the lane menu's Cut, Copy, Repeat and Delete say they act on it",
+              headers.Contains("Cut marked stretch") && headers.Contains("Copy marked stretch") && headers.Contains("Repeat marked stretch") && headers.Contains("Delete marked stretch"));
+        _vm.CopyClipCommand.Execute(null);
+        Check($"Ctrl+C copies the marked stretch (\"{_vm.Status}\")", _vm.HasClipboard && _vm.Status.StartsWith("Copied") && marked.Clips.Count == 2);
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var emptyId = _vm.Tracks[^1].Id;
+        TrackViewModel Empty() => _vm.Tracks.First(t => t.Id == emptyId);
+        UpdateLayout();
+        PumpUntil(() => LaneOf(Empty()) is { ActualHeight: > 0 });
+        var emptyLane = LaneOf(Empty());
+        if (emptyLane is null) { notes.Add("the empty track was not laid out, so pasting a marked stretch is untested"); return; }
+        Click(emptyLane, At(emptyLane, p0 + 5));
+        _vm.PasteClipCommand.Execute(null);
+        var landed = Empty().Model.Clips.OrderBy(c => c.TrackStartSeconds).ToList();
+        long at = F(Empty(), _vm.PositionSeconds);
+        Check($"Ctrl+V pastes the stretch where the click put the playhead, on that track, the seam inside it intact ({landed.Count} sections)",
+              landed.Count == 2
+              && Benchmix.Core.TimelineEditor.StartFrameOf(landed[0], s) == at
+              && Benchmix.Core.TimelineEditor.StartFrameOf(landed[1], s) == at + Benchmix.Core.TimelineEditor.StartFrameOf(marked.Clips[1], s)
+              && landed[0].SourceStartSeconds == marked.Clips[0].SourceStartSeconds
+              && landed[0].SourceEndSeconds == landed[1].SourceStartSeconds
+              && landed[1].SourceEndSeconds == marked.Clips[1].SourceEndSeconds);
+        Check("after a paste in mark mode the mark is on what landed, and only there",
+              Empty().Mark == (at, at + (me - ms)) && Song().Mark is null && _vm.SelectedClips.Count == 0);
+
+        // --- Ctrl+X takes it straight back out, leaving the gap ---
+        _vm.CutClipCommand.Execute(null);
+        Check($"Ctrl+X cuts the marked stretch, leaving the gap (\"{_vm.Status}\")", Empty().Model.Clips.Count == 0 && _vm.Status.StartsWith("Cut"));
+        Undo(() => Empty().Model.Clips.Count == 2);
+        Check("one undo puts the cut back, and the mark stays where it was", Empty().Model.Clips.Count == 2 && Empty().Mark == (at, at + (me - ms)));
+
+        // --- Shift+click marks from the playhead; Delete removes the stretch ---
+        Click(Lane(), At(Lane(), p0 + 21));
+        Click(Lane(), At(Lane(), p0 + 24), ModifierKeys.Shift);
+        long from = F(Song(), _vm.PositionSeconds);
+        Check($"Shift+click marks from the playhead to there (\"{_vm.Status}\")",
+              Song().Mark is { } m5 && m5.Start == from && Near(m5.End, F(Song(), p0 + 24)) && Empty().Mark is null);
+
+        // Held under the mouse, the edits wait.
+        var hold = At(Lane(), p0 + 22);
+        _scriptedWindowPoint = hold;
+        LaneDown(Lane(), hold);
+        int heldCount = Song().Model.Clips.Count;
+        bool deleteWaited = !PressDelete();
+        _vm.CutClipCommand.Execute(null);
+        _vm.DuplicateClipCommand.Execute(null);
+        bool waited = deleteWaited && Song().Model.Clips.Count == heldCount && Song().Mark is not null;
+        LaneUp(Lane());
+        _scriptedWindowPoint = null;
+        Check("Delete, Ctrl+X and Ctrl+D wait while the mouse is held down on a lane", waited);
+        Click(Lane(), At(Lane(), p0 + 21));
+        Click(Lane(), At(Lane(), p0 + 24), ModifierKeys.Shift);
+        var (ds, de) = Song().Mark!.Value;
+
+        _scriptedFocus = this;
+        var del = Press(Key.Delete);
+        OnWindowPreviewKeyDown(this, del);
+        _scriptedFocus = null;
+        Check($"Delete removes what is in the marked stretch and nothing else (\"{_vm.Status}\")",
+              del.Handled && !Song().Model.Clips.Any(c => Benchmix.Core.TimelineEditor.StartFrameOf(c, s) < de && Benchmix.Core.TimelineEditor.EndFrameOf(c, s) > ds)
+              && Song().Model.Clips.Any(c => Benchmix.Core.TimelineEditor.EndFrameOf(c, s) == ds) && Song().Model.Clips.Any(c => Benchmix.Core.TimelineEditor.StartFrameOf(c, s) == de));
+
+        // --- Ctrl+D repeats the stretch straight after itself, and the mark walks onto the repeat ---
+        Drag(Lane(), At(Lane(), p0 + 26), At(Lane(), p0 + 28), ModifierKeys.Control);
+        var (rs, re) = Song().Mark!.Value;
+        _vm.DuplicateClipCommand.Execute(null);
+        Check($"Ctrl+D repeats the marked stretch on the very frame it ends, and the mark moves onto the repeat (\"{_vm.Status}\")",
+              Song().Mark == (re, re + (re - rs)) && Song().Model.Clips.Any(c => Benchmix.Core.TimelineEditor.StartFrameOf(c, s) == re));
+
+        // --- a double-click plays from there ---
+        var beforeDouble = Song().Mark;
+        Click(Lane(), At(Lane(), p0 + 2));
+        Click(Lane(), At(Lane(), p0 + 2), clickCount: 2);
+        bool played = _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Math.Abs(_vm.PositionSeconds - (p0 + 2)) < 0.01;
+        _vm.StopCommand.Execute(null);
+        Check("a double-click in mark mode plays from there, and leaves the mark as it was", played && Song().Mark == beforeDouble);
+
+        // --- MARK MODE off takes the mark away; Ctrl+C is about sections again ---
+        Toggle();
+        Check("MARK MODE turns off through its toggle and the mark goes with it", !_vm.MarkMode && _vm.MarkedTrack is null && Song().MarkVisual is null);
+        PrepareLaneMenu(Lane());
+        Check("without a mark the lane menu's items are about sections again",
+              Lane().ContextMenu!.Items.OfType<MenuItem>().Any(i => i.Header as string == "Cut section"));
+
+        // Put everything back: the repeat, the delete, the paste, the empty track, the split.
+        for (int i = 0; i < 10 && (_vm.Tracks.Count != tracks || Song().Clips.Count != sections); i++)
+        {
+            var state = (_vm.Tracks.Count, _vm.Tracks.Sum(t => t.Clips.Count));
+            Undo(() => (_vm.Tracks.Count, _vm.Tracks.Sum(t => t.Clips.Count)) != state);
+        }
+        if (_vm.Tracks.Count != tracks || Song().Clips.Count != sections) notes.Add("the mark checks could not undo back to where they started");
+    }
+
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
     {
         // The shortcuts are XAML wiring, which no unit test can see.
@@ -3351,6 +3605,7 @@ public partial class MainWindow : Window
         }
         if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
         if (_vm.RampMode) return true;                     // in ramp mode a press acts on ramps only
+        if (_vm.MarkMode) { _vm.SeekTo(at); return true; } // and in mark mode it is a place in time, as on a lane
         BandDown(surface, window, additive: shift || ctrl);
         return true;
     }
@@ -3852,6 +4107,7 @@ public partial class MainWindow : Window
     {
         if (_band is not null) { _vm.Status = "Let go of the selection box first."; return false; }
         if (_dragClip is not null) { _vm.Status = "Let go of the section first."; return false; }
+        if (_markPress is not null) { _vm.Status = "Let go of the mark first."; return false; }
         return _vm.DeleteSelection(fallBackToPlayhead: false);
     }
 
@@ -4016,7 +4272,7 @@ public partial class MainWindow : Window
         _pendingToggle = null;                         // losing the mouse is not a click
         _pendingCollapse = null;
         if (_band is not null) BandLost();
-        else if (_dragClip is not null || _rampGrab is not null) LaneUp((FrameworkElement)sender);
+        else if (_dragClip is not null || _rampGrab is not null || _markPress is not null) LaneUp((FrameworkElement)sender);
     }
 
     private bool LaneDown(FrameworkElement lane, Point window, int clickCount = 1)
@@ -4027,6 +4283,7 @@ public partial class MainWindow : Window
         // In ramp mode a double-click's second press does nothing: its first press already put a
         // point down, and may have opened the box it would otherwise close straight away.
         if (_vm.RampMode) { _clickMemo = null; return clickCount >= 2 || RampDown(lane, vm, window); }
+        if (_vm.MarkMode) { _clickMemo = null; return MarkDown(lane, vm, window, clickCount); }
         double x = LaneX(lane, window);
         var memo = _clickMemo;
         _clickMemo = null;
@@ -4122,6 +4379,26 @@ public partial class MainWindow : Window
             }
             _vm.DragRampDotTo(g.Seconds + moved / Math.Max(0.01, _vm.PixelsPerSecond), free: Modifiers.HasFlag(ModifierKeys.Control));
             _vm.RecomputeLength();
+            return;
+        }
+        if (_markPress is { } mp)
+        {
+            if (!(pressed || _scriptedWindowPoint is not null)) return;
+            double moved = window.X - _markPressOrigin.X;
+            if (!_markDragging)
+            {
+                if (Math.Abs(moved) < 4) return;
+                _markDragging = true;
+                if (mp.Edge is { } startEnd) _vm.BeginMarkEdge(mp.Track, startEnd);
+                else _vm.BeginMark(mp.Track, mp.GrabSeconds, free: Modifiers.HasFlag(ModifierKeys.Control));
+            }
+            _vm.DragMarkTo(mp.GrabSeconds + moved / Math.Max(0.01, _vm.PixelsPerSecond), free: Modifiers.HasFlag(ModifierKeys.Control));
+            return;
+        }
+        if (_vm.MarkMode)
+        {
+            if (lane.DataContext is TrackViewModel mh)
+                lane.Cursor = MarkEdgeAt(mh, LaneX(lane, window)) is not null ? Cursors.SizeWE : Cursors.IBeam;
             return;
         }
         if (_vm.RampMode)
@@ -4230,6 +4507,19 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_markPress is { } mp)
+        {
+            // State first: releasing capture raises LostMouseCapture, which comes straight back here.
+            bool dragged = _markDragging;
+            _markPress = null;
+            _markDragging = false;
+            _vm.PointerHeld = false;
+            if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
+            if (dragged) _vm.EndMarkDrag();
+            else _vm.MarkModeClick(mp.Track, mp.PressSeconds);
+            return;
+        }
+
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
         var toggle = _pendingToggle;
@@ -4278,7 +4568,7 @@ public partial class MainWindow : Window
 
         // The left button is still holding a box or a section: a right-press — the start of a pan,
         // say, to reach further — must not swap what they hold for what is under the pointer.
-        if (_band is not null || _dragClip is not null || _rampGrab is not null) return;
+        if (_band is not null || _dragClip is not null || _rampGrab is not null || _markPress is not null) return;
         TakeKeyboardFromText();
         _vm.SelectedTrack = vm;
         double x = LaneX(lane, window);
@@ -4294,15 +4584,24 @@ public partial class MainWindow : Window
 
     private void OnLaneContextMenuOpening(object sender, ContextMenuEventArgs e) => PrepareLaneMenu((FrameworkElement)sender);
 
-    /// <summary>Sets the lane menu up for where it was opened: loop mode's tick, and "Remove tempo ramp" only over a ramp.</summary>
+    /// <summary>
+    /// Sets the lane menu up for where it was opened: loop mode's tick, "Remove tempo ramp" only over
+    /// a ramp, and — while a stretch is marked — Cut, Copy, Repeat and Delete named for the mark,
+    /// which is what they then act on.
+    /// </summary>
     private void PrepareLaneMenu(FrameworkElement lane)
     {
         if (lane.ContextMenu is not { } menu) return;
         bool overRamp = _rampUnderMenu is { } r && ReferenceEquals(r.Track, lane.DataContext);
+        bool marked = _vm.MarkedTrack is not null;
         foreach (var item in menu.Items.OfType<FrameworkElement>())
         {
             if (item is MenuItem { Tag: "loopmode" } loop) loop.IsChecked = _vm.LoopMode;
             if (item.Tag as string == "removeRamp") item.Visibility = overRamp ? Visibility.Visible : Visibility.Collapsed;
+            if (item is MenuItem { Tag: "cut" } cut) cut.Header = marked ? "Cut marked stretch" : "Cut section";
+            if (item is MenuItem { Tag: "copy" } copy) copy.Header = marked ? "Copy marked stretch" : "Copy section";
+            if (item is MenuItem { Tag: "repeat" } repeat) repeat.Header = marked ? "Repeat marked stretch" : "Repeat this section";
+            if (item is MenuItem { Tag: "delete" } delete) delete.Header = marked ? "Delete marked stretch" : "Delete section";
         }
     }
 
@@ -4366,6 +4665,54 @@ public partial class MainWindow : Window
                 return (i, false, vm.Model.Ramps[i].StartSeconds);
         }
         return null;
+    }
+
+    // ---------------- marking a stretch (Daniel, 2026-10-12) ----------------
+
+    /// <summary>
+    /// A press on a lane in MARK MODE, waiting to see whether it is a click or a drag: where it was
+    /// pressed, where the drag counts from (the end of the mark grabbed, or the press), and which end
+    /// was grabbed — null for a new mark.
+    /// </summary>
+    private (TrackViewModel Track, double PressSeconds, double GrabSeconds, bool? Edge)? _markPress;
+    private bool _markDragging;
+    private Point _markPressOrigin;
+
+    /// <summary>
+    /// A left press on a lane in MARK MODE. Dragged, it marks a stretch of that track — or, on an end
+    /// of the mark already there, moves that end; clicked, it puts the playhead there. A double-click
+    /// plays from there, as everywhere on the timeline. Shift+click marks from the playhead to there.
+    /// Sections are not selected or dragged.
+    /// </summary>
+    private bool MarkDown(FrameworkElement lane, TrackViewModel vm, Point window, int clickCount)
+    {
+        double x = LaneX(lane, window), at = SecondsAtLaneX(x);
+        bool shift = Modifiers.HasFlag(ModifierKeys.Shift), ctrl = Modifiers.HasFlag(ModifierKeys.Control);
+        if (clickCount >= 2 && !shift && !ctrl) { _vm.PlayFrom(at); return true; }
+        if (shift) { _vm.MarkFromPlayhead(vm, at, free: ctrl); return true; }
+
+        var edge = MarkEdgeAt(vm, x);
+        double grab = edge is { } startEnd && vm.MarkVisual is { } m ? (startEnd ? m.StartSeconds : m.EndSeconds) : at;
+        _markPress = (vm, at, grab, edge);
+        _markPressOrigin = window;
+        _markDragging = false;
+        _vm.PointerHeld = true;
+        if (_scriptedWindowPoint is null) lane.CaptureMouse();
+        return true;
+    }
+
+    /// <summary>
+    /// Which end of the mark on this track a lane x is on, if either: true for its start, false for
+    /// its end. On a mark too narrow to tell, the nearer one.
+    /// </summary>
+    private bool? MarkEdgeAt(TrackViewModel vm, double x)
+    {
+        if (vm.MarkVisual is not { } m) return null;
+        double left = (m.StartSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
+        double right = (m.EndSeconds - _vm.ScrollSeconds) * _vm.PixelsPerSecond;
+        double toLeft = Math.Abs(x - left), toRight = Math.Abs(x - right);
+        if (Math.Min(toLeft, toRight) > EdgeGrabPixels) return null;
+        return toLeft <= toRight;
     }
 
     private void OnRampBpmKeyDown(object sender, KeyEventArgs e)

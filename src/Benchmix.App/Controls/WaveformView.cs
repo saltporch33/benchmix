@@ -34,6 +34,9 @@ public sealed record ClipVisual(
     double OriginSeconds = 0,
     double TrackStartSeconds = 0);
 
+/// <summary>A stretch marked in MARK MODE (2026-10-12), as the lane draws it: its two ends on the timeline.</summary>
+public sealed record MarkVisual(double StartSeconds, double EndSeconds);
+
 /// <summary>
 /// Draws one track's sections on the timeline.
 ///
@@ -94,6 +97,17 @@ public sealed class WaveformView : FrameworkElement
         set => SetValue(RampsProperty, value);
     }
 
+    /// <summary>The stretch marked on this track in MARK MODE, or null (2026-10-12).</summary>
+    public static readonly DependencyProperty MarkProperty = DependencyProperty.Register(
+        nameof(Mark), typeof(MarkVisual), typeof(WaveformView),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public MarkVisual? Mark
+    {
+        get => (MarkVisual?)GetValue(MarkProperty);
+        set => SetValue(MarkProperty, value);
+    }
+
     public IReadOnlyList<ClipVisual>? Clips
     {
         get => (IReadOnlyList<ClipVisual>?)GetValue(ClipsProperty);
@@ -117,6 +131,9 @@ public sealed class WaveformView : FrameworkElement
 
         var clips = Clips;
         if (clips is not null) DrawClips(dc, clips, w, h);
+
+        // The marked stretch over the sections it covers, and under the ramps.
+        if (Mark is { } mark) DrawMark(dc, mark, w, h);
 
         // Tempo ramps over everything: they belong to the track, not to any one section.
         if (Ramps is { Count: > 0 } ramps)
@@ -255,6 +272,38 @@ public sealed class WaveformView : FrameworkElement
             var outline = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1.5);
             outline.Freeze();
             dc.DrawRoundedRectangle(null, outline, new Rect(xFrom, 0.75, Math.Max(1, xTo - xFrom), h - 1.5), 3, 3);
+        }
+    }
+
+    /// <summary>
+    /// A marked stretch: the lane lit up between its two ends, a bright bar at each end — the places
+    /// to grab to move them — and how long it is, at its top left.
+    /// </summary>
+    private void DrawMark(DrawingContext dc, MarkVisual mark, double w, double h)
+    {
+        double pps = Math.Max(0.01, PixelsPerSecond);
+        double x0 = (mark.StartSeconds - ScrollSeconds) * pps;
+        double x1 = (mark.EndSeconds - ScrollSeconds) * pps;
+        if (x1 < -2 || x0 > w + 2) return;
+        double left = Math.Max(-2, x0), right = Math.Min(w + 2, x1);
+
+        var fill = new SolidColorBrush(Color.FromArgb(0x30, 0xFF, 0xFF, 0xFF));
+        fill.Freeze();
+        var edge = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF));
+        edge.Freeze();
+        dc.DrawRectangle(fill, null, new Rect(left, 0, Math.Max(1, right - left), h));
+        if (x0 >= -2 && x0 <= w + 2) dc.DrawRectangle(edge, null, new Rect(Math.Round(x0) - 1, 0, 2, h));
+        if (x1 >= -2 && x1 <= w + 2) dc.DrawRectangle(edge, null, new Rect(Math.Round(x1) - 1, 0, 2, h));
+
+        double dip = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+        var text = RampLayout.Text($"{mark.EndSeconds - mark.StartSeconds:0.00} s", dip, Brushes.White);
+        var at = new Rect(Math.Max(left, 0) + 5, 4, text.Width + 6, text.Height + 2);
+        if (at.Right <= right - 3)
+        {
+            var back = new SolidColorBrush(Color.FromArgb(0xCC, 0x0E, 0x11, 0x16));
+            back.Freeze();
+            dc.DrawRoundedRectangle(back, null, at, 3, 3);
+            dc.DrawText(text, new Point(at.X + 3, at.Y + 1));
         }
     }
 

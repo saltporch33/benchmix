@@ -8,6 +8,28 @@ namespace Benchmix.Core;
 public sealed record EditResult(bool Changed, string Message, ClipModel? Clip = null)
 {
     public static EditResult No(string why) => new(false, why);
+
+    /// <summary>Every section a paste or a repeat put down, in playing order; empty for other edits.</summary>
+    public IReadOnlyList<ClipModel> Placed { get; init; } = Array.Empty<ClipModel>();
+
+    /// <summary>The stretch of the track's own frames a paste or a repeat covered, gaps included.</summary>
+    public (long Start, long End)? Span { get; init; }
+}
+
+/// <summary>
+/// What Copy and Cut hold: sections, each placed from the start of the piece in the frames of the
+/// track they came off, and how long the piece is — the gaps in it included. A copied section is a
+/// piece of one; a marked stretch (Daniel, 2026-10-12) is a piece of whatever was in it.
+/// </summary>
+public sealed record Piece(IReadOnlyList<ClipModel> Clips, long LengthFrames)
+{
+    /// <summary>One section on its own: the piece is exactly as long as it is.</summary>
+    public static Piece Of(ClipModel clip, ProjectSession s)
+    {
+        var copy = TimelineEditor.Copy(clip);
+        copy.TrackStartSeconds = 0;
+        return new Piece(new[] { copy }, TimelineEditor.LengthFramesOf(clip, s));
+    }
 }
 
 /// <summary>
@@ -293,9 +315,18 @@ public static class TimelineEditor
     /// </summary>
     public static EditResult Paste(TrackModel track, ClipModel clipboard, double timelineSeconds,
                                    ProjectSession session, TrackModel? copiedFrom = null)
+        => Paste(track, Piece.Of(clipboard, session), timelineSeconds, session, copiedFrom);
+
+    /// <summary>
+    /// Drops a piece — one section, or a marked stretch with its gaps — onto a track, its start at
+    /// <paramref name="timelineSeconds"/>, overwriting whatever is under the whole of it, gaps
+    /// included: what was copied is what lands. Everything else is as for one section.
+    /// </summary>
+    public static EditResult Paste(TrackModel track, Piece piece, double timelineSeconds,
+                                   ProjectSession session, TrackModel? copiedFrom = null)
     {
-        long length = LengthFramesOf(clipboard, session);
-        if (length < MinimumFrames(session))
+        long length = piece.LengthFrames;
+        if (length < MinimumFrames(session) || piece.Clips.Count == 0)
             return EditResult.No("There is nothing on the clipboard to paste.");
 
         bool adopted = copiedFrom is not null && Adopt(track, SettingsOf(copiedFrom));
@@ -303,23 +334,41 @@ public static class TimelineEditor
         double at = Math.Max(0, timelineSeconds);
         EnsureOriginAtOrBefore(track, at, session);
         long start = Math.Max(0, TrackFrameAt(track, at, session));
-
-        var placed = clipboard.Clone();
-        placed.Id = Guid.NewGuid();
-        placed.TrackStartSeconds = SecondsOf(start, session);
-
-        ClearRange(track, start, start + length, session);
-        track.Clips.Add(placed);
-        Normalise(track);
+        var placed = Place(track, piece, start, session);
 
         string note = adopted
             ? copiedFrom is { Ramps.Count: > 0 }
                 ? " The track takes that song's tempo, its tempo ramps and pitch."
                 : " The track takes that song's tempo and pitch, so it plays as it did."
-            : placed.SourcePath.Equals(track.SourcePath, StringComparison.OrdinalIgnoreCase)
+            : placed.All(p => p.SourcePath.Equals(track.SourcePath, StringComparison.OrdinalIgnoreCase))
                 ? ""
                 : " It takes this track's tempo, pitch and EQ.";
-        return new EditResult(true, $"Pasted {SecondsOf(length, session):0.0}s at {at:0.00}s.{note}", placed);
+        return new EditResult(true, $"Pasted {SecondsOf(length, session):0.0}s at {at:0.00}s.{note}", placed[0])
+        {
+            Placed = placed,
+            Span = (start, start + length),
+        };
+    }
+
+    /// <summary>
+    /// Puts a piece down from <paramref name="start"/>, in the track's own frames, after emptying
+    /// the whole span it covers. Each section keeps its place in the piece to the frame, so a seam
+    /// or a butt join inside it is still exactly that.
+    /// </summary>
+    private static List<ClipModel> Place(TrackModel track, Piece piece, long start, ProjectSession session)
+    {
+        ClearRange(track, start, start + piece.LengthFrames, session);
+        var placed = new List<ClipModel>();
+        foreach (var c in piece.Clips)
+        {
+            var p = c.Clone();
+            p.Id = Guid.NewGuid();
+            p.TrackStartSeconds = SecondsOf(start + StartFrameOf(c, session), session);
+            track.Clips.Add(p);
+            placed.Add(p);
+        }
+        Normalise(track);
+        return placed.OrderBy(p => StartFrameOf(p, session)).ToList();
     }
 
     /// <summary>
@@ -355,6 +404,114 @@ public static class TimelineEditor
         int covered = ClearRange(track, start, start + LengthFramesOf(clip, session), session, except: clip);
         Normalise(track);
         return covered;
+    }
+
+    // ---------------------------------------------------------------- a marked stretch
+
+    // Daniel, 2026-10-12: "visually demarcate a start and end point within a track and copy, or
+    // cut, and then paste that chunk elsewhere". A stretch is a span of one track's own frames,
+    // [start, end), wherever its edges fall: inside a section, between two, or in a gap.
+
+    /// <summary>
+    /// What is in a stretch of a track: every section in it, cut to it, each placed from the
+    /// stretch's start, and the stretch's whole length — gaps and all. Nothing on the track changes.
+    /// A section cut by an edge of the stretch loses its fade on that side, as a cut always does;
+    /// what is left of it starts in the song on the very frame the rest of it stops, so a stretch
+    /// cut out and pasted back where it was is a seam again at both ends.
+    /// </summary>
+    public static Piece CopyStretch(TrackModel track, long start, long end, ProjectSession session)
+    {
+        var clips = new List<ClipModel>();
+        long minimum = MinimumFrames(session);
+        foreach (var c in track.Clips.OrderBy(c => StartFrameOf(c, session)))
+        {
+            long length = LengthFramesOf(c, session);
+            if (length <= 0) continue;                          // its file is missing: nothing to copy
+            long cStart = StartFrameOf(c, session), cEnd = cStart + length;
+            long from = Math.Max(cStart, start), to = Math.Min(cEnd, end);
+            // A sliver at an edge of the stretch is a slip of the mouse past a section's edge, as a
+            // sliver left by an overwrite is (ClearRange).
+            if (to - from < minimum) continue;
+
+            var copy = Copy(c);
+            long source = SourceStartFrameOf(c, session);
+            if (from > cStart)
+            {
+                copy.SourceStartSeconds = SecondsOf(source + (from - cStart), session);
+                copy.FadeInSeconds = 0;
+            }
+            if (to < cEnd)
+            {
+                copy.SourceEndSeconds = SecondsOf(source + (to - cStart), session);
+                copy.FadeOutSeconds = 0;
+            }
+            copy.TrackStartSeconds = SecondsOf(from - start, session);
+            clips.Add(copy);
+        }
+        return new Piece(clips, Math.Max(0, end - start));
+    }
+
+    /// <summary>
+    /// Empties a stretch of a track, leaving the gap: a section across an edge is cut back to it, one
+    /// across the whole stretch is split around it, one inside it goes. Nothing moves.
+    /// </summary>
+    public static EditResult ClearStretch(TrackModel track, long start, long end, ProjectSession session)
+    {
+        if (CopyStretch(track, start, end, session).Clips.Count == 0)
+            return EditResult.No("There is nothing in the marked stretch.");
+        ClearRange(track, start, end, session);
+        Normalise(track);
+        return new EditResult(true, $"Removed {SecondsOf(end - start, session):0.00}s. The gap is left as it is.");
+    }
+
+    /// <summary>
+    /// Puts a copy of a stretch straight after itself, overwriting what is there — Ctrl+D for a
+    /// marked stretch. The copy starts on the very frame the stretch ends, so a stretch with audio
+    /// to its end makes a butt join, crossfaded like every repeat; a stretch ending in a gap repeats
+    /// every stretch-length, gap and all.
+    /// </summary>
+    public static EditResult RepeatStretch(TrackModel track, long start, long end, ProjectSession session)
+    {
+        var piece = CopyStretch(track, start, end, session);
+        if (piece.Clips.Count == 0) return EditResult.No("There is nothing in the marked stretch to repeat.");
+        if (piece.LengthFrames < MinimumFrames(session)) return EditResult.No("That stretch is too short to repeat.");
+
+        var placed = Place(track, piece, end, session);
+        return new EditResult(true, $"Repeated {SecondsOf(piece.LengthFrames, session):0.00}s at {TimelineSecondsOfFrame(track, end, session):0.00}s.", placed[0])
+        {
+            Placed = placed,
+            Span = (end, end + piece.LengthFrames),
+        };
+    }
+
+    /// <summary>
+    /// Where one end of a stretch being marked lands near <paramref name="timelineSeconds"/>, as a
+    /// frame of <paramref name="track"/>: snapped, within the snap distance, to the nearest section
+    /// edge on any track or to the playhead; otherwise exactly there. An edge on the track itself is
+    /// taken to its exact frame, so a stretch marked from one section's edge to another's cuts
+    /// exactly there and leaves no sliver behind. Never before 0:00.
+    /// </summary>
+    public static long SnapStretchEnd(TrackModel track, double timelineSeconds, double? playheadSeconds,
+                                      SnapSettings snap, ProjectSession session, out double? snappedTo)
+    {
+        snappedTo = null;
+        double at = Math.Max(0, timelineSeconds);
+        if (snap.Enabled)
+        {
+            var edge = Snapping.Nearest(Snapping.EdgesOf(session.Project.Tracks, session, null), at, snap);
+            double edgeDistance = edge is { } e ? Math.Abs(e.TimelineSeconds - at) : double.PositiveInfinity;
+            if (playheadSeconds is { } p && p >= 0 && Math.Abs(p - at) <= snap.RadiusSeconds && Math.Abs(p - at) < edgeDistance)
+            {
+                snappedTo = p;
+                return TrackFrameAt(track, p, session);
+            }
+            if (edge is { } hit)
+            {
+                snappedTo = hit.TimelineSeconds;
+                return Snapping.FrameOn(track, hit, session);
+            }
+        }
+        return TrackFrameAt(track, at, session);
     }
 
     // ---------------------------------------------------------------- the track's origin
