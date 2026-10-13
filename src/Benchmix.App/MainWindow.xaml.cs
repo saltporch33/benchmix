@@ -1110,9 +1110,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The wheel over the ruler moves the playhead back and forth (Daniel, 2026-10-12), through the
-    /// ruler's and the tracks' own wheel handlers with a scripted pointer and modifiers. The engine
-    /// itself is asked where the playhead is.
+    /// The wheel over the ruler, and since his second ask over the waveforms too, moves the playhead
+    /// back and forth (Daniel, 2026-10-12), through the ruler's and the tracks' own wheel handlers
+    /// with a scripted pointer and modifiers. The engine itself is asked where the playhead is.
     /// </summary>
     private void RunScrubGestures(Action<string, bool> Check, List<string> notes)
     {
@@ -1162,8 +1162,37 @@ public partial class MainWindow : Window
         _vm.StopCommand.Execute(null);
 
         _vm.SeekTo(10);
-        bool passedOn = !Turn(overLane, 120, ruler: false);
-        Check("over the tracks the wheel still scrolls them up and down, and leaves the playhead alone", passedOn && At(10));
+        bool usedOverLane = Turn(overLane, 120, ruler: false);
+        Check($"a notch up over a waveform moves the playhead {notch:0.00}s later too, and is used up (engine at {engine.PositionSeconds:0.000}s)", usedOverLane && At(10 + notch));
+        Turn(overLane, -120, ruler: false);
+        Check($"and a notch down moves it back (engine at {engine.PositionSeconds:0.000}s)", At(10));
+
+        UpdateLayout();
+        var b = BelowTracks.TranslatePoint(new Point(0, 0), this);
+        if (BelowTracks.ActualHeight > 4)
+        {
+            bool belowUsed = Turn(new Point(b.X + 300, b.Y + 2), 120, ruler: false);
+            Check($"under the last track it moves the playhead as well (engine at {engine.PositionSeconds:0.000}s)", belowUsed && At(10 + notch));
+            _vm.SeekTo(10);
+        }
+        else notes.Add("no room under the last track on screen, so the wheel there is untested");
+
+        var strip = StripOf(track)!;
+        var st = strip.TranslatePoint(new Point(0, 0), this);
+        bool passedOn = !Turn(new Point(st.X + 8, st.Y + strip.ActualHeight / 2), 120, ruler: false);
+        Check("over the track controls on the left the wheel is passed on — a knob turns, or the tracks scroll up and down — and leaves the playhead alone", passedOn && At(10));
+        var bar = Descendants<System.Windows.Controls.Primitives.ScrollBar>(TrackScroller).FirstOrDefault(x => x.Orientation == Orientation.Vertical);
+        Check("over the tracks' scrollbar it is passed on too, to scroll them", bar is not null && !OverLanes(bar, overLane));
+
+        double lanePps = _vm.PixelsPerSecond;
+        Turn(overLane, 120, ruler: false, ModifierKeys.Control);
+        Check("Ctrl+wheel over a waveform still zooms, and leaves the playhead alone", _vm.PixelsPerSecond > lanePps && At(10));
+        _vm.PixelsPerSecond = 40;
+        _vm.ScrollSeconds = 20;
+        Turn(overLane, -120, ruler: false, ModifierKeys.Shift);
+        Check("Shift+wheel over a waveform still scrolls sideways, and leaves the playhead alone", _vm.ScrollSeconds != 20 && At(10));
+        _vm.ScrollSeconds = 0;
+        UpdateLayout();
 
         double pps = _vm.PixelsPerSecond;
         Turn(overRuler, 120, ruler: true, ModifierKeys.Control);
@@ -4986,13 +5015,28 @@ public partial class MainWindow : Window
 
     private void OnTimelineWheel(object sender, MouseWheelEventArgs e)
     {
-        // Over the tracks a plain turn falls through to the ScrollViewer's own vertical scrolling.
-        if (TimelineWheel(WindowPoint(e), e.Delta, overRuler: false)) e.Handled = true;
+        // Over the waveforms a plain turn moves the playhead, as over the ruler (Daniel, 2026-10-12:
+        // "I'd like to be able to do it from anywhere my mouse is" — he chose the waveforms). Over
+        // the track controls on the left and the scrollbar it falls through: a knob turns, or the
+        // ScrollViewer scrolls the tracks up and down.
+        var at = WindowPoint(e);
+        if (TimelineWheel(at, e.Delta, scrubs: OverLanes(e.OriginalSource as DependencyObject, at))) e.Handled = true;
     }
 
     private void OnRulerWheel(object sender, MouseWheelEventArgs e)
     {
-        if (TimelineWheel(WindowPoint(e), e.Delta, overRuler: true)) e.Handled = true;
+        if (TimelineWheel(WindowPoint(e), e.Delta, scrubs: true)) e.Handled = true;
+    }
+
+    /// <summary>
+    /// Whether a point in the track area is over the lanes — a waveform, a gap, or the room under the
+    /// last track — rather than the track controls on the left or the tracks' scrollbar.
+    /// </summary>
+    private bool OverLanes(DependencyObject? source, Point window)
+    {
+        for (var d = source; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is System.Windows.Controls.Primitives.ScrollBar) return false;
+        return window.X - TrackContent.TranslatePoint(new Point(0, 0), this).X >= TrackContent.ColumnDefinitions[0].ActualWidth;
     }
 
     /// <summary>How far one notch of the wheel over the ruler moves the playhead, on screen.</summary>
@@ -5000,11 +5044,11 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// A turn of the wheel on the timeline: Ctrl zooms about the pointer, Shift scrolls sideways,
-    /// and over the ruler a plain turn moves the playhead back and forth (Daniel, 2026-10-12) — up is
-    /// later, a notch is the same distance on screen whatever the zoom, and the view follows it.
-    /// True when it was used.
+    /// and over the ruler or the lanes (<paramref name="scrubs"/>) a plain turn moves the playhead
+    /// back and forth (Daniel, 2026-10-12) — up is later, a notch is the same distance on screen
+    /// whatever the zoom, and the view follows it. True when it was used.
     /// </summary>
-    private bool TimelineWheel(Point window, int delta, bool overRuler)
+    private bool TimelineWheel(Point window, int delta, bool scrubs)
     {
         if (Modifiers.HasFlag(ModifierKeys.Control))
         {
@@ -5022,7 +5066,7 @@ public partial class MainWindow : Window
             _vm.ScrollSeconds = Math.Max(0, _vm.ScrollSeconds - delta / 120.0 * (60 / _vm.PixelsPerSecond) * 4);
             return true;
         }
-        if (!overRuler) return false;
+        if (!scrubs) return false;
 
         // From where the playhead is going: while playing, a seek can still be waiting for the audio
         // thread, and a tick can put the old position on screen meanwhile. Turned fast, notches built

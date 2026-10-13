@@ -578,3 +578,45 @@ him; everything below is a default he can change.
 | **The mark is not part of the project**: not saved, not undone. It goes when mark mode is turned off; an undo leaves it where it is. It is kept in the track's own frames, so it stays on the same audio when TEMPO turns, and when something pasted before the track's start moves the track's origin. | It is a pointer at audio, like a selection. |
 | **One undo step** for each cut, delete, paste and repeat. While the mouse is held down on a lane, Delete, Ctrl+X, Ctrl+D and the modes wait. | As for every other edit. |
 
+## 2026-10-12 — four things from his testing
+
+He tried every feature of the day and wrote back (2026-10-12). He chose the order,
+verbatim: *"all 4 in that order"*.
+
+**Opening a project from Explorer.** His words: *"opening a project by double clicking the .benchmix
+file in explorer opens the app but gives error msg that it could not load the project."*
+
+| Decision | Why |
+| --- | --- |
+| **A `.benchmix` on the command line opens as the project**, through the Open button's own code; songs passed with it are added to it. Only the first project counts. | Windows passes the double-clicked file to the exe, and it was being loaded as a song. One window holds one project. |
+| **Benchmix does not register itself as the program for `.benchmix` files.** | He has already told Windows to open them with Benchmix. Writing to the registry changes his system for him. |
+
+**An icon.** His words: *"please give benchmix shortcut a simple graphical icon so i know what i'm
+clicking in windows."*
+
+| Decision | Why |
+| --- | --- |
+| **A blue tile in the app's accent colour with a waveform on it**, white then ramp-yellow, drawn by `scripts/make-icon.py` at every size from 16 to 256 px and embedded in the exe. | His desktop shortcut already takes its icon from the exe, so nothing on his desktop needs changing. A waveform says "audio"; two colours say "two songs". |
+
+**Following the sound output.** His words: *"when i start the app using one audio output (bluetooth
+headphones) and then disconnect my headphones, i need to restart the app in order for the sound to
+come out of the new output"*, and, asked, *"please do it."*
+
+| Decision | Why |
+| --- | --- |
+| **Playback follows Windows' default output** (the multimedia one): when Windows changes it, or the stream dies with its device, the stream moves to whatever Windows uses now and carries on from the same frame, playing or not. | What he described. Windows has already decided where sound should go; Benchmix agreeing with it is the least surprising. |
+| **With no output left, playback stops and the status bar says so; the next output to appear is taken without a restart.** Play also looks again. | Before, a lost device needed a restart. |
+| **The mix keeps the rate it started at; an output at another rate gets a windowed-sinc converter on the way out**, live only. | Every position in a project is counted in the mix's frames, so the mix cannot change rate mid-session. Renders never pass through it, so preview and render are still one signal path. |
+| **The status bar says where sound went**: `Sound now plays through Speakers (Realtek(R) Audio).` | So a switch he did not notice is not a mystery. |
+
+**The wheel moves the playhead from anywhere.** His words: *"can we make it so i dont have to mouse
+over the ruler? I'd like to be able to do it from anywhere my mouse is."* Offered two ways, he chose,
+verbatim, *"this is preferable"* for: *"A plain wheel over the waveforms moves the playhead. Scrolling
+up and down through tracks moves to the track controls on the left and the scrollbar."* (the
+option's words, not his).
+
+| Decision | Why |
+| --- | --- |
+| **Over the waveforms, the gaps and the room under the last track, a plain turn moves the playhead**, exactly as over the ruler. Ctrl+wheel and Shift+wheel there still zoom and scroll sideways. | His choice. |
+| **Over the track controls on the left and the tracks' scrollbar, the wheel scrolls the tracks up and down, or turns the knob under it**, as before. | The other half of the option he chose. With a few tracks they all fit, so there was nothing to scroll — which is why he saw the wheel do nothing over the tracks. |
+

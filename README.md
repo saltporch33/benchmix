@@ -56,7 +56,7 @@ control on screen is one you asked for.
 | double-click a lane, the ruler, or the empty room under the tracks | play from there; if already playing, jump there and keep playing |
 | click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again. (The ■ button goes back to 0:00.) |
 | double-click the scroll wheel | stop, and go back to the very start: the playhead and the view both to 0:00 |
-| turn the scroll wheel over the ruler | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot |
+| turn the scroll wheel over the ruler or a waveform | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot. Over the track controls on the left (or the scrollbar) the wheel scrolls the tracks up and down when they don't all fit, or turns the knob under it |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | undo / redo |
@@ -89,6 +89,11 @@ control on screen is one you asked for.
 | <kbd>Delete</kbd> | delete the selected sections — or, in mark mode, what is in the marked stretch — leaving the gaps (not while typing in a text box) |
 | drag a track's name (or its ≡) up or down | move the track; a blue line shows where it will land |
 | double-click a track's name, or right-click its strip → *Rename track* | rename it: type, then <kbd>Enter</kbd> keeps it (so does clicking anywhere else), <kbd>Esc</kbd> keeps the old name |
+
+A saved project opens from Explorer with a double-click, once Windows has been told to open
+`.benchmix` files with Benchmix. Playback follows Windows' sound output: unplug the headphones
+mid-song and it carries on through the speakers from the same moment, and back again when they
+reconnect.
 
 The selected track has a blue bar down its left edge. Clicking anywhere on a track — its lane, its
 name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes.
@@ -245,7 +250,7 @@ benchmix mashup <bed> <topper> <out.wav> [opts]  tempo-match and render
 | `Benchmix.Engine` | audio and analysis. No UI types. Clips, stretch, EQ, mixer, render, tempo/key detection. |
 | `Benchmix.Core` | the project model, its file format, undo, and the bridge that keeps the live graph matching the model. |
 | `Benchmix.App` | WPF shell — timeline, waveforms, knobs, transport. |
-| `Benchmix.Tests` | 331 tests, engine-level and model-level, plus end-to-end on real files. |
+| `Benchmix.Tests` | 341 tests, engine-level and model-level, plus end-to-end on real files. |
 
 The signal chain per track is `clip → stretch → EQ → clip envelope → gain/pan → mix`, and **live preview and the
 final render are the same chain** — the renderer just pulls blocks as fast as the CPU allows

@@ -819,6 +819,39 @@ all eight runs passed and stayed out of the way (gesturetest 244, buttontest 41)
 
 **Not verified:** marking with a real mouse, and how the band reads on his screen.
 
+## 2026-10-12 — four things from his testing
+
+**Opening a project from Explorer.** `scripts/verify-exe.ps1` gained an `openproject` run: it writes
+a project file of the two sample songs (in the oldest project format) and starts the exe with only
+that file on the command line, as Explorer does on a double-click, under `--loadcheck`. The run fails
+unless the project opened and every track in it loaded. Before the fix the file was loaded as a song
+and failed.
+
+**The icon.** Drawn at 16, 24, 32, 48, 64, 128 and 256 px and looked at, all sizes side by side; the
+published exe carries it (read back out of the published exe as a 32 px icon and looked at).
+
+**Following the sound output.** `OutputFollowingTests` (10), through fake outputs whose streams the
+test pulls by hand, on a 431 Hz sine through an untouched track, checked sample for sample with `==`:
+Windows moving the output mid-song continues on the new one from exactly the frame reached; a stream
+let go reads silence and never pulls the mix again; a stream that dies is replaced by the output
+Windows uses now; with no output left playback stops, says so once, and takes the next output that
+appears; a notice about the output already in use changes nothing; disposing lets go of the stream
+and the notifications; an output at 44.1 kHz gets one second of mix per second (within the
+converter's look-ahead) and the sine to within 2e-3; the converter alone keeps time and pitch from
+48 to 44.1, 44.1 to 48 and 48 to 16 kHz across blocks of 1 to 4096 frames. **Broken on purpose** —
+the stale-stream guard removed, and the converter one frame late — 5 of the 10 failed. `--playtest`
+still pulls the real device in realtime through the new code.
+
+**The wheel over the waveforms.** `--gesturetest` grew from 244 to **250 checks**, through the tracks' own
+wheel handler: a notch over a waveform moves the playhead and is used up, and back; under the last
+track too; over the track controls it is passed on and the playhead stays; over the tracks'
+scrollbar it is passed on; Ctrl+wheel and Shift+wheel over a waveform still zoom and scroll.
+
+**341 tests, 0 failed, 0 skipped**; `scripts/verify-exe.ps1`: all nine runs passed and stayed out of the way (gesturetest 250, buttontest 41, openproject).
+
+**Not verified:** switching with his real Bluetooth headphones; how the converted sound compares by
+ear; the icon on his desktop (Windows may show the old one until its icon cache refreshes).
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
