@@ -42,10 +42,10 @@ public sealed class ProjectSession : IDisposable
     /// present, all of them in use, a driver in a bad mood — this falls back to an offline engine
     /// rather than failing: you can still build and render a mashup, just not hear it live.
     /// </summary>
-    public static ProjectSession CreateEmpty(string? deviceId = null)
+    public static ProjectSession CreateEmpty()
     {
         PlaybackEngine engine;
-        try { engine = PlaybackEngine.Open(deviceId); }
+        try { engine = PlaybackEngine.Open(); }
         catch { engine = PlaybackEngine.OpenOffline(); }
 
         var project = new BenchmixProject { SampleRate = engine.SampleRate };

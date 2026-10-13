@@ -15,26 +15,49 @@ public sealed record OutputDeviceInfo(string Id, string Name, bool IsDefault);
 /// avoids the click and the half-second stall you get from opening a device on every play. The
 /// graph it pulls from is the same object the renderer bounces, so preview and export cannot
 /// drift apart.
+///
+/// <para>
+/// It follows Windows' choice of output (Daniel, 2026-10-12): Bluetooth headphones disconnected
+/// mid-song, playback carries on through the speakers from the same moment, and back again when
+/// they reconnect. Until then the stream died with the device and only a restart brought sound
+/// back. An output at another rate than the mix is fed through a <see cref="DeviceRateConverter"/>.
+/// </para>
 /// </summary>
 public sealed class PlaybackEngine : IDisposable
 {
     private readonly object _gate = new();
     private IWavePlayer? _player;
     private TransportSource? _source;
+    private IOutputDevices? _devices;
     private bool _disposed;
 
-    private PlaybackEngine(MixGraph graph, int sampleRate, string? deviceId, string? deviceName)
+    /// <summary>
+    /// Which stream may pull the mix. Bumped, under <see cref="_feedGate"/>, whenever a stream is let
+    /// go: its next read is silence and touches nothing, so two streams never pull the graph at once.
+    /// </summary>
+    private long _generation;
+    private readonly object _feedGate = new();
+
+    private PlaybackEngine(MixGraph graph, int sampleRate)
     {
         Graph = graph;
         SampleRate = sampleRate;
-        DeviceId = deviceId;
-        DeviceName = deviceName;
+        DeviceRate = sampleRate;
     }
 
     public MixGraph Graph { get; }
+
+    /// <summary>The mix's rate: the rate of the output Benchmix started on. It never changes.</summary>
     public int SampleRate { get; }
-    public string? DeviceId { get; }
-    public string? DeviceName { get; }
+
+    public string? DeviceId { get; private set; }
+    public string? DeviceName { get; private set; }
+
+    /// <summary>The rate of the output in use. Not <see cref="SampleRate"/> when Windows moved playback to one at another rate.</summary>
+    public int DeviceRate { get; private set; }
+
+    /// <summary>Playback moved to another output: Windows changed it, or the one in use went away. Raised on the UI's thread.</summary>
+    public event EventHandler? OutputChanged;
 
     public TransportState State => _source?.State ?? TransportState.Stopped;
     public long PositionFrames => Graph.PositionFrames;
@@ -47,10 +70,13 @@ public sealed class PlaybackEngine : IDisposable
         set { if (_source is not null) _source.Loop = value; }
     }
 
-    /// <summary>True once the output device has failed; playback cannot resume without reopening.</summary>
+    /// <summary>
+    /// True while there is no output to play through: the one in use went away and Windows has
+    /// none to take its place. It clears by itself when one appears.
+    /// </summary>
     public bool DeviceLost { get; private set; }
 
-    /// <summary>Raised on the UI's clock, not the audio thread; safe to bind to.</summary>
+    /// <summary>Playback stopped because no output is left. Raised on the UI's thread, not the audio thread; safe to bind to.</summary>
     public event EventHandler? PlaybackStoppedUnexpectedly;
 
     /// <summary>
@@ -66,7 +92,7 @@ public sealed class PlaybackEngine : IDisposable
     public static PlaybackEngine OpenOffline(int sampleRate = 48000)
     {
         var graph = new MixGraph(sampleRate);
-        var engine = new PlaybackEngine(graph, sampleRate, null, null);
+        var engine = new PlaybackEngine(graph, sampleRate);
         engine._source = new TransportSource(graph);
         return engine;
     }
@@ -74,43 +100,116 @@ public sealed class PlaybackEngine : IDisposable
     /// <summary>True when there is no output device — playback is a no-op but rendering works.</summary>
     public bool IsOffline => _player is null;
 
-    public static PlaybackEngine Open(string? deviceId = null)
+    /// <summary>
+    /// Opens the output Windows is playing through and builds the mix at that output's own rate,
+    /// which lets WASAPI run in its low-latency path instead of quietly inserting a resampler, then
+    /// keeps following Windows' choice of output. Throws when there is no output at all.
+    /// </summary>
+    public static PlaybackEngine Open(IOutputDevices? devices = null)
     {
-        MMDevice? device = null;
-        var enumerator = new MMDeviceEnumerator();
+        devices ??= new WasapiDevices();
+        var output = devices.Current();
+        if (output is null)
+        {
+            devices.Dispose();
+            throw new InvalidOperationException("There is no sound output.");
+        }
+
+        var graph = new MixGraph(output.SampleRate);
+        var engine = new PlaybackEngine(graph, output.SampleRate) { _devices = devices };
+        engine._source = new TransportSource(graph);
+        try { engine.Attach(output); }
+        catch
+        {
+            devices.Dispose();
+            throw;
+        }
+        devices.Changed += engine.OnOutputsChanged;
+        return engine;
+    }
+
+    /// <summary>
+    /// Starts a stream on an output, fed from the transport: through a rate converter when the
+    /// output runs at another rate than the mix. The stream runs continuously; silence when stopped.
+    /// </summary>
+    private void Attach(OutputEndpoint output)
+    {
+        var player = _devices!.Open(output);
         try
         {
-            device = deviceId is null
-                ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia)
-                : enumerator.GetDevice(deviceId);
+            long generation;
+            lock (_feedGate) generation = ++_generation;
+            ISampleProvider feed = new OwnedFeed(this, _source!, generation);
+            if (output.SampleRate != SampleRate) feed = new DeviceRateConverter(feed, output.SampleRate);
+            player.Init(new SampleToWaveProvider(feed));
+            player.PlaybackStopped += OnStreamStopped;
+            player.Play();
         }
         catch
         {
-            device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            try { player.Dispose(); } catch { }
+            throw;
         }
+        _player = player;
+        DeviceId = output.Id;
+        DeviceName = output.Name;
+        DeviceRate = output.SampleRate;
+        DeviceLost = false;
+    }
 
-        var player = new WasapiOut(device, AudioClientShareMode.Shared, true, 30);
-        int rate = device.AudioClient.MixFormat.SampleRate;
+    /// <summary>
+    /// Lets go of the stream in use. A block it is part-way through is waited out, and it can
+    /// start no other, before it is closed: the next stream must be the only thing pulling the mix.
+    /// </summary>
+    private void Detach()
+    {
+        var old = _player;
+        _player = null;
+        lock (_feedGate) _generation++;
+        if (old is null) return;
+        old.PlaybackStopped -= OnStreamStopped;
+        try { old.Stop(); } catch { }
+        try { old.Dispose(); } catch { }
+    }
 
-        var graph = new MixGraph(rate);
-        var engine = new PlaybackEngine(graph, rate, device.ID, device.FriendlyName);
+    private void OnOutputsChanged(object? sender, EventArgs e) => Follow(streamFailed: false);
 
-        var source = new TransportSource(graph);
-        engine._source = source;
-        engine._player = player;
+    private void OnStreamStopped(object? sender, StoppedEventArgs e)
+    {
+        // A stream already let go, or a stop that was asked for, is not a failure.
+        if (!ReferenceEquals(sender, _player) || e.Exception is null) return;
+        Follow(streamFailed: true);
+    }
 
-        player.Init(new SampleToWaveProvider(source));
-        player.PlaybackStopped += (_, e) =>
+    /// <summary>
+    /// Moves playback to the output Windows is using now, when that is not the one in use or the one
+    /// in use has failed. Playing carries on from the very moment it had reached. With no output at
+    /// all, playback stops until one appears.
+    /// </summary>
+    private void Follow(bool streamFailed)
+    {
+        bool moved = false, lost = false;
+        lock (_gate)
         {
-            if (e.Exception is null) return;
-            // The stream is gone. Say so in the engine's own state, or the UI's 30 Hz poll will
-            // read State == Playing on the next tick and cheerfully claim it is still playing.
-            engine.DeviceLost = true;
-            if (engine._source is not null) engine._source.State = TransportState.Stopped;
-            engine.PlaybackStoppedUnexpectedly?.Invoke(engine, EventArgs.Empty);
-        };
-        player.Play();                     // the stream runs continuously; silence when stopped
-        return engine;
+            if (_disposed || _devices is null || _source is null) return;
+            var now = _devices.Current();
+            if (!streamFailed && !DeviceLost && _player is not null && now?.Id == DeviceId) return;
+
+            Detach();
+            if (now is not null)
+            {
+                try { Attach(now); moved = true; }
+                catch { now = null; }               // not ready yet: the next notification tries again
+            }
+            if (now is null)
+            {
+                lost = !DeviceLost;
+                DeviceLost = true;
+                _source.State = TransportState.Stopped;
+            }
+        }
+        if (moved) OutputChanged?.Invoke(this, EventArgs.Empty);
+        if (lost) PlaybackStoppedUnexpectedly?.Invoke(this, EventArgs.Empty);
     }
 
     public static IReadOnlyList<OutputDeviceInfo> ListDevices()
@@ -130,6 +229,8 @@ public sealed class PlaybackEngine : IDisposable
 
     public void Play()
     {
+        // With no output a moment ago, look again: one may have appeared without a word.
+        if (DeviceLost) Follow(streamFailed: false);
         lock (_gate)
         {
             if (_source is null || DeviceLost) return;
@@ -222,11 +323,33 @@ public sealed class PlaybackEngine : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
-        _disposed = true;
-        try { _player?.Stop(); } catch { }
-        try { _player?.Dispose(); } catch { }
-        _player = null;
+        lock (_gate)
+        {
+            _disposed = true;
+            if (_devices is not null) _devices.Changed -= OnOutputsChanged;
+            Detach();
+            try { _devices?.Dispose(); } catch { }
+            _devices = null;
+        }
         Graph.Dispose();
+    }
+
+    /// <summary>
+    /// The transport, for one stream only. Once that stream has been let go (another output took
+    /// over) it reads silence and touches nothing.
+    /// </summary>
+    private sealed class OwnedFeed(PlaybackEngine engine, TransportSource source, long generation) : ISampleProvider
+    {
+        public WaveFormat WaveFormat => source.WaveFormat;
+
+        public int Read(Span<float> buffer)
+        {
+            lock (engine._feedGate)
+            {
+                if (engine._generation != generation) { buffer.Clear(); return buffer.Length; }
+                return source.Read(buffer);
+            }
+        }
     }
 
     /// <summary>

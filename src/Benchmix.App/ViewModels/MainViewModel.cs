@@ -113,11 +113,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Session.Engine.PlaybackStoppedUnexpectedly += (_, _) => OnUi(() =>
             {
                 IsPlaying = false;
-                // Deliberately does NOT say "press play": once the stream is gone the engine
-                // refuses to start again, so telling someone to press play sends them in circles.
-                Status = "The audio device stopped — reconnect it and restart Benchmix to hear playback again. "
+                // Since 2026-10-12 the engine follows Windows' output, so this is only when none is
+                // left at all — and it comes back by itself when one is connected.
+                Status = "No sound output is connected, so playback stopped. Sound comes back by itself when one is. "
                        + "Your project is fine, and you can still edit and render.";
             });
+            Session.Engine.OutputChanged += (_, _) => OnUi(() =>
+                Status = $"Sound now plays through {Session.Engine.DeviceName}.");
 
             ProjectBpm = Session.Project.ProjectBpm;
             Status = Session.Engine.IsOffline
