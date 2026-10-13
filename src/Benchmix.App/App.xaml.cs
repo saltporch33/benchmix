@@ -9,6 +9,13 @@ public partial class App : Application
     /// <summary>Files named on the command line, loaded once the window is up.</summary>
     public static string[] StartupFiles { get; private set; } = Array.Empty<string>();
 
+    /// <summary>
+    /// A .benchmix project to open as the window comes up: Windows passes it when one is
+    /// double-clicked in Explorer (Daniel, 2026-10-12). Until then it was taken for a song, and
+    /// "could not load" it.
+    /// </summary>
+    public static string? StartupProject { get; private set; }
+
     /// <summary>Seconds to wait before closing, for scripted runs. Zero means stay open.</summary>
     public static double AutoCloseSeconds { get; private set; }
 
@@ -200,7 +207,9 @@ public partial class App : Application
                     else refused ??= "--playtest needs a number of seconds";
                     break;
                 default:
-                    if (File.Exists(args[i])) files.Add(args[i]);
+                    if (File.Exists(args[i]) && string.Equals(Path.GetExtension(args[i]), Benchmix.Core.Persistence.ProjectStore.Extension, StringComparison.OrdinalIgnoreCase))
+                        StartupProject ??= args[i];            // the first project; a second cannot open beside it
+                    else if (File.Exists(args[i])) files.Add(args[i]);
                     else if (args[i].StartsWith('-') || args[i].StartsWith('/')) refused ??= $"unknown switch {args[i]}";
                     else missing ??= args[i];
                     break;
@@ -221,7 +230,7 @@ public partial class App : Application
         }
 
         StartupFiles = files.ToArray();
-        Log($"startup files: {StartupFiles.Length}, autoclose: {AutoCloseSeconds}"
+        Log($"startup files: {StartupFiles.Length}{(StartupProject is null ? "" : $", project: {Path.GetFileName(StartupProject)}")}, autoclose: {AutoCloseSeconds}"
           + (IsScriptedRun ? $", scripted run: off-screen, no taskbar button, audio device: {(UseAudioDevice ? "yes" : "none")}" : ""));
 
         base.OnStartup(e);

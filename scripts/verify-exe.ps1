@@ -1,4 +1,4 @@
-<#
+﻿<#
     Runs every verification switch against the published exe, one at a time, and checks from the
     OUTSIDE that none of them got in the way of whoever is using the machine.
 
@@ -50,12 +50,26 @@ if (-not $haveSongs) { Write-Host "Sample songs not found under $audio - running
 $log = "$env:LOCALAPPDATA\Benchmix\benchmix.log"
 New-Item -ItemType Directory -Force $ShotDir | Out-Null
 
+# A project file, as Explorer hands one over when it is double-clicked (2026-10-12): the two sample
+# songs in the oldest project format, which every later Benchmix still opens.
+$project = Join-Path $ShotDir 'verify.benchmix'
+if ($haveSongs) {
+    $track = { param($path, $name) [ordered]@{ id = [guid]::NewGuid().ToString(); name = $name; sourcePath = $path;
+        timelineOffsetSeconds = 0; sourceStartSeconds = 0; sourceEndSeconds = -1; speed = 1; semitones = 0;
+        mode = 'Independent'; preserveFormants = $true; eqLow = 1; eqMid = 1; eqHigh = 1; fadeInSeconds = 0;
+        fadeOutSeconds = 0; gain = 1; pan = 0; muted = $false; soloed = $false; colorHex = '#3E7BFA' } }
+    [ordered]@{ schemaVersion = 1; name = 'verify'; sampleRate = 48000; masterGain = 1; limiterEnabled = $true;
+        eqMode = 'Isolator'; projectBpm = 93; tracks = @((& $track $bed 'Bed'), (& $track $top 'Topper')) } |
+        ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $project
+}
+
 $runs = @( @{ Name = 'latencycheck'; Args = '--latencycheck' } )
 if ($haveSongs) {
     $runs += @(
         @{ Name = 'gesturetest';      Args = "--gesturetest `"$bed`"" },
         @{ Name = 'buttontest';       Args = "--buttontest `"$bed`" `"$top`"" },
         @{ Name = 'loadcheck';        Args = "--loadcheck `"$bed`" `"$top`"" },
+        @{ Name = 'openproject';      Args = "--loadcheck `"$project`"" },
         @{ Name = 'playtest';         Args = "--playtest 6 `"$bed`" `"$top`"" },
         @{ Name = 'stemtest';         Args = "--stemtest `"$bed`"" },
         @{ Name = 'uiprobe-sections'; Args = "--demosections --uiprobe `"$ShotDir\sections.png`" `"$bed`"" },

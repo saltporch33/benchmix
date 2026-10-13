@@ -649,15 +649,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         CommitOpenRenames();
         if (!ConfirmDiscard()) return;
         if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
-        EndRampEntry();
 
         var dlg = new OpenFileDialog { Title = "Open project", Filter = ProjectStore.FileFilter };
         if (dlg.ShowDialog() != true) return;
+        await OpenProjectFileAsync(dlg.FileName);
+    }
 
+    /// <summary>
+    /// Opens a saved project — from the Open box, or a .benchmix file double-clicked in Explorer
+    /// (Daniel, 2026-10-12), which Windows hands to Benchmix as it starts. True when it opened.
+    /// </summary>
+    public async Task<bool> OpenProjectFileAsync(string path)
+    {
+        EndRampEntry();
         IsBusy = true;
         try
         {
-            var result = ProjectStore.Load(dlg.FileName);
+            var result = ProjectStore.Load(path);
             await Session.OpenAsync(result.Project);
 
             Tracks.Clear();
@@ -676,7 +684,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 Tracks.Add(vm);
             }
 
-            _projectPath = dlg.FileName;
+            _projectPath = path;
             ProjectBpm = result.Project.ProjectBpm;
             MasterGain = result.Project.MasterGain;
             LoopStart = result.Project.LoopStartSeconds;
@@ -688,12 +696,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             RecomputeLength();
             UpdateTitle();
             Status = missing > 0
-                ? $"Opened {Path.GetFileName(dlg.FileName)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence."
-                : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(dlg.FileName)}.";
+                ? $"Opened {Path.GetFileName(path)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence."
+                : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(path)}.";
+            return true;
         }
         catch (Exception ex)
         {
             Status = $"Could not open that project: {ex.Message}";
+            return false;
         }
         finally { IsBusy = false; }
     }

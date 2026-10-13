@@ -38,6 +38,14 @@ public partial class MainWindow : Window
     {
         _vm.Initialise();
 
+        // A project double-clicked in Explorer opens first; songs passed with it are added to it.
+        bool projectOpened = App.StartupProject is not { } project || await _vm.OpenProjectFileAsync(project);
+        if (App.StartupProject is not null)
+        {
+            App.Log($"startup project: {_vm.Status}");
+            _vm.ZoomFitCommand.Execute(null);
+        }
+
         if (App.StartupFiles.Length > 0)
         {
             await _vm.AddFilesAsync(App.StartupFiles);
@@ -46,10 +54,17 @@ public partial class MainWindow : Window
 
         if (App.LoadCheck)
         {
+            if (!projectOpened)
+            {
+                App.Log($"loadcheck: verdict=FAIL - the project given on the command line did not open ({_vm.Status})");
+                EndVerificationRun(false);
+                return;
+            }
             foreach (var t in _vm.Tracks)
                 App.Log($"loadcheck: '{t.Name}' loaded={t.IsLoaded} error={t.LoadError ?? "none"} sections={t.Clips.Count} peaks={(t.Clips.Any(c => c.Peaks is not null) ? "yes" : "no")}");
             bool allLoaded = _vm.Tracks.Count > 0 && _vm.Tracks.All(t => t.IsLoaded);
-            App.Log($"loadcheck: verdict={(allLoaded ? "PASS - every track is ready to split" : "FAIL - a track is not marked loaded")}");
+            string opened = App.StartupProject is null ? "" : $"the project {Path.GetFileName(App.StartupProject)} opened from the command line, and ";
+            App.Log($"loadcheck: verdict={(allLoaded ? $"PASS - {opened}every track is ready to split" : "FAIL - a track is not marked loaded")}");
             EndVerificationRun(allLoaded);
             return;
         }
