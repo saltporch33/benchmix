@@ -7,6 +7,8 @@
     <RootNamespace>Benchmix.App</RootNamespace>
     <Version>0.1.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Drawn by scripts/make-icon.py (2026-10-12). The desktop shortcut takes its icon from the exe. -->
+    <ApplicationIcon>Benchmix.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
