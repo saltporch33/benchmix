@@ -38,6 +38,17 @@ public sealed class PlaybackEngine : IDisposable
     private long _generation;
     private readonly object _feedGate = new();
 
+    /// <summary>
+    /// Until when (Environment.TickCount64) playing should carry on by itself once an output is back.
+    /// While Windows changes outputs it can for a moment report none, or refuse to open the one it
+    /// names (review, 2026-10-12); the song must not stay stopped for that. A long silence is
+    /// different: sound starting again by itself minutes later would startle.
+    /// </summary>
+    private long _resumeUntil;
+
+    /// <summary>How long after losing every output playing still resumes by itself.</summary>
+    public const int ResumeWithinMilliseconds = 5000;
+
     private PlaybackEngine(MixGraph graph, int sampleRate)
     {
         Graph = graph;
@@ -194,7 +205,11 @@ public sealed class PlaybackEngine : IDisposable
             if (_disposed || _devices is null || _source is null) return;
             var now = _devices.Current();
             if (!streamFailed && !DeviceLost && _player is not null && now?.Id == DeviceId) return;
+            // Mid-change Windows can name no output for a moment. A stream that still works is kept
+            // until it names another one; the next notification says when.
+            if (!streamFailed && !DeviceLost && _player is not null && now is null) return;
 
+            bool wasPlaying = _source.State == TransportState.Playing;
             Detach();
             if (now is not null)
             {
@@ -205,7 +220,18 @@ public sealed class PlaybackEngine : IDisposable
             {
                 lost = !DeviceLost;
                 DeviceLost = true;
+                if (wasPlaying) _resumeUntil = Environment.TickCount64 + ResumeWithinMilliseconds;
                 _source.State = TransportState.Stopped;
+            }
+            else if (_resumeUntil != 0)
+            {
+                // Back within moments of losing it: the song carries on as if nothing had happened.
+                if (Environment.TickCount64 <= _resumeUntil && _source.State != TransportState.Playing)
+                {
+                    Graph.SnapParameters();
+                    _source.State = TransportState.Playing;
+                }
+                _resumeUntil = 0;
             }
         }
         if (moved) OutputChanged?.Invoke(this, EventArgs.Empty);
@@ -245,7 +271,11 @@ public sealed class PlaybackEngine : IDisposable
 
     public void Pause()
     {
-        lock (_gate) { if (_source is not null) _source.State = TransportState.Paused; }
+        lock (_gate)
+        {
+            _resumeUntil = 0;                       // paused on purpose: an output coming back must not play
+            if (_source is not null) _source.State = TransportState.Paused;
+        }
     }
 
     /// <summary>
@@ -281,6 +311,7 @@ public sealed class PlaybackEngine : IDisposable
         lock (_gate)
         {
             if (_source is null) return;
+            _resumeUntil = 0;                       // stopped on purpose, likewise
             _source.State = TransportState.Stopped;
             WaitForIdle();
             Graph.Seek(_source.StopReturnFrame);

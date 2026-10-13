@@ -114,9 +114,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             {
                 IsPlaying = false;
                 // Since 2026-10-12 the engine follows Windows' output, so this is only when none is
-                // left at all — and it comes back by itself when one is connected.
-                Status = "No sound output is connected, so playback stopped. Sound comes back by itself when one is. "
-                       + "Your project is fine, and you can still edit and render.";
+                // left, or the one Windows names would not open (another program holding it, say).
+                Status = "Playback stopped: there is no sound output, or it would not open. Connecting one brings sound back, "
+                       + "or press Play to try again. Your project is fine, and you can still edit and render.";
             });
             Session.Engine.OutputChanged += (_, _) => OnUi(() =>
                 Status = $"Sound now plays through {Session.Engine.DeviceName}.");
@@ -1312,6 +1312,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         PushUndo($"{track.Name}: add {files.Count} file{(files.Count == 1 ? "" : "s")}");
         EditResult? last = null;
+        long? firstFrame = null;
         int placedCount = 0;
         try
         {
@@ -1320,6 +1321,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 last = await Session.PlaceFileAsync(track.Model, path, at);
                 if (!last.Changed) break;
                 placedCount++;
+                firstFrame ??= last.Span?.Start;
                 if (last.Clip is { } placed)
                     at = TimelineEditor.TimelineSecondsOfFrame(track.Model, TimelineEditor.EndFrameOf(placed, Session), Session);
             }
@@ -1341,8 +1343,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var message = placedCount == files.Count
             ? $"{track.Name}: put {what} at {from:0.00}s."
             : $"{track.Name}: put {what} at {from:0.00}s — {last?.Message}";
-        if (placedCount > 0) AfterClipEdit(track, new EditResult(true, message, last?.Clip), last?.Clip);
-        else Status = last?.Message ?? "Nothing was placed.";
+        if (placedCount == 0) { Status = last?.Message ?? "Nothing was placed."; return; }
+        // In MARK MODE the mark moves onto what landed, as for a pasted section (review, 2026-10-12):
+        // left where it was, Delete and Ctrl+X would act on that, not on the file just put down.
+        if (MarkMode && firstFrame is long firstStart && last?.Span is { } lastSpan)
+        {
+            AfterClipEdit(track, new EditResult(true, message));
+            SetMark(track, firstStart, lastSpan.End);
+            Status = message;
+        }
+        else AfterClipEdit(track, new EditResult(true, message, last?.Clip), last?.Clip);
     }
 
     [RelayCommand]
@@ -1516,6 +1526,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Status = "That is too short to mark. Drag further along the track.";
             return;
         }
+        // An end a hair past a section's edge goes onto it: what the mark shows is what is acted on.
+        var tidy = TimelineEditor.TidyStretch(d.Track.Model, m.Start, m.End, Session);
+        if (tidy != m) SetMark(d.Track, tidy.Start, tidy.End);
+        m = d.Track.Mark!.Value;
         Status = $"Marked {Describe(d.Track, m.Start, m.End)}. Ctrl+C copies it, Ctrl+X cuts it, Delete removes it, Ctrl+D repeats it.";
     }
 
@@ -1537,7 +1551,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         SelectClip(null);
-        SetMark(t, from, to);
+        var tidy = TimelineEditor.TidyStretch(t.Model, Math.Min(from, to), Math.Max(from, to), Session);
+        SetMark(t, tidy.Start, tidy.End);
         var m = t.Mark!.Value;
         Status = $"Marked {Describe(t, m.Start, m.End)}. Ctrl+C copies it, Ctrl+X cuts it, Delete removes it, Ctrl+D repeats it.";
     }
@@ -1591,8 +1606,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PushUndo($"{t.Name}: repeat marked stretch");
         var result = TimelineEditor.RepeatStretch(t.Model, start, end, Session);
         AfterClipEdit(t, result);
-        if (result.Span is { } span) SetMark(t, span.Start, span.End);
-        if (result.Changed) Status = $"{t.Name}: {result.Message} The mark moved onto the repeat, so Ctrl+D again adds another.";
+        if (result.Span is { } span)
+        {
+            SetMark(t, span.Start, span.End);
+            Status = $"Repeated it: {Describe(t, span.Start, span.End)}. The mark moved onto the repeat, so Ctrl+D again adds another.";
+        }
     }
 
     // ---------------- tempo ramps (Daniel, 2026-10-11) ----------------

@@ -328,6 +328,11 @@ public static class TimelineEditor
         long length = piece.LengthFrames;
         if (length < MinimumFrames(session) || piece.Clips.Count == 0)
             return EditResult.No("There is nothing on the clipboard to paste.");
+        // The length was measured when it was copied. If the song it came from has been let go since
+        // (its track removed, New, Open), the paste would clear that span and put down a section
+        // with no audio: silence now, and the song again once a reload decodes it (review, 2026-10-12).
+        if (piece.Clips.Any(c => session.AudioFor(c) is null))
+            return EditResult.No("The song that was copied is no longer in the project, so there is nothing to paste. Copy it again.");
 
         bool adopted = copiedFrom is not null && Adopt(track, SettingsOf(copiedFrom));
 
@@ -421,17 +426,15 @@ public static class TimelineEditor
     /// </summary>
     public static Piece CopyStretch(TrackModel track, long start, long end, ProjectSession session)
     {
+        (start, end) = TidyStretch(track, start, end, session);
         var clips = new List<ClipModel>();
-        long minimum = MinimumFrames(session);
         foreach (var c in track.Clips.OrderBy(c => StartFrameOf(c, session)))
         {
             long length = LengthFramesOf(c, session);
             if (length <= 0) continue;                          // its file is missing: nothing to copy
             long cStart = StartFrameOf(c, session), cEnd = cStart + length;
             long from = Math.Max(cStart, start), to = Math.Min(cEnd, end);
-            // A sliver at an edge of the stretch is a slip of the mouse past a section's edge, as a
-            // sliver left by an overwrite is (ClearRange).
-            if (to - from < minimum) continue;
+            if (to <= from) continue;
 
             var copy = Copy(c);
             long source = SourceStartFrameOf(c, session);
@@ -452,11 +455,41 @@ public static class TimelineEditor
     }
 
     /// <summary>
+    /// Moves each end of a stretch onto an edge of a section on the same track when it lies closer
+    /// to one than <see cref="MinimumSectionSeconds"/>. An end that close cuts off a sliver, which a
+    /// cut throws away (<see cref="ClearRange"/>) — so a copy of the same stretch would disagree with
+    /// it about those frames, and pasting back, or a repeat, would leave a gap with a declick either
+    /// side of it (review, 2026-10-12). Copy, clear and repeat all tidy the same way, first.
+    /// </summary>
+    public static (long Start, long End) TidyStretch(TrackModel track, long start, long end, ProjectSession session)
+    {
+        long minimum = MinimumFrames(session);
+        long Tidy(long at)
+        {
+            long best = at, distance = minimum;
+            foreach (var c in track.Clips)
+            {
+                long length = LengthFramesOf(c, session);
+                if (length <= 0) continue;
+                long a = StartFrameOf(c, session);
+                foreach (long edge in new[] { a, a + length })
+                {
+                    long d = Math.Abs(edge - at);
+                    if (d < distance) { distance = d; best = edge; }
+                }
+            }
+            return best;
+        }
+        return (Tidy(start), Tidy(end));
+    }
+
+    /// <summary>
     /// Empties a stretch of a track, leaving the gap: a section across an edge is cut back to it, one
     /// across the whole stretch is split around it, one inside it goes. Nothing moves.
     /// </summary>
     public static EditResult ClearStretch(TrackModel track, long start, long end, ProjectSession session)
     {
+        (start, end) = TidyStretch(track, start, end, session);
         if (CopyStretch(track, start, end, session).Clips.Count == 0)
             return EditResult.No("There is nothing in the marked stretch.");
         ClearRange(track, start, end, session);
@@ -472,6 +505,7 @@ public static class TimelineEditor
     /// </summary>
     public static EditResult RepeatStretch(TrackModel track, long start, long end, ProjectSession session)
     {
+        (start, end) = TidyStretch(track, start, end, session);
         var piece = CopyStretch(track, start, end, session);
         if (piece.Clips.Count == 0) return EditResult.No("There is nothing in the marked stretch to repeat.");
         if (piece.LengthFrames < MinimumFrames(session)) return EditResult.No("That stretch is too short to repeat.");

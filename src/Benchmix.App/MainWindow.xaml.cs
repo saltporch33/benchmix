@@ -2661,7 +2661,8 @@ public partial class MainWindow : Window
         Check("with a stretch marked, the lane menu's Cut, Copy, Repeat and Delete say they act on it",
               headers.Contains("Cut marked stretch") && headers.Contains("Copy marked stretch") && headers.Contains("Repeat marked stretch") && headers.Contains("Delete marked stretch"));
         _vm.CopyClipCommand.Execute(null);
-        Check($"Ctrl+C copies the marked stretch (\"{_vm.Status}\")", _vm.HasClipboard && _vm.Status.StartsWith("Copied") && marked.Clips.Count == 2);
+        Check($"Ctrl+C copies the marked stretch, both sections of it (\"{_vm.Status}\")",
+              _vm.HasClipboard && _vm.Status.StartsWith("Copied") && _vm.Status.Contains("(2 sections)") && marked.Clips.Count == 2);
         _vm.AddEmptyTrackCommand.Execute(null);
         var emptyId = _vm.Tracks[^1].Id;
         TrackViewModel Empty() => _vm.Tracks.First(t => t.Id == emptyId);
@@ -2734,6 +2735,42 @@ public partial class MainWindow : Window
         bool played = _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Math.Abs(_vm.PositionSeconds - (p0 + 2)) < 0.01;
         _vm.StopCommand.Execute(null);
         Check("a double-click in mark mode plays from there, and leaves the mark as it was", played && Song().Mark == beforeDouble);
+
+        // --- a turn of a knob, a click in mark mode, another turn: two undo steps (review, 2026-10-12) ---
+        var knobTrack = Song();
+        double speedBefore = knobTrack.Speed;
+        knobTrack.Speed = speedBefore + 0.02;
+        Click(Lane(), At(Lane(), p0 + 3));
+        knobTrack.Speed = speedBefore + 0.04;
+        Undo(() => Song().Model.Speed != speedBefore + 0.04);
+        Check($"a click in mark mode ends a knob's turn, so the next turn of it is its own undo step (after one undo {Song().Model.Speed:0.####}, want {speedBefore + 0.02:0.####})",
+              Song().Model.Speed == speedBefore + 0.02);
+        Undo(() => Song().Model.Speed == speedBefore);
+
+        // --- losing the mouse during a press is not a click: the playhead stays ---
+        double playheadBefore = _vm.PositionSeconds;
+        var lostAt = At(Lane(), p0 + 25);
+        _scriptedWindowPoint = lostAt;
+        LaneDown(Lane(), lostAt);
+        _scriptedWindowPoint = null;
+        OnLaneLostCapture(Lane(), new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = LostMouseCaptureEvent });
+        Check("a press in mark mode that loses the mouse (Alt+Tab, a pan) is not a click: the playhead stays where it was",
+              _vm.PositionSeconds == playheadBefore && !_vm.PointerHeld);
+
+        // --- a song file put on a track in mark mode gets the mark, as a pasted section does ---
+        if (App.StartupFiles.FirstOrDefault() is { } file)
+        {
+            _vm.AddEmptyTrackCommand.Execute(null);
+            var fileTrackId = _vm.Tracks[^1].Id;
+            var fileTask = _vm.PlaceFilesAsync(_vm.Tracks[^1], new[] { file }, p0 + 1);
+            PumpUntil(() => fileTask.IsCompleted, 20000);
+            var fileTrack = _vm.Tracks.FirstOrDefault(t => t.Id == fileTrackId);
+            var placedFile = fileTrack?.Model.Clips.FirstOrDefault();
+            Check($"a song file put on a track in mark mode moves the mark onto it, so Delete or Ctrl+X acts on that (\"{_vm.Status}\")",
+                  fileTrack is not null && placedFile is not null && Song().Mark is null && _vm.SelectedClips.Count == 0
+                  && fileTrack.Mark == (Benchmix.Core.TimelineEditor.StartFrameOf(placedFile, s), Benchmix.Core.TimelineEditor.EndFrameOf(placedFile, s)));
+        }
+        else notes.Add("no song on the command line, so a file put on a track in mark mode is untested");
 
         // --- MARK MODE off takes the mark away; Ctrl+C is about sections again ---
         Toggle();
@@ -4316,6 +4353,13 @@ public partial class MainWindow : Window
         _pendingToggle = null;                         // losing the mouse is not a click
         _pendingCollapse = null;
         if (_band is not null) BandLost();
+        else if (_markPress is not null && !_markDragging)
+        {
+            // A press in mark mode that never moved: losing the mouse is not a click either, so the
+            // playhead stays where it was (review, 2026-10-12).
+            _markPress = null;
+            _vm.PointerHeld = false;
+        }
         else if (_dragClip is not null || _rampGrab is not null || _markPress is not null) LaneUp((FrameworkElement)sender);
     }
 
@@ -4561,6 +4605,7 @@ public partial class MainWindow : Window
             if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
             if (dragged) _vm.EndMarkDrag();
             else _vm.MarkModeClick(mp.Track, mp.PressSeconds);
+            _vm.EndGesture();
             return;
         }
 

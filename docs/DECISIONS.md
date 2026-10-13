@@ -620,3 +620,17 @@ option's words, not his).
 | **Over the waveforms, the gaps and the room under the last track, a plain turn moves the playhead**, exactly as over the ruler. Ctrl+wheel and Shift+wheel there still zoom and scroll sideways. | His choice. |
 | **Over the track controls on the left and the tracks' scrollbar, the wheel scrolls the tracks up and down, or turns the knob under it**, as before. | The other half of the option he chose. With a few tracks they all fit, so there was nothing to scroll — which is why he saw the wheel do nothing over the tracks. |
 
+## 2026-10-12 — from the review of MARK MODE and the four fixes
+
+He said, verbatim, *"Please review, yes."* Three reviewers and three skeptics went over
+`6f2ca04..669aa4f..6bbcf5c`. Decisions taken in fixing what held up:
+
+| Decision | Why |
+| --- | --- |
+| **A mark's end within 20 ms of a section's edge on its own track is moved onto that edge**, when it is let go and again by copy, cut, delete and repeat themselves. | An end that close cuts a sliver off, which a cut throws away but a copy left out; pasting back, or a repeat, then left a 10 ms gap with a declick either side. |
+| **A paste of something copied from a song no longer in the project is refused** ("Copy it again"). | Its length was measured when it was copied. It cleared the span and put down a section with no audio: silence now, the song again after a reload. |
+| **A moment with no output named leaves a working stream alone; an output back within 5 s of losing the last one carries on playing.** Pause or Stop in the meantime are kept. | While Windows changes outputs it can name none for a moment, or refuse to open the one it names. The song must not stay stopped for that — but sound starting by itself minutes later would startle. |
+| **The message when playback stops for want of an output says it may be busy, and to press Play.** | The output can be connected but held by another program; then no notice comes when it is free. |
+| **Song files pasted or dropped in MARK MODE get the mark**, as a pasted section does. | Left on the old place, Delete and Ctrl+X acted there instead of on the file just put down. |
+| **In MARK MODE a press that loses the mouse is not a click**, and a click or a mark drag ends a knob's undo step. | As everywhere else on the lane. |
+

@@ -250,7 +250,7 @@ benchmix mashup <bed> <topper> <out.wav> [opts]  tempo-match and render
 | `Benchmix.Engine` | audio and analysis. No UI types. Clips, stretch, EQ, mixer, render, tempo/key detection. |
 | `Benchmix.Core` | the project model, its file format, undo, and the bridge that keeps the live graph matching the model. |
 | `Benchmix.App` | WPF shell — timeline, waveforms, knobs, transport. |
-| `Benchmix.Tests` | 341 tests, engine-level and model-level, plus end-to-end on real files. |
+| `Benchmix.Tests` | 349 tests, engine-level and model-level, plus end-to-end on real files. |
 
 The signal chain per track is `clip → stretch → EQ → clip envelope → gain/pan → mix`, and **live preview and the
 final render are the same chain** — the renderer just pulls blocks as fast as the CPU allows

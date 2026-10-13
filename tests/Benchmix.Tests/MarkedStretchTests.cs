@@ -325,6 +325,78 @@ public class MarkedStretchTests : IDisposable
         }
     }
 
+    // ================================================================ from the review, 2026-10-12
+
+    [Fact]
+    public async Task AMarkEndAHairPastASeamIsTidiedOntoItSoCutAndPasteBackChangesNothing()
+    {
+        var (s, a) = await SongAsync(10, 20);
+        using (s)
+        {
+            var reference = Render(s, Rate * 30);
+
+            // 10 ms past the seam at 20 s: Ctrl held, or a snap onto another track's edge nearby.
+            long start = F(12), end = F(20.010);
+            Assert.Equal((F(12), F(20)), TimelineEditor.TidyStretch(a, start, end, s));
+            var piece = TimelineEditor.CopyStretch(a, start, end, s);
+            TimelineEditor.ClearStretch(a, start, end, s);
+            TimelineEditor.Paste(a, piece, 12, s);
+
+            int differing = Differing(Render(s, Rate * 30), 0, reference, 0, Rate * 30);
+            Assert.True(differing == 0,
+                $"{differing} frames differ: the copy left out a 10 ms sliver the cut threw away, so pasting back left a gap "
+              + "with a declick either side where nothing was meant to change");
+        }
+    }
+
+    [Fact]
+    public async Task AStretchStartingAHairBeforeASeamLeavesNoRemnantBehindIt()
+    {
+        var (s, a) = await SongAsync(10, 20);
+        using (s)
+        {
+            Assert.Equal((F(10), F(15)), TimelineEditor.TidyStretch(a, F(9.990), F(15), s));
+            TimelineEditor.ClearStretch(a, F(9.990), F(15), s);
+            Assert.Contains(a.Clips, c => TimelineEditor.EndFrameOf(c, s) == F(10) && TimelineEditor.StartFrameOf(c, s) == 0);
+        }
+    }
+
+    [Fact]
+    public async Task RepeatingAStretchThatEndsAHairPastAnEdgeJoinsOnTheEdge()
+    {
+        var (s, a) = await SongAsync(10, 20);
+        using (s)
+        {
+            var result = TimelineEditor.RepeatStretch(a, F(12), F(20.010), s);
+            Assert.True(result.Changed, result.Message);
+            Assert.True(result.Span == (F(20), F(28)),
+                $"the repeat went to {result.Span}: 10 ms after the section it repeats ends, a gap at every repeat instead of a crossfaded join");
+        }
+    }
+
+    [Fact]
+    public async Task PastingWhatWasCopiedFromASongNoLongerInTheProjectIsRefusedAndChangesNothing()
+    {
+        var other = Path.Combine(_dir, "other.wav");
+        var o = new float[Rate * 30 * 2];
+        for (int f = 0; f < Rate * 30; f++) o[f * 2] = o[f * 2 + 1] = 0.5f - f / (2f * Rate * 30);
+        AudioClip.FromSamples("other", o, Rate).SaveWav(other);
+
+        var (s, a) = await SongAsync(10, 20);
+        using (s)
+        {
+            var b = await s.AddTrackAsync(other, 0);
+            var piece = TimelineEditor.CopyStretch(a, F(12), F(18), s);
+            s.RemoveTrack(a);                          // lets go of song A's audio
+            var before = b.Clips.Select(c => (c.TrackStartSeconds, c.SourceStartSeconds, c.SourceEndSeconds)).ToList();
+
+            var result = TimelineEditor.Paste(b, piece, 5, s);
+            Assert.False(result.Changed,
+                "pasted a section of a song no longer in the project: it cleared 6 s of the other song and put down silence that would play again after a reload");
+            Assert.Equal(before, b.Clips.Select(c => (c.TrackStartSeconds, c.SourceStartSeconds, c.SourceEndSeconds)).ToList());
+        }
+    }
+
     // ================================================================ marking
 
     [Fact]

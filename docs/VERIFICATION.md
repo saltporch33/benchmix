@@ -852,6 +852,28 @@ scrollbar it is passed on; Ctrl+wheel and Shift+wheel over a waveform still zoom
 **Not verified:** switching with his real Bluetooth headphones; how the converted sound compares by
 ear; the icon on his desktop (Windows may show the old one until its icon cache refreshes).
 
+## 2026-10-12 — the review of MARK MODE and the four fixes
+
+Three read-only reviewers (the stretch core; mark mode in the app; following the output and the other
+fixes), each followed by a skeptic told to refute every finding: six agents, about 1.07 million
+tokens. **11 findings, 9 confirmed, all fixed**; 2 refuted (a snapping test said to be unable to fail —
+the change it would miss is not a defect; and a start with no output never picking one up — that was
+so before and was not promised). The four that mattered: a mark edge a hair past a section's edge left
+a gap on cut-and-paste-back and on Ctrl+D; a paste after the copied song left the project put down
+silence; a moment with no output while Windows switched stopped the song for good; song files pasted
+in mark mode left the mark on the old place. Smaller: the repeat message gave song seconds, the
+no-output message promised what it could not keep, a lost mouse counted as a click, a mark-mode click
+did not end a knob's undo step, and the copy check could not fail.
+
+**One regression test each where a test can reach it**: `MarkedStretchTests` +4, `OutputFollowingTests`
++4 (and the fake output can now refuse to open), and in the window three new checks (a knob turn either
+side of a mark-mode click is two undo steps; a lost mouse is not a click; a song file put on a track in
+mark mode gets the mark) plus the copy check made to look at what Ctrl+C took. **Broken on purpose** —
+the tidying, the paste guard, keeping a working stream and resuming switched off — 7 of the 30 tests
+in those two files failed, then passed again once put back.
+
+**349 tests, 0 failed, 0 skipped**; `scripts/verify-exe.ps1` on a staged build (his copy of Benchmix was open): all nine runs passed and stayed out of the way (gesturetest 253, buttontest 41, openproject). This is the new review point.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

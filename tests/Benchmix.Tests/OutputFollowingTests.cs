@@ -51,8 +51,16 @@ public class OutputFollowingTests
         public readonly List<FakePlayer> Opened = new();
         public bool Disposed;
 
+        public int RefuseOpens;                  // how many opens to refuse, as an output mid-change does
+
         public OutputEndpoint? Current() => Default;
-        public IWavePlayer Open(OutputEndpoint output) { var p = new FakePlayer(output); Opened.Add(p); return p; }
+        public IWavePlayer Open(OutputEndpoint output)
+        {
+            if (RefuseOpens > 0) { RefuseOpens--; throw new IOException("The device is not ready."); }
+            var p = new FakePlayer(output);
+            Opened.Add(p);
+            return p;
+        }
         public event EventHandler? Changed;
         public void Dispose() => Disposed = true;
 
@@ -175,6 +183,72 @@ public class OutputFollowingTests
             engine.Play();
             Assert.Equal(TransportState.Playing, engine.State);
             Assert.Equal(0, NotTheSong(outputs.Opened[^1].Pull(2400), 2400));
+        }
+    }
+
+    // ================================================================ from the review, 2026-10-12
+
+    [Fact]
+    public void AMomentWithNoOutputNamedLeavesAWorkingStreamAlone()
+    {
+        var (engine, outputs) = Playing();
+        using (engine)
+        {
+            outputs.Opened.Single().Pull(2400);
+            outputs.SwitchTo(null);                // mid-change, Windows names nothing for a moment
+            Assert.True(outputs.Opened.Count == 1 && !outputs.Opened[0].Disposed && engine.State == TransportState.Playing && !engine.DeviceLost,
+                "a moment with no output named tore down the stream that was still playing, and the song stopped");
+            Assert.Equal(0, NotTheSong(outputs.Opened[0].Pull(2400), 2400));
+        }
+    }
+
+    [Fact]
+    public void WhenTheNextOutputAppearsMomentsAfterTheOldOneDiedTheSongCarriesOn()
+    {
+        var (engine, outputs) = Playing();
+        using (engine)
+        {
+            outputs.Opened.Single().Pull(2400);
+            outputs.Default = null;                // the stream dies before Windows has named the speakers
+            outputs.Opened[0].Fail();
+            Assert.True(engine.DeviceLost);
+
+            outputs.SwitchTo(Speakers);            // and a moment later it does
+            Assert.True(engine.State == TransportState.Playing,
+                "the speakers took over moments later but the song stayed stopped until Play was pressed");
+            Assert.Equal(0, NotTheSong(outputs.Opened[^1].Pull(2400), 2400));
+        }
+    }
+
+    [Fact]
+    public void AnOutputThatWillNotOpenAtFirstIsTriedAgainAndTheSongCarriesOn()
+    {
+        var (engine, outputs) = Playing();
+        using (engine)
+        {
+            outputs.Opened.Single().Pull(2400);
+            outputs.RefuseOpens = 1;
+            outputs.SwitchTo(Speakers);            // named, but not ready to open yet
+            Assert.True(engine.DeviceLost);
+            outputs.SwitchTo(Speakers);            // the next notice: ready now
+            Assert.True(!engine.DeviceLost && engine.State == TransportState.Playing,
+                $"the speakers opened at the second try but the song did not carry on (state {engine.State})");
+            Assert.Equal(0, NotTheSong(outputs.Opened[^1].Pull(2400), 2400));
+        }
+    }
+
+    [Fact]
+    public void StoppedOnPurposeWhileThereIsNoOutputItStaysStoppedWhenOneComesBack()
+    {
+        var (engine, outputs) = Playing();
+        using (engine)
+        {
+            outputs.Opened.Single().Pull(2400);
+            outputs.Default = null;
+            outputs.Opened[0].Fail();
+            engine.Stop();                         // he pressed stop meanwhile
+            outputs.SwitchTo(Speakers);
+            Assert.True(engine.State == TransportState.Stopped, "an output coming back started playing a song that had been stopped on purpose");
         }
     }
 
