@@ -137,6 +137,8 @@ public static class ProjectStore
             if (t.Speed <= 0) t.Speed = 1.0;
             t.Ramps ??= new();
             TempoRamps.Normalise(t, p.SampleRate);
+            t.Warps ??= new();
+            WarpMarkers.Normalise(t, p.SampleRate);
             if (t.Id == Guid.Empty) t.Id = Guid.NewGuid();
             if (string.IsNullOrEmpty(t.Name)) t.Name = Path.GetFileNameWithoutExtension(t.SourcePath);
 

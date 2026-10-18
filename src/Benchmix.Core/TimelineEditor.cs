@@ -152,15 +152,53 @@ public static class TimelineEditor
             : Math.Max(0.01, track.Speed);
 
     /// <summary>
-    /// The track's tempo map in seconds from its origin, for a track with tempo ramps; null for one
-    /// without, whose conversions keep their own arithmetic exactly. The same map the engine plays,
-    /// in another unit. Built leniently, so a slip in a project file can never throw while drawing.
+    /// The track's tempo map in seconds from its origin, for a track with tempo ramps or a moved warp
+    /// marker; null for one with neither, whose conversions keep their own arithmetic exactly. The
+    /// same map the engine plays, in another unit. Built leniently, so a slip in a project file can
+    /// never throw while drawing.
     /// </summary>
     public static TempoMap? SecondsMapOf(TrackModel track)
+    {
+        var tempo = TempoSecondsMapOf(track);
+        if (track.Warps.Count == 0) return tempo;
+        var warped = TempoMap.LenientWarped(tempo ?? TempoMap.Lenient(track.Speed, Array.Empty<TempoMap.Ramp>()), WarpMarkers.PinsOf(track));
+        return warped.IsWarped ? warped : tempo;
+    }
+
+    /// <summary>
+    /// The track's tempo alone — the TEMPO knob and its ramps, no warp — in seconds from its origin;
+    /// null when it has no ramp. What a warp marker's <see cref="WarpMarker.TempoSeconds"/> counts in.
+    /// </summary>
+    public static TempoMap? TempoSecondsMapOf(TrackModel track)
         => track.Ramps.Count == 0
             ? null
             : TempoMap.Lenient(track.Speed, track.Ramps.Select(r => new TempoMap.Ramp(
                   r.StartSeconds - track.TimelineOffsetSeconds, r.EndSeconds - track.TimelineOffsetSeconds, r.ToSpeed)));
+
+    /// <summary>
+    /// How far the track's tempo — the knob and its ramps, ignoring its warp markers — has carried
+    /// it at a timeline position. Where nothing is warped this is <see cref="TrackSecondsAt"/>, to the bit.
+    /// </summary>
+    public static double TempoSecondsAt(TrackModel track, double timelineSeconds)
+        => TempoSecondsMapOf(track) is { } map
+            ? map.PositionAt(timelineSeconds - track.TimelineOffsetSeconds)
+            : (timelineSeconds - track.TimelineOffsetSeconds) * Math.Max(0.01, track.Speed);
+
+    /// <summary>
+    /// The speed the track's tempo alone — the knob and its ramps, not its warp — has at a point of
+    /// the timeline. A tempo ramp starts from this (its start is "whatever is in effect there" in
+    /// the tempo, never stored), so a new ramp left at the tempo it was filled in with changes nothing.
+    /// </summary>
+    public static double TempoSpeedAt(TrackModel track, double timelineSeconds)
+        => TempoSecondsMapOf(track) is { } map
+            ? map.SpeedAt(timelineSeconds - track.TimelineOffsetSeconds)
+            : Math.Max(0.01, track.Speed);
+
+    /// <summary>
+    /// True when where a stretch of the track lands depends on where it is — tempo ramps, or a moved
+    /// warp marker — so a length on the timeline must go through the map rather than one speed.
+    /// </summary>
+    public static bool TempoVaries(TrackModel track) => SecondsMapOf(track) is not null;
 
     // ---------------------------------------------------------------- split, copy, delete
 
@@ -342,8 +380,8 @@ public static class TimelineEditor
         var placed = Place(track, piece, start, session);
 
         string note = adopted
-            ? copiedFrom is { Ramps.Count: > 0 }
-                ? " The track takes that song's tempo, its tempo ramps and pitch."
+            ? copiedFrom is not null && CarriesTempoChanges(SettingsOf(copiedFrom))
+                ? $" The track takes that song's tempo, {TempoChangesOf(SettingsOf(copiedFrom))} and pitch."
                 : " The track takes that song's tempo and pitch, so it plays as it did."
             : placed.All(p => p.SourcePath.Equals(track.SourcePath, StringComparison.OrdinalIgnoreCase))
                 ? ""
@@ -574,6 +612,8 @@ public static class TimelineEditor
         var map = SecondsMapOf(track);                     // before the origin moves: it is measured from it
         foreach (var c in track.Clips)
             c.TrackStartSeconds = SecondsOf(StartFrameOf(c, session) + frames, session);
+        // Warp markers are on the audio, in the same frames: they move with it.
+        WarpMarkers.ShiftWithOrigin(track, frames, session);
 
         if (map is null)
         {
@@ -625,16 +665,28 @@ public static class TimelineEditor
     public sealed record DeckSettings(
         string Name, string SourcePath, double Speed, double Semitones, StretchMode Mode,
         bool PreserveFormants, double Bpm, string? BpmSource, string? Key, string? Camelot, string? KeySource,
-        IReadOnlyList<TempoRamp> Ramps)
+        IReadOnlyList<TempoRamp> Ramps, IReadOnlyList<WarpMarker> Warps, double Origin)
     {
-        /// <summary>The same tempo, pitch and tempo ramps: a section moved between the two plays at the same feel.</summary>
+        /// <summary>
+        /// The same tempo, pitch, tempo ramps and warp markers: a section moved between the two plays
+        /// at the same feel. Warp markers are counted from the track's origin, so with any, the
+        /// origins must agree too.
+        /// </summary>
         public bool SameFeelAs(TrackModel t)
-            => t.Speed == Speed && t.Semitones == Semitones && t.Mode == Mode && t.Ramps.SequenceEqual(Ramps);
+            => t.Speed == Speed && t.Semitones == Semitones && t.Mode == Mode && t.Ramps.SequenceEqual(Ramps)
+               && t.Warps.SequenceEqual(Warps) && (Warps.Count == 0 || t.TimelineOffsetSeconds == Origin);
     }
+
+    /// <summary>Whether a deck's settings carry tempo ramps or warp markers an empty track takes with them.</summary>
+    public static bool CarriesTempoChanges(DeckSettings d) => d.Ramps.Count > 0 || d.Warps.Count > 0;
+
+    /// <summary>"its tempo ramps", "its warp markers", or both, for a status message.</summary>
+    public static string TempoChangesOf(DeckSettings d)
+        => string.Join(", ", new[] { d.Ramps.Count > 0 ? "its tempo ramps" : null, d.Warps.Count > 0 ? "its warp markers" : null }.OfType<string>());
 
     public static DeckSettings SettingsOf(TrackModel t) => new(
         t.Name, t.SourcePath, t.Speed, t.Semitones, t.Mode, t.PreserveFormants,
-        t.Bpm, t.BpmSource, t.Key, t.Camelot, t.KeySource, t.Ramps.ToArray());
+        t.Bpm, t.BpmSource, t.Key, t.Camelot, t.KeySource, t.Ramps.ToArray(), t.Warps.ToArray(), t.TimelineOffsetSeconds);
 
     /// <summary>A track with no song of its own and nothing on it — one made with "empty track".</summary>
     public static bool IsEmptyDeck(TrackModel t) => t.Clips.Count == 0 && string.IsNullOrEmpty(t.SourcePath);
@@ -667,6 +719,11 @@ public static class TimelineEditor
         // Its tempo ramps too: they are spans of the timeline, so the empty track then plays the very
         // speed profile the section was playing under.
         target.Ramps = from.Ramps.ToList();
+        // And its warp markers. They sit on the song's audio, counted from that track's origin, so
+        // the empty track takes the origin as well — it has nothing on it for the origin to move —
+        // and the section then lands on the same frames, under the same warp.
+        target.Warps = from.Warps.ToList();
+        if (from.Warps.Count > 0) target.TimelineOffsetSeconds = from.Origin;
         // The name stays. A second deck holding part of a song is still a second deck, and two
         // tracks both called after the song would make every status message ambiguous.
         return true;
@@ -687,6 +744,8 @@ public static class TimelineEditor
         target.Camelot = before.Camelot;
         target.KeySource = before.KeySource;
         target.Ramps = before.Ramps.ToList();
+        target.Warps = before.Warps.ToList();
+        target.TimelineOffsetSeconds = before.Origin;
     }
 
     // ---------------------------------------------------------------- making room

@@ -12,6 +12,14 @@ namespace Benchmix.Engine.Audio;
 /// Before the first ramp a ramped map is that arithmetic too, so nothing before a ramp moves.
 /// </para>
 /// <para>
+/// With warp markers (Daniel, 2026-10-18) there is a second stage after that one. The map above —
+/// the knob and the ramps — says how far the track's <i>tempo</i> has carried it; each marker then
+/// pins a point of the track's audio to a point of that tempo, and between two markers the audio
+/// is spread evenly. The position is the warp of the tempo's position, so the speed is the tempo's
+/// times the warp's slope, and it jumps where a marker is, as in Ableton. A map with no marker, or
+/// whose markers have none of them been moved, is the one before them, the very same object.
+/// </para>
+/// <para>
 /// The unit is the caller's: the engine builds it in frames, the editing code in seconds. It is
 /// immutable, built on the caller's thread, and published to the render thread by reference swap,
 /// as a <see cref="ClipTimeline"/> is. Nothing here allocates once built.
@@ -22,19 +30,62 @@ public sealed class TempoMap
     /// <summary>One ramp, origin-relative: from the speed in effect at <see cref="From"/> to <see cref="ToSpeed"/> at <see cref="To"/>.</summary>
     public readonly record struct Ramp(double From, double To, double ToSpeed);
 
+    /// <summary>
+    /// One warp marker, origin-relative: the track's audio at <see cref="Audio"/> plays at the moment
+    /// its tempo — the knob and its ramps — has carried it to <see cref="Tempo"/>. A marker that has
+    /// not been moved has the two equal.
+    /// </summary>
+    public readonly record struct Pin(double Audio, double Tempo);
+
     /// <summary>The speeds the engine can play, as the TEMPO knob's model range.</summary>
     public const double LowestSpeed = 0.25, HighestSpeed = 4.0;
+
+    /// <summary>
+    /// How much slower or faster than its tempo the audio between two warp markers may be spread:
+    /// half to twice. Warping is for a beat that has drifted, not for changing a song's tempo.
+    /// </summary>
+    public const double LowestWarp = 0.5, HighestWarp = 2.0;
 
     // Segment i covers [_lo[i], _lo[i + 1]); the first starts at minus infinity and the last runs to
     // plus infinity. Within it the position is RefF + V·dx + ½·B·dx², with dx = x − RefX, and _loF[i]
     // is the position at _lo[i]. _pointX/_pointV are the breakpoints, for MaxSpeedOver.
     private readonly double[] _lo, _loF, _refX, _refF, _v, _b, _pointX, _pointV;
 
+    // A warped map: the unwarped one, and its markers sorted by both coordinates. _slope[0] is the
+    // warp's slope from the origin to the first marker, _slope[i] from marker i − 1 to marker i,
+    // and _slope[n] = 1 after the last: there the audio plays at its tempo again.
+    private readonly TempoMap? _tempo;
+    private readonly double[] _pinAudio = Array.Empty<double>(), _pinTempo = Array.Empty<double>(), _slope = Array.Empty<double>();
+
     private TempoMap(double speed)
     {
         IsConstant = true;
         BaseSpeed = MinSpeed = MaxSpeed = speed;
         _lo = _loF = _refX = _refF = _v = _b = _pointX = _pointV = Array.Empty<double>();
+    }
+
+    private TempoMap(TempoMap tempo, double[] audio, double[] tempoAt)
+    {
+        _tempo = tempo;
+        _pinAudio = audio;
+        _pinTempo = tempoAt;
+        int n = audio.Length;
+        _slope = new double[n + 1];
+        _slope[0] = audio[0] / tempoAt[0];
+        for (int i = 1; i < n; i++) _slope[i] = (audio[i] - audio[i - 1]) / (tempoAt[i] - tempoAt[i - 1]);
+        _slope[n] = 1;
+        _lo = _loF = _refX = _refF = _v = _b = _pointX = _pointV = Array.Empty<double>();
+
+        BaseSpeed = tempo.BaseSpeed;
+        double min = double.PositiveInfinity, max = 0;
+        for (int i = 0; i <= n; i++)
+        {
+            var (x0, x1) = SpanOfSlope(i);
+            min = Math.Min(min, _slope[i] * tempo.MinSpeedOver(x0, x1));
+            max = Math.Max(max, _slope[i] * tempo.MaxSpeedOver(x0, x1));
+        }
+        MinSpeed = min;
+        MaxSpeed = max;
     }
 
     private TempoMap(double baseSpeed, double[] points, double[] speeds)
@@ -160,9 +211,118 @@ public sealed class TempoMap
         return Build(b, kept.ToArray());
     }
 
+    /// <summary>
+    /// <paramref name="tempo"/> with warp markers after it. They must already be sorted, strictly
+    /// increasing in both coordinates, after the origin, and spread no further than
+    /// <see cref="LowestWarp"/>–<see cref="HighestWarp"/> between each two (and from the origin to the
+    /// first); and the speeds that make must be ones the engine can play. Anything else throws: this
+    /// is the strict builder, for tests. With no marker moved, it is <paramref name="tempo"/> itself.
+    /// </summary>
+    public static TempoMap Warped(TempoMap tempo, ReadOnlySpan<Pin> pins)
+    {
+        if (tempo._tempo is not null) throw new ArgumentException("That map is already warped.", nameof(tempo));
+        return TryWarped(tempo, pins, out var map)
+            ? map
+            : throw new ArgumentException("Those warp markers are out of order, spread the audio too far, or ask for a speed the engine cannot play.", nameof(pins));
+    }
+
+    /// <summary>
+    /// <paramref name="tempo"/> with warp markers after it, never throwing: markers sorted by where
+    /// in the audio they are, and any that is not after the one before it in both coordinates, or
+    /// spreads the audio out of reach, left out. If what is left would ask the engine for a speed it
+    /// cannot play, the warp is left out altogether. For everything that draws, hit-tests or plays.
+    /// </summary>
+    public static TempoMap LenientWarped(TempoMap tempo, IEnumerable<Pin> pins)
+    {
+        if (tempo._tempo is not null) return tempo;
+        var kept = new List<Pin>();
+        double a = 0, t = 0;
+        foreach (var p in pins.Where(p => double.IsFinite(p.Audio) && double.IsFinite(p.Tempo)).OrderBy(p => p.Audio))
+        {
+            if (!(p.Audio > a) || !(p.Tempo > t)) continue;
+            double slope = (p.Audio - a) / (p.Tempo - t);
+            if (!(slope >= LowestWarp && slope <= HighestWarp)) continue;
+            kept.Add(p);
+            (a, t) = (p.Audio, p.Tempo);
+        }
+        if (kept.All(p => p.Audio == p.Tempo)) return tempo;
+        var map = new TempoMap(tempo, kept.Select(p => p.Audio).ToArray(), kept.Select(p => p.Tempo).ToArray());
+        return map.MinSpeed < LowestSpeed || map.MaxSpeed > HighestSpeed ? tempo : map;
+    }
+
+    /// <summary>
+    /// <see cref="Warped"/> without the throwing: false, and no map, for markers it would refuse.
+    /// For an edit that must stop short of an impossible warp rather than have it dropped.
+    /// </summary>
+    public static bool TryWarped(TempoMap tempo, ReadOnlySpan<Pin> pins, out TempoMap map)
+    {
+        map = tempo;
+        if (tempo._tempo is not null) return false;
+        double a = 0, t = 0;
+        bool moved = false;
+        foreach (var p in pins)
+        {
+            if (!double.IsFinite(p.Audio) || !double.IsFinite(p.Tempo) || !(p.Audio > a) || !(p.Tempo > t)) return false;
+            double slope = (p.Audio - a) / (p.Tempo - t);
+            if (!(slope >= LowestWarp && slope <= HighestWarp)) return false;
+            moved |= p.Audio != p.Tempo;
+            (a, t) = (p.Audio, p.Tempo);
+        }
+        if (!moved) return true;
+        var all = pins.ToArray();
+        var warped = new TempoMap(tempo, all.Select(p => p.Audio).ToArray(), all.Select(p => p.Tempo).ToArray());
+        if (warped.MinSpeed < LowestSpeed || warped.MaxSpeed > HighestSpeed) return false;
+        map = warped;
+        return true;
+    }
+
+    /// <summary>
+    /// How far the tempo has got when the audio is at <paramref name="audio"/>, through these markers
+    /// (sorted, as for <see cref="Warped"/>): where a marker put down there now would keep it. In a
+    /// stretch no marker has changed it is <paramref name="audio"/> itself, exactly — so a marker
+    /// placed there is unmoved, and changes nothing.
+    /// </summary>
+    public static double TempoOf(ReadOnlySpan<Pin> pins, double audio)
+    {
+        int i = 0;
+        while (i < pins.Length && pins[i].Audio <= audio) i++;
+        // The stretch from marker i − 1 (or the origin) to marker i (or on forever).
+        double a0 = i == 0 ? 0 : pins[i - 1].Audio, t0 = i == 0 ? 0 : pins[i - 1].Tempo;
+        if (a0 == t0 && (i == pins.Length || pins[i].Audio == pins[i].Tempo)) return audio;
+        if (i == pins.Length) return t0 + (audio - a0);
+        double slope = (pins[i].Audio - a0) / (pins[i].Tempo - t0);
+        return i == 0 ? audio / slope : t0 + (audio - a0) / slope;
+    }
+
+    /// <summary>Whether the map has warp markers in it, at least one of them moved.</summary>
+    public bool IsWarped => _tempo is not null;
+
+    /// <summary>
+    /// The first timeline point after <paramref name="x"/> where the speed jumps — a warp marker —
+    /// or +∞. The vocoder is fed one speed per run, so a run that crossed one would spread the jump
+    /// across itself; the voice ends its runs here instead.
+    /// </summary>
+    public double NextJumpAfter(double x)
+    {
+        if (_tempo is null) return double.PositiveInfinity;
+        int i = SlopeIndexAt(_tempo.PositionAt(x));
+        for (; i < _pinTempo.Length; i++)
+        {
+            double at = _tempo.RelAt(_pinTempo[i]);
+            if (at > x) return at;
+        }
+        return double.PositiveInfinity;
+    }
+
+    /// <summary>The map without its warp markers: the knob and the ramps alone. Itself when it has none.</summary>
+    public TempoMap Unwarped => _tempo ?? this;
+
     public bool IsConstant { get; }
 
-    /// <summary>The speed before the first ramp — the TEMPO knob.</summary>
+    /// <summary>
+    /// The speed before the first ramp — the TEMPO knob. Under warp markers it is still the knob,
+    /// which the audio before the first marker plays at only if that stretch was not moved.
+    /// </summary>
     public double BaseSpeed { get; }
 
     public double MinSpeed { get; }
@@ -172,6 +332,7 @@ public sealed class TempoMap
     public double PositionAt(double x)
     {
         if (IsConstant) return x * BaseSpeed;
+        if (_tempo is { } tempo) return Warp(tempo.PositionAt(x));
         return Formula(SegmentAt(x), x);
     }
 
@@ -179,6 +340,7 @@ public sealed class TempoMap
     public double RelAt(double position)
     {
         if (IsConstant) return position / BaseSpeed;
+        if (_tempo is { } tempo) return tempo.RelAt(Unwarp(position));
         int i = _loF.Length - 1;
         while (i > 0 && position < _loF[i]) i--;
         double dp = position - _refF[i];
@@ -192,6 +354,7 @@ public sealed class TempoMap
     public double SpeedAt(double x)
     {
         if (IsConstant) return BaseSpeed;
+        if (_tempo is { } tempo) return _slope[SlopeIndexAt(tempo.PositionAt(x))] * tempo.SpeedAt(x);
         int i = SegmentAt(x);
         return _b[i] == 0 ? _v[i] : _v[i] + _b[i] * (x - _refX[i]);
     }
@@ -204,10 +367,34 @@ public sealed class TempoMap
     public double MaxSpeedOver(double x0, double x1)
     {
         if (IsConstant) return BaseSpeed;
+        if (_tempo is { } tempo)
+        {
+            // Each stretch between markers is the tempo's speed times its own slope; at a marker
+            // the speed jumps, so both sides of one inside the run count.
+            double peak = 0;
+            int i = SlopeIndexAt(tempo.PositionAt(x0)), last = SlopeIndexAt(tempo.PositionAt(x1));
+            for (double from = x0; ; i++)
+            {
+                double to = i >= last ? x1 : tempo.RelAt(_pinTempo[i]);
+                peak = Math.Max(peak, _slope[i] * tempo.MaxSpeedOver(from, Math.Max(from, to)));
+                if (i >= last) return peak;
+                from = to;
+            }
+        }
         double max = Math.Max(SpeedAt(x0), SpeedAt(x1));
         for (int i = 0; i < _pointX.Length; i++)
             if (_pointX[i] > x0 && _pointX[i] < x1 && _pointV[i] > max) max = _pointV[i];
         return max;
+    }
+
+    /// <summary>The slowest the unwarped map plays anywhere between two timeline points, for a warped map's range.</summary>
+    private double MinSpeedOver(double x0, double x1)
+    {
+        if (IsConstant) return BaseSpeed;
+        double min = Math.Min(SpeedAt(x0), SpeedAt(x1));
+        for (int i = 0; i < _pointX.Length; i++)
+            if (_pointX[i] > x0 && _pointX[i] < x1 && _pointV[i] < min) min = _pointV[i];
+        return min;
     }
 
     /// <summary>The track frame at a whole timeline frame — by the floor the render loop uses.</summary>
@@ -230,8 +417,52 @@ public sealed class TempoMap
     public bool SameAs(TempoMap other)
     {
         if (ReferenceEquals(this, other)) return true;
+        if (_tempo is not null || other._tempo is not null)
+            return _tempo is not null && other._tempo is not null && _tempo.SameAs(other._tempo)
+                && _pinAudio.AsSpan().SequenceEqual(other._pinAudio) && _pinTempo.AsSpan().SequenceEqual(other._pinTempo);
         if (IsConstant != other.IsConstant || BaseSpeed != other.BaseSpeed) return false;
         return IsConstant || (_pointX.AsSpan().SequenceEqual(other._pointX) && _pointV.AsSpan().SequenceEqual(other._pointV));
+    }
+
+    // ---------------------------------------------------------------- the warp
+
+    /// <summary>
+    /// Where the audio is when the tempo has got to <paramref name="t"/>. Exactly a marker's audio at
+    /// its tempo, so the audio at a marker lands where it was put; through the origin before the first,
+    /// so the track is still at 0 there.
+    /// </summary>
+    private double Warp(double t)
+    {
+        int i = SlopeIndexAt(t);
+        return i == 0 ? _slope[0] * t : _pinAudio[i - 1] + _slope[i] * (t - _pinTempo[i - 1]);
+    }
+
+    /// <summary>The inverse of <see cref="Warp"/>: how far the tempo has got when the audio is at <paramref name="a"/>.</summary>
+    private double Unwarp(double a)
+    {
+        int i = LastAtOrBefore(_pinAudio, a) + 1;
+        return i == 0 ? a / _slope[0] : _pinTempo[i - 1] + (a - _pinAudio[i - 1]) / _slope[i];
+    }
+
+    /// <summary>Which slope applies at tempo position <paramref name="t"/>: 0 before the first marker, i from marker i − 1 on.</summary>
+    private int SlopeIndexAt(double t) => LastAtOrBefore(_pinTempo, t) + 1;
+
+    /// <summary>The timeline span over which slope <paramref name="i"/> applies, open-ended at both ends of the map.</summary>
+    private (double From, double To) SpanOfSlope(int i)
+        => (i == 0 ? double.NegativeInfinity : _tempo!.RelAt(_pinTempo[i - 1]),
+            i == _pinTempo.Length ? double.PositiveInfinity : _tempo!.RelAt(_pinTempo[i]));
+
+    /// <summary>The last index whose value is at or before <paramref name="v"/>, or −1. The values are sorted.</summary>
+    private static int LastAtOrBefore(double[] values, double v)
+    {
+        int lo = 0, hi = values.Length - 1, found = -1;
+        while (lo <= hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (values[mid] <= v) { found = mid; lo = mid + 1; }
+            else hi = mid - 1;
+        }
+        return found;
     }
 
     private int SegmentAt(double x)

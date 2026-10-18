@@ -75,8 +75,12 @@ public static class TempoRamps
         return (lo, hi);
     }
 
-    /// <summary>The tempo the track plays at a point of the timeline, in BPM.</summary>
-    public static double BpmAt(TrackModel t, double seconds) => t.Bpm * TimelineEditor.SpeedAt(t, seconds);
+    /// <summary>
+    /// The tempo the track plays at a point of the timeline, in BPM, by its tempo alone: the knob and
+    /// its ramps. Warp markers spread the audio a little faster or slower between them on top of
+    /// this; a ramp neither starts from nor stores that.
+    /// </summary>
+    public static double BpmAt(TrackModel t, double seconds) => t.Bpm * TimelineEditor.TempoSpeedAt(t, seconds);
 
     /// <summary>
     /// Reads a typed tempo. It must be a number, and one the engine can play for this song: between

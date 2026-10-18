@@ -537,6 +537,17 @@ public sealed class TrackVoice : IDisposable
             long endRel = FirstRelAt(clip.TrackEndFrame);
             int run = (int)Math.Clamp(endRel - rel, 1, frames - f);
 
+            // A warp marker jumps the speed. The vocoder is fed one speed per run, so a run that
+            // crossed one would smear the jump over itself, by an amount that depends on the block
+            // size; ending the run where the read position — which looks ahead by the latency —
+            // reaches the marker gives each side its own speed exactly.
+            if (map.IsWarped)
+            {
+                double ahead = Eq.LatencySamples + (_mode == StretchMode.Independent && _stretch is not null ? _stretchOutLatency : 0);
+                double jump = map.NextJumpAfter(rel + ahead) - ahead;
+                if (jump - rel < run) run = (int)Math.Clamp(Math.Ceiling(jump) - rel, 1, run);
+            }
+
             RenderRun(work.Slice(f * _channels, run * _channels), env.Slice(f, run),
                       timeline, idx, rel, run);
             f += run;

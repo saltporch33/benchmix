@@ -18,8 +18,9 @@ public sealed class BenchmixProject
     /// arithmetically identical, so old projects open and sound the same.
     /// 3 added <see cref="TrackModel.Ramps"/>, tempo ramps (2026-10-11). An older build refuses a
     /// version 3 file rather than opening it, dropping its ramps without a word and saving over them.
+    /// 4 added <see cref="TrackModel.Warps"/>, warp markers (2026-10-18), for the same reason.
     /// </summary>
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -125,6 +126,16 @@ public sealed class TrackModel
     /// </summary>
     public List<TempoRamp> Ramps { get; set; } = new();
 
+    /// <summary>
+    /// Warp markers (Daniel, 2026-10-18): each pins a point of the track's audio — a beat — to the
+    /// moment it should be heard, and the audio between two markers is spread evenly to fit. They sit
+    /// on the audio, in the track's own timebase, so turning TEMPO or adding a ramp carries them
+    /// along with the beats they are on; but they belong to the track, not to a section, so a
+    /// section dragged past one is warped by where it now is. In order, never closer than
+    /// <see cref="Benchmix.Core.WarpMarkers.MinimumSeconds"/>. See <see cref="WarpMarker"/>.
+    /// </summary>
+    public List<WarpMarker> Warps { get; set; } = new();
+
     // ---- version 1 fields, read on load and then folded into Clips ----
     // Nullable so that once migrated they are omitted from the file rather than written as zeros.
 
@@ -204,6 +215,7 @@ public sealed class TrackModel
         var copy = (TrackModel)MemberwiseClone();
         copy.Clips = Clips.Select(c => c.Clone()).ToList();
         copy.Ramps = new List<TempoRamp>(Ramps);           // records: copying the list is deep enough
+        copy.Warps = new List<WarpMarker>(Warps);
         return copy;
     }
 }
@@ -215,3 +227,12 @@ public sealed class TrackModel
 /// whole frames. The start's tempo is never stored, so the tempo can never jump where a ramp begins.
 /// </summary>
 public sealed record TempoRamp(double StartSeconds, double EndSeconds, double ToSpeed);
+
+/// <summary>
+/// One warp marker (Daniel, 2026-10-18): the audio at <paramref name="TrackSeconds"/> — a point of the
+/// track's own timebase, as <see cref="ClipModel.TrackStartSeconds"/>, on a whole frame — plays at the
+/// moment the track's tempo (the TEMPO knob and its ramps, before any warp) has carried it to
+/// <paramref name="TempoSeconds"/>. A marker nobody has moved has the two equal, and changes nothing.
+/// Between two markers the audio is spread evenly; after the last, it plays at its tempo again.
+/// </summary>
+public sealed record WarpMarker(double TrackSeconds, double TempoSeconds);

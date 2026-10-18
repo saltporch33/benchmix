@@ -303,15 +303,16 @@ public class TempoRampEditingTests : IDisposable
     }
 
     [Fact]
-    public async Task AProjectWithRampsIsSavedAsSchemaThree()
+    public async Task AProjectWithRampsIsSavedAsSchemaThreeOrLater()
     {
         var (s, t) = await CutAsync(0);
         Ramp(s, t, 10, 30, 1.05);
         string path = Path.Combine(_dir, "schema.benchmix");
         ProjectStore.Save(s.Project, path);
         string json = File.ReadAllText(path);
-        Assert.True(Regex.IsMatch(json, "\"schemaVersion\":\\s*3") && json.Contains("\"ramps\"") && json.Contains("\"toSpeed\""),
-            "the saved project is not schema 3 with its ramps — an older Benchmix would open it, drop the tempo ramps without a word and save over them");
+        var version = Regex.Match(json, "\"schemaVersion\":\\s*(\\d+)");
+        Assert.True(version.Success && int.Parse(version.Groups[1].Value) >= 3 && json.Contains("\"ramps\"") && json.Contains("\"toSpeed\""),
+            "the saved project is not schema 3 or later with its ramps — an older Benchmix would open it, drop the tempo ramps without a word and save over them");
     }
 
     [Fact]
@@ -321,9 +322,11 @@ public class TempoRampEditingTests : IDisposable
         string path = Path.Combine(_dir, "v2.benchmix");
         ProjectStore.Save(s.Project, path);
         string json = File.ReadAllText(path);
-        json = Regex.Replace(json, "\"schemaVersion\":\\s*3", "\"schemaVersion\": 2");
+        json = Regex.Replace(json, "\"schemaVersion\":\\s*\\d+", "\"schemaVersion\": 2");
+        json = Regex.Replace(json, ",\\s*\"warps\":\\s*\\[\\s*\\]", "");
         json = Regex.Replace(json, ",\\s*\"ramps\":\\s*\\[\\s*\\]", "");
         Assert.DoesNotContain("\"ramps\"", json);
+        Assert.DoesNotContain("\"warps\"", json);
         File.WriteAllText(path, json);
 
         var loaded = ProjectStore.Load(path).Project;

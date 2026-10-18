@@ -146,8 +146,9 @@ public sealed class SectionMove
         double start = Math.Max(0, proposedStart);
 
         // Where the section ends if it starts at s, and where it must start to end at e. Under a
-        // tempo ramp its timeline length depends on where it sits, so both go through the map.
-        bool ramped = track.Ramps.Count > 0;
+        // tempo ramp or a moved warp marker its timeline length depends on where it sits, so both
+        // go through the map.
+        bool ramped = TimelineEditor.TempoVaries(track);
         double lengthSeconds = TimelineEditor.SecondsOf(LengthFrames, _s);
         double EndFrom(double s) => ramped
             ? TimelineEditor.TimelineSecondsAt(track, TimelineEditor.TrackSecondsAt(track, s) + lengthSeconds)
@@ -234,7 +235,7 @@ public sealed class SectionMove
         if (!ReferenceEquals(Current, Origin))
         {
             bool sameFeel = _playedAs.SameFeelAs(Current);
-            how = CurrentAdopted ? (_playedAs.Ramps.Count > 0 ? " The empty track took that track's tempo, its tempo ramps and pitch." : " The empty track took its tempo and pitch.")
+            how = CurrentAdopted ? (TimelineEditor.CarriesTempoChanges(_playedAs) ? $" The empty track took that track's tempo, {TimelineEditor.TempoChangesOf(_playedAs)} and pitch." : " The empty track took its tempo and pitch.")
                 : sameFeel ? ""
                 : " It now plays at this track's tempo and pitch.";
         }
@@ -270,7 +271,8 @@ public sealed class GroupMove
         public required long Length;
     }
 
-    private sealed record Before(double Offset, ClipModel[] Clips, double[] Starts);
+    // Warp markers move with the origin (ShiftOrigin), so they are part of the picture put back.
+    private sealed record Before(double Offset, ClipModel[] Clips, double[] Starts, WarpMarker[] Warps);
 
     private readonly ProjectSession _s;
     private readonly List<Member> _members = new();
@@ -437,7 +439,7 @@ public sealed class GroupMove
         {
             var dest = Destination!;
             bool sameFeel = _playedAs.SameFeelAs(dest);
-            how = DestinationAdopted ? (_playedAs.Ramps.Count > 0 ? " The empty track took that track's tempo, its tempo ramps and pitch." : " The empty track took their tempo and pitch.")
+            how = DestinationAdopted ? (TimelineEditor.CarriesTempoChanges(_playedAs) ? $" The empty track took that track's tempo, {TimelineEditor.TempoChangesOf(_playedAs)} and pitch." : " The empty track took their tempo and pitch.")
                 : sameFeel ? "" : " They now play at this track's tempo and pitch.";
         }
         return new EditResult(true, $"{what}{snapped}.{over}{how}", _grabbed.Clip);
@@ -481,7 +483,7 @@ public sealed class GroupMove
     private void Remember(TrackModel t)
     {
         if (_before.ContainsKey(t)) return;
-        _before[t] = new Before(t.TimelineOffsetSeconds, t.Clips.ToArray(), t.Clips.Select(c => c.TrackStartSeconds).ToArray());
+        _before[t] = new Before(t.TimelineOffsetSeconds, t.Clips.ToArray(), t.Clips.Select(c => c.TrackStartSeconds).ToArray(), t.Warps.ToArray());
     }
 
     private void Restore()
@@ -492,6 +494,7 @@ public sealed class GroupMove
             t.Clips.AddRange(b.Clips);
             for (int i = 0; i < b.Clips.Length; i++) b.Clips[i].TrackStartSeconds = b.Starts[i];
             t.TimelineOffsetSeconds = b.Offset;
+            t.Warps = b.Warps.ToList();
         }
         foreach (var (t, deck) in _adopted) TimelineEditor.Restore(t, deck);
         _adopted.Clear();
@@ -651,6 +654,7 @@ public sealed class LoopDrag
     private readonly bool _left;
     private readonly List<ClipModel> _before;
     private readonly double _offsetBefore;
+    private readonly List<WarpMarker> _warpsBefore;
     private readonly Guid _baseId;
 
     // The fade on the loop's outer end on the side being dragged. That end is rebuilt on every
@@ -681,6 +685,7 @@ public sealed class LoopDrag
         }
         _before = track.Clips.Where(c => !redefined.Contains(c)).Select(c => c.Clone()).ToList();
         _offsetBefore = track.TimelineOffsetSeconds;
+        _warpsBefore = track.Warps.ToList();             // they move with the origin, so they go back with it
     }
 
     /// <summary>The section being repeated, as it now is on the track.</summary>
@@ -798,7 +803,7 @@ public sealed class LoopDrag
 
         double each = TimelineEditor.TimelineLength(_track, b.TrackStartSeconds, TimelineEditor.SecondsOf(length, _s));
         int plays = (int)copies + 1;
-        string about = _track.Ramps.Count > 0 ? "about " : "";            // under a ramp each repeat takes its own time
+        string about = TimelineEditor.TempoVaries(_track) ? "about " : "";   // under a ramp or a warp each repeat takes its own time
         string message = copies == 0 && !partial
             ? "Loop: just the section itself — drag further to repeat it."
             : $"Loop: {plays} × {about}{each:0.00}s{(partial ? " and a part" : "")}.";
@@ -819,6 +824,7 @@ public sealed class LoopDrag
         _track.Clips.Clear();
         _track.Clips.AddRange(_before.Select(c => c.Clone()));
         _track.TimelineOffsetSeconds = _offsetBefore;
+        _track.Warps = _warpsBefore.ToList();
     }
 }
 

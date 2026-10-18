@@ -1747,7 +1747,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // one the ramp already reaches, or for a new ramp the one it starts at. Taken literally, a
         // look at a ramp and a click away would move everything after it by the rounding.
         if ((typed ?? "").Trim() == d.Prefill)
-            speed = d.Retype is int k && k < t.Model.Ramps.Count ? t.Model.Ramps[k].ToSpeed : TimelineEditor.SpeedAt(t.Model, d.Start);
+            speed = d.Retype is int k && k < t.Model.Ramps.Count ? t.Model.Ramps[k].ToSpeed : TimelineEditor.TempoSpeedAt(t.Model, d.Start);
 
         EditResult result;
         if (d.Retype is int i)
