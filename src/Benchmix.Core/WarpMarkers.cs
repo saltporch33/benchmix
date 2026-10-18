@@ -252,6 +252,12 @@ public sealed class WarpDrag
     public bool Clamped { get; private set; }
 
     /// <summary>
+    /// True when what stopped it was the engine — the track would have played faster or slower there
+    /// than the engine can — rather than the spread either side reaching half or twice its tempo.
+    /// </summary>
+    public bool BeyondEngine { get; private set; }
+
+    /// <summary>
     /// Puts the marker's beat at <paramref name="timelineSeconds"/> — snapped as <paramref name="snap"/>
     /// says to an edge, a ramp's end, another track's marker or the playhead, and on a whole frame —
     /// as far as the markers either side allow.
@@ -278,6 +284,7 @@ public sealed class WarpDrag
         // Back where it started is exactly where it started, so a marker dragged away and back is
         // still unmoved — on an untouched track, still not warped at all.
         WarpMarker moved;
+        BeyondEngine = false;
         if (frame == _startFrame) { moved = _original; Clamped = false; }
         else
         {
@@ -290,7 +297,7 @@ public sealed class WarpDrag
 
         var pins = _track.Warps.Select((w, i) => i == _index ? moved : w).Select(w => new TempoMap.Pin(w.TrackSeconds, w.TempoSeconds)).ToArray();
         if (TempoMap.TryWarped(WarpMarkers.TempoOf(_track), pins, out _)) _track.Warps[_index] = moved;
-        else Clamped = true;                      // it would ask the engine for a speed it cannot play: stay at the last good place
+        else Clamped = BeyondEngine = true;       // it would ask the engine for a speed it cannot play: stay at the last good place
 
         bool onSnap = on is not null && !Clamped;
         SnapLineSeconds = onSnap ? on : null;
@@ -302,7 +309,8 @@ public sealed class WarpDrag
     {
         double d = NowSeconds - StartSeconds;
         string where = Math.Abs(d) < 0.0005 ? "where it was" : $"{Math.Abs(d):0.000}s {(d > 0 ? "later" : "sooner")}";
-        string tail = Clamped ? " — as far as it goes: the audio either side would play more than twice as fast or half as fast"
+        string tail = BeyondEngine ? " — as far as it goes: the track would play faster or slower there than Benchmix can"
+                    : Clamped ? " — as far as it goes: the audio either side would play more than twice as fast or half as fast"
                     : SnappedTo is { } on ? " — on " + on : "";
         return $"{_track.Name}: beat at {StartSeconds:0.000}s → {NowSeconds:0.000}s, {where}{tail}";
     }

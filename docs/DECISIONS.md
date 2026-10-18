@@ -634,3 +634,39 @@ He said, verbatim, *"Please review, yes."* Three reviewers and three skeptics we
 | **Song files pasted or dropped in MARK MODE get the mark**, as a pasted section does. | Left on the old place, Delete and Ctrl+X acted there instead of on the file just put down. |
 | **In MARK MODE a press that loses the mouse is not a click**, and a click or a mark drag ends a knob's undo step. | As everywhere else on the lane. |
 
+## 2026-10-18 — warp markers
+
+Daniel, 2026-10-18, verbatim: *"i believe ableton has a functionality called "warping" that helps to
+fine tune and perfect bpm matching, especially between electronically programmed songs vs organic
+songs (which somewhat drift in exact bpm). I think you basically match the bpm as closely as possible
+for starters, then you flag the beats that start to drift apart, and then you click warp to match
+them up."* and *"you can see where I'm struggling to keep the beat synced up at around the 6 minute
+mark. I'd like a functionality to fix that, and I'm thinking warping would be what i need?"* Told
+that it would widen the one exception to "no automation curves", which until then was tempo ramps,
+and asked "Do you want me to build warp markers?" (the question's words, not his), he answered,
+verbatim, *"yes please."* How it works beyond his description was not discussed with him;
+everything else below is a default he can change.
+
+| Decision | Why |
+| --- | --- |
+| **"No automation curves" is widened, by his request, for a second kind of tempo change: warp markers.** Nothing else moves on its own. | His request and his yes, above. This is still not a DAW. |
+| **A warp marker pins a point of a track's audio — a beat — to the moment it is heard. Between two markers the audio is spread evenly. Nothing before the marker on the left moves. After the last marker the track plays at its tempo again, so everything after it moves along with it.** | His description: match the BPM, flag the beats that drift, warp them into place. Ableton's markers work this way. Carrying the corrected tempo on past the last marker instead would move the rest of the song by an amount that grows with its length. |
+| **A marker sits on the audio, in the track's own timebase — not on the timeline as a ramp does.** TEMPO, Match BPM and ramps carry it along with its beat. | A marker is on a beat. Pinned to the timeline it would stay put while its beat moved away. |
+| **A marker belongs to the track, not to a section** (unlike Ableton). A section moved past a marker is warped by where it now is. Warp after arranging. | Sections are counted in the track's frames, one to one with the song. Warping a section's own audio would change every section's length in frames, and with it every seam and butt join. Ramps already work this way. |
+| **The speed jumps at a marker**, by the ratio of the spreads either side; the position never jumps. The vocoder is fed each side of a marker separately. | As in Ableton: it is what makes the beat land exactly where it was dropped. Fed across a marker in one go, the vocoder would smear the jump over a block, by an amount that depends on the block size. |
+| **The audio between two markers is never spread past half or twice its tempo**, nor is the audio from the track's start to the first; a drag stops there and says so. | Warping is for a beat that drifted, not for changing a song's tempo. |
+| **A marker nobody has moved changes nothing, to the sample.** A track whose markers are all unmoved plays through the very same tempo map, so an untouched one stays bit-identical. A track with any moved marker goes through the stretcher for its whole length, as a ramped one does. | Putting a marker down is flagging a beat; it must not change the sound. |
+| **WARP MODE**, a toggle beside LOOP MODE, RAMP MODE and MARK MODE, **Ctrl+W**. Off by default, not saved. Turning any of the four on turns the other three off. | A press on a section already means "move it", so warping needs a mode, as ramps did. Ctrl+W was free, and every editing shortcut is Ctrl-modified. |
+| **RAMP MODE's "turns the other off" and MARK MODE's "turns the other two off" (both 2026-10-12, above) now read "the other three"**: LOOP, RAMP, MARK and WARP MODE are never two on together. | All four change what a press in a lane does; with two on, one of them would be dead. |
+| **In warp mode a press on a track puts a marker there, and dragging on moves that beat; a press on a marker drags it.** Let go without moving and the marker just stays. Sections are never selected or moved, and there is no selection box. Alt+click moves the playhead; the ruler and the room under the tracks keep their double-click to play. | His words: "flag the beats that start to drift apart, and then you click warp to match them up" — flag, then drag. |
+| **One undo step per press**, placing and moving together; a press on a marker that leaves it where it was leaves nothing for Ctrl+Z to take back. Each removal is one step. While a marker is held, Ctrl+W and every other edit wait. Losing the mouse mid-press (Alt+Tab) finishes the press as if it were let go. | As for every other edit. |
+| **A dragged marker snaps**, within 10 px, to section edges and warp markers on other tracks, to tempo-ramp ends on any track and to the playhead. **Ctrl frees it.** Never to bars, and never to its own track's sections or markers. | Its own track's sections move as soon as the warp changes, so a marker snapped to one would not stay on it. The playhead lets him park on the other song's beat and drop onto it. |
+| **Right-click on a marker, in any mode: *Remove warp marker*.** The markers either side stay; the audio between them is even again. | As for ramps. |
+| **Drawn whatever the mode**: a line in the warp colour with a handle at its top, and each stretch whose audio is spread labelled with how much, "+0.8%" faster or "−0.8%" slower. | Defaults. The figure says how hard a stretch is being pushed. |
+| **Markers travel with the tempo, as ramps do**: an empty track that takes a dragged section's tempo takes its markers, and with them the origin they are counted from; a paste onto an empty track takes them; the vocal and instrumental tracks from *Split* take their song's. **Reset removes them** in the same one step as the ramps; **Match BPM keeps them**, on their beats. | They are part of how that song plays. A stem without its song's warp would drift away from it. |
+| **When a track's origin moves back, its markers move with its sections**, by the same whole frames, and their beats stay where they were heard. | Unlike ramps, they are on the audio. |
+| **A tempo ramp starts from the track's tempo, not its warp.** A ramp's start tempo, the BPM on its dots and the box's pre-filled tempo ignore the markers. | A ramp is a change of tempo; the warp is a correction on top of it. A new ramp left as filled in still changes nothing. |
+| **Project files are now version 4.** Every save writes 4, so an older Benchmix refuses a file saved from now on rather than opening it. | An older build would open a warped project, drop its markers without a word and save over them. |
+| **On LINK a moved marker changes the pitch with the speed** — a 1% change is about 17 cents. Not changed. | LINK is speed and pitch together, as on a record. The default mode keeps the pitch. |
+| **Not changed: the BPM on the strip and the ruler's bar lines ignore warp markers**, as they ignore ramps. How far each stretch is spread is on its label instead. | The strip shows the tempo TEMPO sets; the warp is a correction on top of it. |
+

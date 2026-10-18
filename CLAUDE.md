@@ -57,14 +57,34 @@ mistakes, not by describing the project.
   Sections stay in track frames; the track's `TempoMap` turns one into the other. Moving a section
   under a ramp changes the tempo it plays at. A ramp stores only its end speed: the start is
   whatever is in effect there, so the tempo cannot jump. Never multiply or divide by `Speed` to
-  place anything on a track that may have ramps — ask `TimelineEditor` or the map.
+  place anything on a track that may have ramps or warp markers — ask `TimelineEditor` or the map.
+- **A warp marker sits on the audio, not on the timeline** (`TrackModel.Warps`, the track's own
+  seconds) — the opposite of a tempo ramp. TEMPO, Match BPM and ramps carry it along with its beat;
+  when the origin moves back it moves with the sections (`WarpMarkers.ShiftWithOrigin`), and
+  `GroupMove`/`LoopDrag` put it back with the origin. Never store a marker's timeline position. It
+  belongs to the track, not to a section: a section dragged past one is warped by where it now is.
+- **After the last warp marker the track plays at its tempo again**, so everything after it moves
+  with it. Between two markers the audio is spread evenly, never past half or twice its tempo.
+- **The speed jumps at a warp marker, on purpose** (as in Ableton): that is what lands the beat
+  exactly where it was dropped. Do not "smooth" it into a ramp. The voice ends a render run where
+  the read position reaches a marker (`TempoMap.NextJumpAfter`), so the vocoder is fed each side's
+  speed exactly.
+- **A marker nobody has moved changes nothing — the tempo map is the very same object**
+  (`TempoMap.LenientWarped` returns its input when every pin has Audio == Tempo), so an untouched
+  track with unmoved markers stays bit-identical. That is why an unmoved marker's frames are its
+  rounded frame in both coordinates (`EngineTempoOf`) and why `TempoMap.TempoOf` returns the audio
+  position itself in a stretch nothing moved: seconds × rate is a hair off a whole number, and a
+  hair counts as moved. No tolerance, as for the seam rule.
+- **A tempo ramp ignores the warp.** Its start tempo, its dots' BPM and the box's pre-filled tempo
+  use the tempo alone (`TimelineEditor.TempoSpeedAt`, `TempoRamps.BpmAt`), never `SpeedAt`, which
+  includes the warp.
 - **A box opened only to look changes nothing.** A knob's box or a ramp's tempo box shows the value
   rounded (−8.82%, 99.0 BPM); left as it was filled in and closed, the exact value behind it stays
   — no rounding written back, no undo step. Do not "simplify" that to committing what the box shows:
   after Match BPM it drifted the deck about 7 ms in three minutes (review, 2026-10-12).
-- **A track with any tempo ramp goes through the stretcher for its whole length**, even where it
-  plays at 1.0, so it is not bit-identical anywhere. That is deliberate: dropping in and out of the
-  stretcher would restart it, and its delay, mid-song.
+- **A track with any tempo ramp or moved warp marker goes through the stretcher for its whole
+  length**, even where it plays at 1.0, so it is not bit-identical anywhere. That is deliberate:
+  dropping in and out of the stretcher would restart it, and its delay, mid-song.
 - **Build output goes to `%LOCALAPPDATA%\Benchmix.build\`** on purpose, to keep bin/obj out of
   OneDrive *and* because the native `SignalsmithStretch.dll` fails to load from a deep path
   (MAX_PATH). Do not "fix" it.
@@ -92,6 +112,9 @@ mistakes, not by describing the project.
   change of tempo over time. The tempo-ramp tests use both.
 - A **stretch** (a marked stretch) is a span of one track marked in MARK MODE. The **stretcher** is
   the time-stretch engine (Signalsmith). `MarkedStretchTests` is about the first.
+- **Warp** is warp markers. The **stretcher** still does the work under them; a warped track goes
+  through it for its whole length, as a ramped one does. A **warp marker** is neither MARK MODE's
+  **mark** nor the house style's **marker sample**.
 
 ## How to prove a change
 
@@ -118,11 +141,11 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 
 | Switch | Proves |
 | --- | --- |
-| `--latencycheck` | a pitched track lands with an untouched one, and so does a track through a tempo ramp (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler and over the waveforms, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo) — 253 checks |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks |
+| `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler and over the waveforms, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo) — 253 checks before warp markers (the new total is read off the next run) |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks before warp markers (the new total is read off the next run) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
-| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, and a marked stretch |
+| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, and warp markers |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), and a scroll-wheel click lands back on the frame play started from |
@@ -147,8 +170,9 @@ These **exit 1 on failure** and also log a `verdict=` line to
   `RelativeSource AncestorType=Window`, which a ContextMenu cannot see (it lives in its own popup),
   so the command was empty and the item drew as enabled. Menu items use `Click` handlers;
   `MenuWiringTests` fails on the binding.
-- **Check a tempo ramp's positions against an integral written out in the test**, never against
-  `TempoMap` itself — a test that asks the map where audio should land agrees with the map's bugs.
+- **Check a tempo ramp's positions against an integral written out in the test, and a warp's
+  against the warp written out in the test** (`WarpMapTests.Spread`), never against `TempoMap`
+  itself — a test that asks the map where audio should land agrees with the map's bugs.
 - Where the invariant is exactness, assert `==`, not a tolerance.
 - One regression test per fixed defect, named for the behaviour that was wrong, with an assertion
   message stating the musical consequence.
@@ -159,8 +183,8 @@ These **exit 1 on failure** and also log a `verdict=` line to
 
 - **Not an Audacity fork or wrapper.** Investigated and rejected with five reasons.
 - **Offline editor, not a live DJ app and not a DAW.** No effects, plugins, automation or MIDI.
-  The one exception is a track's tempo ramps (2026-10-11, his request): straight lines in tempo,
-  nothing else automated.
+  The exceptions are a track's tempo ramps (2026-10-11, his request: straight lines in tempo) and
+  its warp markers (2026-10-18, his request: *"yes please."*), nothing else automated.
 - **Stems are an option beside the EQ, never a replacement** — *"But not Asa a replacement for the
   eq knobs."*
 - **One signal path** for preview and render. A second implementation is not permitted.
@@ -185,6 +209,10 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - A section dragged onto another track at the same moment dips in level at both ends (each track
   declicks its own cut). That is read off the envelope code, not measured.
 - Stem separation quality is proven only by a 39 dB control test, not by ear.
+- **Warp markers have never been heard or run in the app.** `dotnet test` has run only on Linux
+  (the stretcher's native library loads there; the tests that need his songs or DirectML skip);
+  the WPF app compiled there, but its probes (`--gesturetest`, `--buttontest`, `--latencycheck`,
+  `--uiprobe`) have not been run. The jump in speed at a marker is a measurement.
 
 ## Working with Daniel
 
@@ -195,4 +223,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-12.*
+*Revised 2026-10-18.*

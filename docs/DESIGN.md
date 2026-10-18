@@ -132,6 +132,44 @@ the map reach the engine together: one snapshot, swapped by reference (`TrackVoi
 once per block. A block never sees a moved origin with the old map — which, after a paste before a
 ramped track's start, would play the wrong part of the song for a block and then jump back.
 
+## Warp markers
+
+*2026-10-18.* A warp marker pins one point of a track's audio — a beat — to the moment it should be
+heard. Markers sit on the audio, in the track's own seconds (`TrackModel.Warps`), not on the
+timeline as ramps do: each holds the point of the audio (`TrackSeconds`, on a whole frame) and how
+far the track's tempo has to carry it before that point is heard (`TempoSeconds`). So TEMPO, Match
+BPM and a ramp before a marker carry it along with its beat. A marker nobody has moved has the two
+equal.
+
+The tempo map gets a second stage. The first — the knob and the ramps — says how far the track's
+*tempo* has carried it at a moment of the timeline; the position is then the **warp of the tempo's
+position**: straight lines from marker to marker, so a marker's audio is reached exactly when the
+tempo reaches its `TempoSeconds`; through the origin before the first marker, so the track is still
+at 0 where it starts; slope 1 after the last, so the track plays at its tempo again and everything
+after it moves along with it. Both directions stay closed form. The speed is the tempo's speed times
+the warp's slope, so it **jumps at a marker**, by the ratio of the slopes either side, as in
+Ableton; the position never jumps. Like a ramp, the warp lives in the read position; it adds no
+stage to the signal path.
+
+**With no marker moved, the warped map is the map before it — the very same object**
+(`TempoMap.LenientWarped` hands back its input). Putting a marker down changes not one sample, and
+an untouched track whose markers are all unmoved still bypasses the stretcher. In frames an unmoved
+marker is its rounded frame in both coordinates (`ProjectSession.EngineTempoOf`): seconds times the
+rate is not always a whole number in floating point, and a hair off would count as moved. A track
+with any moved marker goes through the stretcher for its whole length, as a ramped one does.
+
+A third rule joins the two above: **a render run ends where the read position reaches a marker**
+(`TempoMap.NextJumpAfter`, looking ahead by the EQ's latency and, on the phase vocoder, the
+stretcher's), so the vocoder is fed each side's speed exactly at every block size. Fed across a
+marker in one go, it would smear the jump over the run, by an amount that depends on the block size.
+
+When the origin moves back and every section moves forward by whole frames, the markers move
+forward by the same frames (`WarpMarkers.ShiftWithOrigin`), and every beat is heard where it was. The
+map is built leniently, as for ramps: a marker out of order, or one that would spread the audio
+before it past half or twice its tempo (`TempoMap.LowestWarp`, `HighestWarp`), is left out, and if
+what is left would ask the engine for a speed outside 0.25–4× the whole warp is dropped. It reaches
+the engine in the same one snapshot as the origin and the sections (`TrackVoice.Place`).
+
 ## Tempo and key: measure, then decide
 
 Daniel asked for detection of both. [Spike 03](SPIKE-03-analysis.md) calibrated against his own
@@ -200,16 +238,20 @@ would be right for a large model and would only add ways to be wrong here.
   "looped clip" object. Changing the original section afterwards does not change its repeats.
 - **No per-section EQ, volume or speed.** Those belong to the track, so every section on it gets
   the same treatment. A section that needs its own EQ wants its own track.
-- **No automation curves, except a track's tempo ramps.** Every other knob is static per track;
-  fades are per clip.
+- **No automation curves, except a track's tempo ramps and warp markers.** Every other knob is
+  static per track; fades are per clip.
 - **A tempo ramp is a straight line in BPM.** No curves, and the tempo holds after it until the
   next one.
-- **A track with a tempo ramp is processed for its whole length**, so it is no longer
-  bit-identical to its file even where it plays at 1.0.
-- **The ruler's bar lines do not follow a tempo ramp**, and the BPM on the strip is the tempo
-  before the first ramp.
+- **A track with a tempo ramp or a moved warp marker is processed for its whole length**, so it is
+  no longer bit-identical to its file even where it plays at 1.0.
+- **The ruler's bar lines do not follow a tempo ramp or a warp**, and the BPM on the strip is the
+  tempo before the first ramp; it ignores warp markers.
 - **A tempo ramp is a span of the timeline**: moving a section under one changes the tempo it plays
   at, and adding, moving or retyping a ramp moves every later section on that track.
+- **The speed jumps at a warp marker**, on purpose, and the audio between two markers is spread no
+  further than half or twice its tempo.
+- **A warp marker belongs to the track, not to a section**: a section moved past one is warped by
+  where it now is, and moving or removing the last marker moves every later section on that track.
 - **Dragging a ramp's dot while playing re-primes that track** on each move, as turning TEMPO does.
 - **Key detection is 47%.** Documented, surfaced, and worked around rather than hidden.
 - **No effects** — no reverb, delay, compression or plugins, by design.

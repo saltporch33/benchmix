@@ -22,6 +22,9 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   double-time readings first.
 - **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
   110 to 115 BPM while it mixes into the next.
+- **Warp markers.** Pull a song that drifts back into time with another — pin a beat that is still
+  in time, drag a beat that has drifted onto the other song's beat, and the audio between them
+  evens out to fit.
 - **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
   the keys you already use act on exactly that part, wherever its ends fall.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
@@ -29,8 +32,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 
 ## What it deliberately does not do
 
-No effects rack, no automation curves (the one exception: tempo ramps), no MIDI, no recording, no
-plugins. It is not a DAW. Every
+No effects rack, no automation curves (the two exceptions: tempo ramps and warp markers), no MIDI,
+no recording, no plugins. It is not a DAW. Every
 control on screen is one you asked for.
 
 ---
@@ -74,11 +77,15 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>L</kbd> | loop mode on / off |
 | <kbd>Ctrl</kbd>+<kbd>R</kbd> | ramp mode on / off |
 | <kbd>Ctrl</kbd>+<kbd>M</kbd> | mark mode on / off |
+| <kbd>Ctrl</kbd>+<kbd>W</kbd> | warp mode on / off |
 | in mark mode: drag across a track | mark that stretch of it; drag either end of the mark to move it |
 | in mark mode: click / <kbd>Shift</kbd>+click a track | put the playhead there / mark from the playhead to there |
 | in ramp mode: click a track, then click it again further along | start and end a tempo ramp, then type the tempo to reach (<kbd>Enter</kbd> keeps it, <kbd>Esc</kbd> cancels) |
 | in ramp mode: drag a ramp's dot / click its end dot | move that end / change the tempo it reaches |
 | right-click on a tempo ramp → *Remove tempo ramp* | take it away; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts it back |
+| in warp mode: click a track | put a warp marker on the beat there; nothing moves |
+| in warp mode: drag a warp marker, or press on a track and drag | move that beat to where you let go; the markers either side stay put, and everything after the last marker moves with it |
+| right-click on a warp marker → *Remove warp marker* | take it away; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts it back |
 | drag a section | move it; drag it up or down to put it on another track. Snaps to other sections' edges (never to bars); <kbd>Ctrl</kbd> frees it |
 | drag one of several selected sections | move them all together. All on one track: sideways, or onto another track. On several tracks: sideways only. They keep their exact spacing, snap as one to other sections' edges, and one <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts them all back |
 | drag a section's end | trim it (snaps to other edges; stops at the next section). In loop mode: repeat it instead |
@@ -132,6 +139,33 @@ to nearby edges. Each track's ramps are its own; *TEMPO* is the tempo before the
 *Reset* removes the ramps, and each change is one <kbd>Ctrl</kbd>+<kbd>Z</kbd>. While ramp mode is
 on, clicks place dots instead of selecting or moving sections; turn it off to edit sections again.
 
+**Warp markers.** To pull a song that drifts back into time with another:
+
+1. Get the two as close as they will go first: press *Match BPM*, or type TEMPO's exact value.
+2. Press *WARP MODE* (or <kbd>Ctrl</kbd>+<kbd>W</kbd>).
+3. Click the drifting song's track on a beat that is still in time with the other song. An
+   aqua-mint line with a small triangle at its top appears there: a warp marker. Nothing moves.
+4. Further along, find a beat that has drifted. Zoom in (<kbd>Ctrl</kbd>+scroll) until you can see
+   the beats of both songs. <kbd>Alt</kbd>+click the other song's beat to put the playhead on it.
+   Then press on the drifting song's beat and drag it onto the playhead: a marker goes down where
+   you press, and the beat snaps onto the playhead when it gets close. Let go.
+5. Further along again, wherever it drifts, do step 4 again.
+6. To take a marker away, right-click it → *Remove warp marker*. <kbd>Ctrl</kbd>+<kbd>Z</kbd>
+   takes back the last click, drag or removal.
+
+Between two markers the audio is sped up or slowed down evenly so that both land where they are;
+the top of the lane says by how much where there is room, "+0.8%" faster or "−0.8%" slower. Nothing
+before the marker on the left moves. After the last marker the song plays at its own tempo again,
+so everything after it moves along with it. A stretch can go at most twice as fast or half as fast;
+the drag stops there and the status bar says so. A dragged beat also snaps to the edges of sections
+and to warp markers on other tracks, and to tempo ramps' dots; hold <kbd>Ctrl</kbd> to place it
+freely. The markers belong to the track, not to a section: a section moved past one is warped by
+where it now is, so warp after arranging. They go with the song onto an empty track it is pasted or
+dragged onto, and onto the tracks *Split into vocals + instrumental* makes. *Match BPM* keeps them
+on their beats; *Reset* removes them. While warp mode is on, clicks place and move markers instead
+of selecting or moving sections, and a double-click plays only on the ruler or under the tracks;
+turn it off to edit sections again.
+
 **Mark mode.** To copy, cut, delete or repeat part of a track without splitting it first:
 
 1. Press *MARK MODE* (or <kbd>Ctrl</kbd>+<kbd>M</kbd>).
@@ -149,7 +183,8 @@ A mark can start or end anywhere: in the middle of a section, across several, or
 copied is the whole stretch, gaps included, and pasting it covers the whole stretch it lands on —
 a gap in it clears what was under it. While mark mode is on, a drag never moves a section, and a
 double-click still plays. The mark is one stretch on one track; it goes when mark mode is turned
-off, and an undo leaves it where it is. Mark mode, loop mode and ramp mode are never on together.
+off, and an undo leaves it where it is. Mark mode, loop mode, ramp mode and warp mode are never two
+on together.
 
 **Empty tracks.** *+ Empty track* makes a track with nothing on it. Paste or drag a section onto it
 and it takes on the tempo and pitch that section was playing at, so it sounds and lands exactly as
@@ -177,8 +212,11 @@ comes out slightly attenuated. That is the limiter doing its job, not the editor
 audio, and it is a per-project setting — but it is worth knowing before you use Benchmix as a
 pass-through converter.
 
-A track with a **tempo ramp** goes through the stretcher for its whole length, so it is not
-bit-identical to its file anywhere — even where it plays at its own tempo.
+A track with a **tempo ramp**, or a **warp marker** that has been moved, goes through the stretcher
+for its whole length, so it is not bit-identical to its file anywhere — even where it plays at its
+own tempo. A warp marker put down and never moved changes nothing. With *LINK* on, a moved marker
+changes the pitch along with the speed, as turning TEMPO does: a stretch played 1% faster is about
+17 cents higher.
 
 **Key detection is a guess, and says so.** Values read from a file's tags are trusted. Values
 Benchmix worked out itself are marked with a `?`. Tempo detection measured 94% exact with nothing
