@@ -37,6 +37,7 @@
         <KeyBinding Key="L" Modifiers="Ctrl" Command="{Binding ToggleLoopModeCommand}"/>
         <KeyBinding Key="R" Modifiers="Ctrl" Command="{Binding ToggleRampModeCommand}"/>
         <KeyBinding Key="M" Modifiers="Ctrl" Command="{Binding ToggleMarkModeCommand}"/>
+        <KeyBinding Key="W" Modifiers="Ctrl" Command="{Binding ToggleWarpModeCommand}"/>
         <KeyBinding Key="J" Modifiers="Ctrl" Command="{Binding JoinSectionsCommand}"/>
     </Window.InputBindings>
 
@@ -80,6 +81,10 @@
                               VerticalAlignment="Center"
                               IsChecked="{Binding MarkMode, Mode=TwoWay}"
                               ToolTip="While on, drag across a track to mark a stretch of it (Ctrl+M). Ctrl+C copies the marked stretch, Ctrl+X cuts it, Delete removes it and Ctrl+D repeats it; drag either end of the mark to move it. A click puts the playhead there, so Ctrl+V pastes there; Shift+click marks from the playhead. Sections stay put while it is on."/>
+                <ToggleButton Content="WARP MODE" Style="{StaticResource PillToggle}" Margin="6,0,0,0" Padding="0"
+                              VerticalAlignment="Center"
+                              IsChecked="{Binding WarpMode, Mode=TwoWay}"
+                              ToolTip="While on, click a track on a beat that is still in time to pin it with a warp marker, then drag a beat that has drifted onto where it should be (Ctrl+W). The audio between two markers is evened out to fit; nothing before the one on the left moves, and everything after the last moves with it. A dragged beat snaps to edges on other tracks; hold Ctrl to drag it freely. Right-click a marker to remove it. Sections stay put while it is on."/>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button Content="Fit" Style="{StaticResource ToolButton}" Command="{Binding ZoomFitCommand}"
                             ToolTip="Zoom so the whole mix fits the window (Ctrl+0)."/>
@@ -332,7 +337,7 @@
                                                         CommandParameter="{Binding}"
                                                         ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
                                                 <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
-                                                        ToolTip="Put tempo, pitch, EQ and volume back to normal, and remove tempo ramps. Sections, fades, LINK, mute and solo stay as they are."
+                                                        ToolTip="Put tempo, pitch, EQ and volume back to normal, and remove tempo ramps and warp markers. Sections, fades, LINK, mute and solo stay as they are."
                                                         Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"/>
                                                 <ToggleButton Content="LINK" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
@@ -409,6 +414,10 @@
                                                 <MenuItem Header="Add empty track" Click="OnAddEmptyTrackMenu" InputGestureText="Ctrl+T"/>
                                                 <Separator Tag="removeRamp"/>
                                                 <MenuItem Header="Remove tempo ramp" Tag="removeRamp" Click="OnRemoveRampMenu"/>
+                                                <!-- Shown only over a warp marker, in any mode (PrepareLaneMenu). Over a
+                                                     ramp too, the two items share the ramp's separator. -->
+                                                <Separator Tag="removeWarp"/>
+                                                <MenuItem Header="Remove warp marker" Tag="removeWarp" Click="OnRemoveWarpMenu"/>
                                                 <Separator/>
                                                 <!-- A Click handler like every item above, never a Command bound
                                                      through RelativeSource AncestorType=Window: a ContextMenu is
@@ -425,6 +434,8 @@
                                                 ScrollSeconds="{Binding DataContext.ScrollSeconds, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 LoopMode="{Binding DataContext.LoopMode, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 Ramps="{Binding RampVisuals}"
+                                                Warps="{Binding WarpVisuals}"
+                                                WarpBrush="{StaticResource WarpBrush}"
                                                 Mark="{Binding MarkVisual}"
                                                 IsMuted="{Binding Muted}"
                                                 WaveBrush="{Binding ColorBrush}"

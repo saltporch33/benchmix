@@ -206,6 +206,24 @@ public partial class MainWindow : Window
                     return;
                 }
 
+                // Two warp markers on the song, right of the last ramp (it ends at 52 s), so nothing
+                // before them moves: one pinned at 54 s, and one pinned at 58 s with its beat dragged
+                // 0.8 s later, so the stretch between them is labelled. Put in through the view-model,
+                // as the mark is: WARP MODE would turn LOOP MODE off.
+                _vm.PressWarp(song, 54);
+                _vm.ReleaseWarp();
+                double? beat = _vm.PressWarp(song, 58);
+                _vm.BeginWarpDrag();
+                _vm.DragWarpTo((beat ?? 58) + 0.8, free: true);
+                _vm.ReleaseWarp();
+                if (song.Model.Warps.Count != 2 || song.WarpVisuals is not [{ Label: null }, { Label: not null }] || !_vm.LoopMode)
+                {
+                    App.Log($"ui probe failed: the editing demo has {song.Model.Warps.Count} warp markers on the song, not 2 with the stretch between them labelled, or LOOP MODE went off");
+                    EndVerificationRun(false);
+                    return;
+                }
+                _vm.SnapLineSeconds = 38;                               // the drag's release took the guide away
+
                 // The box for typing a knob's value, open over the song's TEMPO number.
                 UpdateLayout();
                 if (StripOf(song) is { } strip && Descendants<Controls.Knob>(strip).FirstOrDefault(k => k.Label == "TEMPO") is { } knob)
@@ -343,6 +361,11 @@ public partial class MainWindow : Window
     /// come out where the ramp puts it. Native interop and timing are proved here, in the exe
     /// itself, because that is where they can fail when the tests pass.
     /// </para>
+    /// <para>
+    /// And for warp markers (2026-10-18): the same bursts, pitched, through two moved markers, where
+    /// the speed jumps at each and the voice ends its runs there. Where each burst should land is the
+    /// warp written out in the check, not asked of the map.
+    /// </para>
     /// </summary>
     private static bool RunLatencyCheck()
     {
@@ -435,10 +458,49 @@ public partial class MainWindow : Window
                 rampAligned &= heard >= 0 && Math.Abs(off) < 256;
             }
 
-            bool passed = aligned && rampAligned;
-            App.Log($"latencycheck: verdict={(passed ? "PASS - the two land together in the published exe, and so does a track through a tempo ramp"
-                                                     : aligned ? "FAIL - a track through a tempo ramp lands out of time"
-                                                               : $"FAIL - {drift} frames apart")}");
+            // --- warp markers (2026-10-18) ---
+            // The same bursts, pitched, at TEMPO 1.04 through two moved markers: the audio at 5 s heard
+            // when the tempo reaches 5.3 s, and at 12 s when it reaches 12 s. Each burst must come out
+            // where the warp puts it, worked out here: a burst at audio a is heard when the tempo has
+            // reached a ÷ (5 / 5.3) before the first marker, 5.3 + (a − 5) ÷ (7 / 6.7) between them,
+            // and 12 + (a − 12) after the last; the tempo reaches T at T ÷ 1.04. No burst is near a
+            // marker, where the speed jumps.
+            const double WarpTempo = 1.04, A1 = 5.0, T1 = 5.3, A2 = 12.0, T2 = 12.0;
+            var warpMap = Benchmix.Engine.Audio.TempoMap.Warped(Benchmix.Engine.Audio.TempoMap.Constant(WarpTempo), new[]
+            {
+                new Benchmix.Engine.Audio.TempoMap.Pin(A1 * Rate, T1 * Rate),
+                new Benchmix.Engine.Audio.TempoMap.Pin(A2 * Rate, T2 * Rate),
+            });
+            var warped = RenderOf(t =>
+            {
+                t.Mode = Benchmix.Engine.Audio.StretchMode.Independent;
+                t.Semitones = 0.01;
+                t.Tempo = warpMap;
+            }, burstClip, Rate * 20);
+
+            bool warpAligned = true;
+            from = 0;
+            for (int k = 0; k < 7; k++)
+            {
+                int source = OnsetFrom(untouched, from);
+                if (source < 0) { warpAligned = false; break; }
+                from = source + Rate;
+                double a = source / (double)Rate;
+                double tempo = a < A1 ? a / (A1 / T1)
+                             : a < A2 ? T1 + (a - A1) / ((A2 - A1) / (T2 - T1))
+                             : T2 + (a - A2);
+                double expected = tempo / WarpTempo * Rate;
+                int heard = OnsetFrom(warped, (int)expected - 2400);
+                double off = heard - expected;
+                App.Log($"latencycheck: warp burst {k + 1} untouched={source} expected={expected:F0} warped={heard} drift={off:F0} frames");
+                warpAligned &= heard >= 0 && Math.Abs(off) < 256;
+            }
+
+            bool passed = aligned && rampAligned && warpAligned;
+            App.Log($"latencycheck: verdict={(passed ? "PASS - the two land together in the published exe, and so do a track through a tempo ramp and a pitched track through moved warp markers"
+                                                     : !aligned ? $"FAIL - {drift} frames apart"
+                                                     : !rampAligned ? "FAIL - a track through a tempo ramp lands out of time"
+                                                                    : "FAIL - a track through warp markers lands out of time")}");
             return passed;
         }
         catch (Exception ex)
@@ -791,6 +853,18 @@ public partial class MainWindow : Window
         {
             if (_markPress is { } held) LaneUp(LaneOf(held.Track) ?? this);
             _vm.MarkMode = false;
+            _vm.StopCommand.Execute(null);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _scriptedFocus = null;
+        }
+
+        // --- warp markers ---
+        try { RunWarpGestures(Check, notes); }
+        finally
+        {
+            if (_warpPress is { } held) LaneUp(LaneOf(held.Track) ?? this);
+            _vm.WarpMode = false;
             _vm.StopCommand.Execute(null);
             _scriptedWindowPoint = null;
             _scriptedModifiers = null;
@@ -2237,7 +2311,7 @@ public partial class MainWindow : Window
         var toggle = Descendants<System.Windows.Controls.Primitives.ToggleButton>(this).FirstOrDefault(b => b.Content as string == "RAMP MODE");
         var source = PresentationSource.FromVisual(this);
         UpdateLayout();
-        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Bpm > 0 && t.Clips.Count > 0 && t.Model.Ramps.Count == 0);
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Bpm > 0 && t.Clips.Count > 0 && t.Model.Ramps.Count == 0 && t.Model.Warps.Count == 0);
         if (toggle is null || source is null || first is null || LaneOf(first) is not { ActualHeight: > 0 } lane0)
         {
             notes.Add("no RAMP MODE toggle, or no laid-out track with a known tempo, so tempo ramps are untested in the window - pass a file to cover them");
@@ -2292,6 +2366,7 @@ public partial class MainWindow : Window
 
         // --- RAMP MODE ---
         _vm.LoopMode = false;
+        _vm.WarpMode = false;
         _vm.RampMode = false;
         Toggle();
         Check("RAMP MODE turns on through its own toggle", _vm.RampMode);
@@ -2535,7 +2610,7 @@ public partial class MainWindow : Window
         var toggle = Descendants<System.Windows.Controls.Primitives.ToggleButton>(this).FirstOrDefault(b => b.Content as string == "MARK MODE");
         var source = PresentationSource.FromVisual(this);
         UpdateLayout();
-        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Ramps.Count == 0 && t.Clips.Any(c => c.TimelineLengthSeconds > 30));
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Ramps.Count == 0 && t.Model.Warps.Count == 0 && t.Clips.Any(c => c.TimelineLengthSeconds > 30));
         if (toggle is null || source is null || first is null || LaneOf(first) is not { ActualHeight: > 0 } lane0)
         {
             notes.Add("no MARK MODE toggle, or no laid-out track with a section over 30 s, so marking a stretch is untested in the window - pass a file to cover it");
@@ -2607,6 +2682,7 @@ public partial class MainWindow : Window
         // --- MARK MODE ---
         _vm.LoopMode = false;
         _vm.RampMode = false;
+        _vm.WarpMode = false;
         _vm.MarkMode = false;
         Toggle();
         Check("MARK MODE turns on through its own toggle", _vm.MarkMode);
@@ -2786,6 +2862,332 @@ public partial class MainWindow : Window
             Undo(() => (_vm.Tracks.Count, _vm.Tracks.Sum(t => t.Clips.Count)) != state);
         }
         if (_vm.Tracks.Count != tracks || Song().Clips.Count != sections) notes.Add("the mark checks could not undo back to where they started");
+    }
+
+    /// <summary>
+    /// Warp markers (Daniel, 2026-10-18) through the lane's own handlers, with a scripted pointer and
+    /// modifiers: WARP MODE, a click that pins a beat and changes nothing, a press-drag that pins one
+    /// and moves it, snapping and Ctrl, how far the audio can be spread, the right-click menu, and one
+    /// undo step for each. Where a beat is heard is checked against the warp written out here — the
+    /// tempo, v0 × (t − origin), carried from marker to marker — never asked of the map. Leaves the
+    /// project as it found it, with no warp markers, for the checks after it.
+    /// </summary>
+    private void RunWarpGestures(Action<string, bool> Check, List<string> notes)
+    {
+        bool Bound(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+W is bound to warp mode", Bound(Key.W, _vm.ToggleWarpModeCommand));
+
+        var toggle = Descendants<System.Windows.Controls.Primitives.ToggleButton>(this).FirstOrDefault(b => b.Content as string == "WARP MODE");
+        UpdateLayout();
+        var first = _vm.Tracks.FirstOrDefault(t => t.IsLoaded && t.Model.Ramps.Count == 0 && t.Model.Warps.Count == 0 && t.Clips.Any(c => c.TimelineLengthSeconds > 30));
+        if (toggle is null || first is null || LaneOf(first) is not { ActualHeight: > 0 } lane0)
+        {
+            notes.Add("no WARP MODE toggle, or no laid-out track with a section over 30 s and no tempo ramp, so warp markers are untested in the window - pass a file to cover them");
+            return;
+        }
+        void Toggle()
+        {
+            bool was = _vm.WarpMode;
+            var peer = new System.Windows.Automation.Peers.ToggleButtonAutomationPeer(toggle);
+            ((System.Windows.Automation.Provider.IToggleProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Toggle)).Toggle();
+            PumpUntil(() => _vm.WarpMode != was);
+        }
+
+        var id = first.Id;
+        var s = _vm.Session;
+        TrackViewModel Song() => _vm.Tracks.First(t => t.Id == id);
+        FrameworkElement Lane() => LaneOf(Song())!;
+        double frame = 1.0 / s.SampleRate;
+        double OnFrame(double sec) => Benchmix.Core.TimelineEditor.SecondsOf(s.SecondsToFrames(sec), s);
+        // Where marker i's beat is heard, as the app works it out; NaN — failing whatever compares it — if it is not there.
+        double Heard(int i) => i < Song().Model.Warps.Count ? Benchmix.Core.WarpMarkers.TimelineSecondsOf(Song().Model, i) : double.NaN;
+        var none = new Benchmix.Core.Model.WarpMarker(double.NaN, double.NaN);
+        Benchmix.Core.Model.WarpMarker Marker(int i) => i < Song().Model.Warps.Count ? Song().Model.Warps[i] : none;
+        void Undo(Func<bool> done) { _vm.UndoCommand.Execute(null); PumpUntil(done); UpdateLayout(); }
+        (int, int, int) State() => (_vm.Tracks.Count, _vm.Tracks.Sum(t => t.Clips.Count), Song().Model.Warps.Count);
+        var start = State();                // no warp marker: the track was picked for that
+        void PutBack()
+        {
+            for (int i = 0; i < 12 && State() != start; i++)
+            {
+                var state = State();
+                Undo(() => State() != state);
+            }
+            if (State() != start) notes.Add("the warp checks could not undo back to where they started");
+        }
+
+        var piece = Song().Clips.First(c => c.TimelineLengthSeconds > 30);
+        double p0 = piece.TimelineStartSeconds;
+        _vm.ScrollSeconds = p0;
+        _vm.PixelsPerSecond = Math.Min(20, Math.Max(4, (lane0.ActualWidth - 120) / 35));
+        double pps = _vm.PixelsPerSecond;
+        UpdateLayout();
+        Point At(FrameworkElement lane, double sec)
+        {
+            var o = lane.TranslatePoint(new Point(0, 0), this);
+            return new Point(o.X + (sec - _vm.ScrollSeconds) * pps, o.Y + lane.ActualHeight / 2);
+        }
+        // A press, two moves and a release, as WPF routes them. Returns what the status bar and the
+        // guide line said at the last move, before the release settles them.
+        (string Status, double? Guide) Drag(FrameworkElement lane, Point from, Point to, ModifierKeys mods, Action? midway = null)
+        {
+            _scriptedModifiers = mods;
+            _scriptedWindowPoint = from;
+            WindowPress(MouseButton.Left, lane);
+            LaneDown(lane, from);
+            var mid = new Point((from.X + to.X) / 2, from.Y);
+            _scriptedWindowPoint = mid;
+            LaneMove(lane, mid, true);
+            midway?.Invoke();
+            _scriptedWindowPoint = to;
+            LaneMove(lane, to, true);
+            var seen = (_vm.Status, _vm.SnapLineSeconds);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            return seen;
+        }
+        void Click(FrameworkElement lane, Point p, ModifierKeys mods = ModifierKeys.None, int clickCount = 1)
+        {
+            _scriptedModifiers = mods;
+            _scriptedWindowPoint = p;
+            WindowPress(MouseButton.Left, lane, clickCount);
+            LaneDown(lane, p, clickCount);
+            LaneUp(lane);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+        }
+        List<FrameworkElement> RemoveItems(FrameworkElement lane)
+            => lane.ContextMenu?.Items.OfType<FrameworkElement>().Where(i => i.Tag as string == "removeWarp").ToList() ?? new();
+
+        // A section after the second marker, which the warp moves; and on another track, a section
+        // starting 20 s in, for a marker to snap to. The playhead well away, so nothing snaps to it.
+        _vm.LoopMode = false;
+        _vm.RampMode = false;
+        _vm.MarkMode = false;
+        _vm.WarpMode = false;
+        _vm.SelectedTrack = Song();
+        _vm.SeekTo(p0 + 25);
+        _vm.SplitAtPlayheadCommand.Execute(null);
+        var later = Song().Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - (p0 + 25)) < 0.01);
+        var head = Song().Clips.FirstOrDefault(c => Math.Abs(c.TimelineStartSeconds - p0) < 0.01);
+        _vm.SelectClip(head);
+        _vm.CopyClipCommand.Execute(null);
+        _vm.AddEmptyTrackCommand.Execute(null);
+        var otherId = _vm.Tracks[^1].Id;
+        TrackViewModel? Other() => _vm.Tracks.FirstOrDefault(t => t.Id == otherId);
+        _vm.SelectedTrack = Other();
+        _vm.SeekTo(p0 + 20);
+        _vm.PasteClipCommand.Execute(null);
+        PumpUntil(() => Other()?.Model.Clips.Count > 0);
+        var pasted = Other()?.Model.Clips.OrderBy(c => c.TrackStartSeconds).FirstOrDefault();
+        _vm.SeekTo(p0 + 32);
+        _vm.SelectedTrack = Song();
+        UpdateLayout();
+        if (later is null || head is null || pasted is null)
+        {
+            notes.Add("the song could not be split at 25 s, or nothing landed on the other track, so warp markers are untested in the window");
+            PutBack();
+            return;
+        }
+        double edge = Benchmix.Core.TimelineEditor.TimelineSecondsOfFrame(Other()!.Model, Benchmix.Core.TimelineEditor.StartFrameOf(pasted, s), s);
+
+        // --- WARP MODE ---
+        Toggle();
+        Check("WARP MODE turns on through its own toggle", _vm.WarpMode);
+        _vm.LoopMode = true;
+        bool offForLoop = !_vm.WarpMode;
+        Toggle();
+        bool loopOff = !_vm.LoopMode;
+        _vm.RampMode = true;
+        bool offForRamp = !_vm.WarpMode;
+        Toggle();
+        bool rampOff = !_vm.RampMode;
+        _vm.MarkMode = true;
+        bool offForMark = !_vm.WarpMode;
+        Toggle();
+        Check("warp mode is never on together with loop mode, ramp mode or mark mode",
+              offForLoop && loopOff && offForRamp && rampOff && offForMark && !_vm.MarkMode && _vm.WarpMode);
+
+        // --- a click pins the beat under it, and changes nothing ---
+        double o = Song().Model.TimelineOffsetSeconds, v0 = Song().Model.Speed;
+        double laterBefore = later.TimelineStartSeconds, laterAudio = later.TrackStartSeconds;
+        var placed = Song().Clips.Select(c => (c.Id, c.TimelineStartSeconds)).ToList();
+        var selectedBefore = _vm.SelectedClips.Select(c => c.Id).ToHashSet();
+        Click(Lane(), At(Lane(), p0 + 5));
+        var m = Song().Model;
+        var voice = s.VoiceFor(m);
+        Check($"a click in warp mode pins the beat there, on its frame, and changes nothing: no section moves or is selected, and the engine still plays the track untouched (\"{_vm.Status}\")",
+              m.Warps.Count == 1 && m.Warps[0].TrackSeconds == m.Warps[0].TempoSeconds
+              && m.Warps[0].TrackSeconds == OnFrame(m.Warps[0].TrackSeconds) && Math.Abs(m.Warps[0].TrackSeconds - (p0 + 5 - o) * v0) <= frame
+              && Song().Clips.Select(c => (c.Id, c.TimelineStartSeconds)).SequenceEqual(placed)
+              && _vm.SelectedClips.Select(c => c.Id).ToHashSet().SetEquals(selectedBefore)
+              && voice is not null && voice.Tempo.IsConstant && !_vm.PointerHeld && _vm.Status.Contains("warp marker at"));
+        var a = Marker(0);
+        double heardA = Heard(0);
+
+        Click(Lane(), At(Lane(), p0 + 5), clickCount: 2);
+        Check("the second press of a double-click in warp mode does nothing: no second marker, no drag, no play",
+              Song().Model.Warps.Count == 1 && !_vm.PointerHeld && !_vm.DragInProgress
+              && _vm.Session.Engine.State != Benchmix.Engine.Audio.TransportState.Playing);
+
+        Click(Lane(), At(Lane(), p0 + 8), ModifierKeys.Alt);
+        Check($"Alt+click in warp mode only moves the playhead (to {_vm.PositionSeconds:0.000}s)",
+              Math.Abs(_vm.PositionSeconds - (p0 + 8)) < 0.001 && Song().Model.Warps.Count == 1 && Marker(0) == a);
+        _vm.SeekTo(p0 + 32);
+
+        // --- a press-drag pins a second beat and moves it 1.5 s later, freely (Ctrl) ---
+        var pressB = At(Lane(), p0 + 15);
+        var dropAt = At(Lane(), p0 + 16.5);
+        bool waited = false;
+        Drag(Lane(), pressB, dropAt, ModifierKeys.Control, () =>
+        {
+            _vm.ToggleWarpModeCommand.Execute(null);
+            _vm.ToggleRampModeCommand.Execute(null);
+            _vm.ToggleLoopModeCommand.Execute(null);
+            _vm.ToggleMarkModeCommand.Execute(null);
+            waited = _vm.WarpMode && !_vm.RampMode && !_vm.LoopMode && !_vm.MarkMode && Song().Model.Warps.Count == 2;
+        });
+        Check("Ctrl+W, Ctrl+R, Ctrl+L and Ctrl+M wait while a warp marker is held", waited);
+
+        m = Song().Model;
+        var b = Marker(1);
+        // Where B's beat was heard when it went down — the track was untouched, so at its audio over
+        // the tempo — and where the pointer let go of it. Then the warp written out: B's audio is
+        // heard when the tempo, v0 × (t − origin), reaches B's TempoSeconds, which the drop sets to
+        // the tempo on the frame it was let go on.
+        double grabB = o + b.TrackSeconds / v0;
+        double drop = grabB + (dropAt.X - pressB.X) / pps;
+        double tbDrop = (OnFrame(drop) - o) * v0;
+        double heardB = Heard(1);
+        Check($"a press-drag in warp mode pins the beat under the press and moves it to where it was let go ({drop:0.000}s; heard at {heardB:0.000}s)",
+              m.Warps.Count == 2 && Math.Abs(b.TrackSeconds - (p0 + 15 - o) * v0) <= frame && Math.Abs(b.TempoSeconds - tbDrop) <= 1e-9
+              && Math.Abs(o + b.TempoSeconds / v0 - drop) <= frame && Math.Abs(heardB - drop) <= frame);
+        Check("the marker before it stays exactly where it was, on the same beat",
+              Marker(0) == a && Math.Abs(Heard(0) - heardA) <= frame);
+
+        // After the last marker the audio plays at its tempo again: a section there is heard where
+        // the tempo reaches B's, plus how far its audio is past B's.
+        var laterNow = Song().Clips.FirstOrDefault(c => c.Id == later.Id);
+        double wantLater = o + (b.TempoSeconds + (laterAudio - b.TrackSeconds)) / v0;
+        Check($"a section after the last marker moves with it, by the same {heardB - grabB:0.000}s, where the warp puts it",
+              laterNow is not null && Math.Abs(laterNow.TimelineStartSeconds - wantLater) <= frame
+              && Math.Abs((laterNow.TimelineStartSeconds - laterBefore) - (heardB - grabB)) <= frame);
+
+        voice = s.VoiceFor(m);
+        Check("the engine plays the warp the project describes, through the stretcher",
+              voice is not null && voice.Tempo.IsWarped && !voice.Tempo.IsConstant && voice.Tempo.SameAs(s.EngineTempoOf(m)));
+
+        // The audio between the two markers against its tempo: under 1, it plays slower.
+        double spread = (b.TrackSeconds - a.TrackSeconds) / (b.TempoSeconds - a.TempoSeconds);
+        string label = $"{(spread > 1 ? "+" : "−")}{Math.Abs(spread - 1) * 100:0.0}%";
+        var wave = Descendants<Controls.WaveformView>(Lane()).FirstOrDefault();
+        Check($"the lane is handed both markers to draw, the stretch between them labelled {label}",
+              wave?.Warps is { Count: 2 } drawn && drawn[0].Label is null && drawn[1].Label == label
+              && drawn[1].FromSeconds == drawn[0].Seconds && Math.Abs(drawn[1].Seconds - drop) <= frame);
+
+        // --- snapping: dragged to 4 px past an edge on another track, the beat lands on the edge ---
+        var onB = At(Lane(), heardB);
+        var pastEdge = new Point(At(Lane(), edge).X + 4, onB.Y);
+        var (snapStatus, guide) = Drag(Lane(), onB, pastEdge, ModifierKeys.None);
+        double tbSnap = Marker(1).TempoSeconds;
+        Check($"without Ctrl a beat snaps onto the edge of a section on another track 4 px away, and the guide line shows it (\"{snapStatus}\")",
+              guide == edge && Math.Abs(Heard(1) - edge) <= frame && Math.Abs(o + tbSnap / v0 - edge) <= frame);
+
+        double grabSnap = Heard(1);
+        var onSnap = At(Lane(), grabSnap);
+        var (_, freeGuide) = Drag(Lane(), onSnap, pastEdge, ModifierKeys.Control);
+        double dropFree = grabSnap + (pastEdge.X - onSnap.X) / pps;
+        double tbFree = Marker(1).TempoSeconds;
+        Check("Ctrl lets go of the edge: the beat goes exactly where the pointer does",
+              freeGuide is null && Math.Abs(Heard(1) - dropFree) <= frame && Math.Abs(o + tbFree / v0 - dropFree) <= frame && Math.Abs(Heard(1) - edge) > 2 * frame);
+
+        // --- the audio can be spread to twice as fast, and no further ---
+        var onFree = At(Lane(), Heard(1));
+        var (limitStatus, _) = Drag(Lane(), onFree, At(Lane(), heardA + 1), ModifierKeys.Control);
+        // Twice as fast is as far as it goes: B's tempo then comes after A's by half B's audio's distance from A's.
+        double tbLimit = a.TempoSeconds + (Marker(1).TrackSeconds - a.TrackSeconds) / 2;
+        double tbLimited = Marker(1).TempoSeconds;
+        Check($"a beat dragged further than the audio can be spread stops where it plays twice as fast, and says so (\"{limitStatus}\")",
+              limitStatus.Contains("as far as it goes") && Math.Abs(tbLimited - tbLimit) <= 1e-6 && Math.Abs(Heard(1) - (o + tbLimit / v0)) <= frame);
+
+        // --- losing the mouse during a press lets it go, and changes nothing ---
+        var pressA = At(Lane(), Heard(0));
+        _scriptedWindowPoint = pressA;
+        LaneDown(Lane(), pressA);
+        bool heldA = _vm.PointerHeld;
+        _scriptedWindowPoint = null;
+        OnLaneLostCapture(Lane(), new MouseEventArgs(Mouse.PrimaryDevice, 0) { RoutedEvent = LostMouseCaptureEvent });
+        Check("a press on a warp marker that loses the mouse (Alt+Tab, a pan) is let go, and changes nothing",
+              heldA && !_vm.PointerHeld && !_vm.DragInProgress && Song().Model.Warps.Count == 2
+              && Marker(0) == a && Marker(1).TempoSeconds == tbLimited);
+
+        // --- the right-click menu ---
+        var lane = Lane();
+        double between = (Heard(0) + Heard(1)) / 2;
+        LaneRightDown(lane, At(lane, between));
+        PrepareLaneMenu(lane);
+        bool hiddenAway = RemoveItems(lane).All(i => i.Visibility == Visibility.Collapsed);
+        LaneRightDown(lane, At(lane, Heard(1)));
+        PrepareLaneMenu(lane);
+        var items = RemoveItems(lane);
+        Check("the right-click menu offers Remove warp marker over a marker, and not elsewhere",
+              hiddenAway && items.Count == 2 && items.All(i => i.Visibility == Visibility.Visible));
+
+        // A right-press while a marker is held does not look under the pointer, and must not leave
+        // the marker from the right-click before it on offer, by an index that may now be another.
+        _scriptedWindowPoint = pressA;
+        LaneDown(lane, pressA);
+        LaneRightDown(lane, At(lane, Heard(1)));
+        PrepareLaneMenu(lane);
+        bool staleHidden = RemoveItems(lane).All(i => i.Visibility == Visibility.Collapsed);
+        LaneUp(lane);
+        _scriptedWindowPoint = null;
+        Check("a right-click while a warp marker is held offers no Remove warp marker, not even one left over from an earlier right-click",
+              staleHidden && Song().Model.Warps.Count == 2);
+
+        LaneRightDown(lane, At(lane, Heard(1)));
+        PrepareLaneMenu(lane);
+        if (RemoveItems(lane).OfType<MenuItem>().FirstOrDefault() is { } remove) OnRemoveWarpMenu(remove, new RoutedEventArgs());
+        var back = Song().Clips.FirstOrDefault(c => c.Id == later.Id);
+        voice = s.VoiceFor(Song().Model);
+        Check($"Remove warp marker takes the last one off, and the section after it goes back exactly where it was (\"{_vm.Status}\")",
+              Song().Model.Warps.Count == 1 && Marker(0) == a && back is not null && back.TimelineStartSeconds == laterBefore
+              && voice is not null && voice.Tempo.IsConstant);
+
+        // --- under the tracks: no selection box, and a double-click still plays ---
+        _vm.StopCommand.Execute(null);
+        var below = At(BelowTracks, p0 + 12);
+        _scriptedWindowPoint = below;
+        BelowDown(BelowTracks, below, 1);
+        bool noBand = _band is null;
+        if (_band is not null) BandLost();
+        BelowDown(BelowTracks, below, 2);
+        _scriptedWindowPoint = null;
+        bool playedBelow = _vm.Session.Engine.State == Benchmix.Engine.Audio.TransportState.Playing && Math.Abs(_vm.PositionSeconds - (p0 + 12)) < 0.01;
+        _vm.StopCommand.Execute(null);
+        Check("under the tracks a press in warp mode starts no selection box, and a double-click still plays from there", noBand && playedBelow);
+
+        // --- WARP MODE off: the markers are part of the project, and stay ---
+        Toggle();
+        Check("WARP MODE turns off through its toggle, and the warp marker stays",
+              !_vm.WarpMode && Song().Model.Warps.Count == 1 && Song().WarpVisuals.Count == 1);
+
+        // --- one undo step each ---
+        bool UndoTo(Func<Benchmix.Core.Model.TrackModel, bool> state) { Undo(() => state(Song().Model)); return state(Song().Model); }
+        bool u1 = UndoTo(x => x.Warps.Count == 2 && x.Warps[1].TempoSeconds == tbLimited);
+        bool u2 = u1 && UndoTo(x => x.Warps.Count == 2 && x.Warps[1].TempoSeconds == tbFree);
+        bool u3 = u2 && UndoTo(x => x.Warps.Count == 2 && x.Warps[1].TempoSeconds == tbSnap);
+        bool u4 = u3 && UndoTo(x => x.Warps.Count == 2 && x.Warps[1].TempoSeconds == b.TempoSeconds);
+        bool u5 = u4 && UndoTo(x => x.Warps.Count == 1);
+        bool u6 = u5 && UndoTo(x => x.Warps.Count == 0);
+        Check("each warp edit was one undo step: the removal, the limit, the free drag, the snap, then the press that put the second marker down and moved it, then the first",
+              u6);
+
+        // Put everything back: the paste, the empty track, the split.
+        PutBack();
     }
 
     private void RunEditingGestures(Action<string, bool> Check, List<string> notes)
@@ -3044,6 +3446,7 @@ public partial class MainWindow : Window
         await CheckSplitThroughMenuAsync(Check, Labels);
         await CheckRenameThroughMenuAsync(Check, Labels);
         await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
+        await CheckWarpButtonsAsync(Check, Click, Buttons, Labels);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -3260,6 +3663,91 @@ public partial class MainWindow : Window
         bool matchUndone = Topper().Model.Ramps.Count == 1 && Topper().Model.Speed == speedBefore;
         await Undo();
         check("two more Ctrl+Z take back the match and the ramp, one each", matchUndone && Topper().Model.Ramps.Count == 0);
+    }
+
+    /// <summary>
+    /// Match BPM and Reset on a track with warp markers (2026-10-18), through the real buttons. Match
+    /// BPM leaves the markers as they are: they are on the audio, counted in its tempo, so their beats
+    /// move with the new tempo and stay pinned. Reset takes them away in the same one step as the
+    /// track's tempo ramp. Each of those, and each marker, is one Ctrl+Z.
+    /// </summary>
+    private async Task CheckWarpButtonsAsync(Action<string, bool> check, Func<Button, Task> click,
+                                             Func<string, List<Button>> buttons, Func<string> labels)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        async Task Undo() { _vm.UndoCommand.Execute(null); await Settle(); }
+
+        if (_vm.Tracks.Count != 2 || _vm.Tracks[1].Model.Bpm <= 0 || _vm.Tracks[1].Model.Ramps.Count > 0 || _vm.Tracks[1].Model.Warps.Count > 0)
+        {
+            check("a topper with a known tempo, and no tempo ramp or warp marker yet, to put warp markers on", false);
+            return;
+        }
+        var id = _vm.Tracks[1].Id;
+        TrackViewModel Topper() => _vm.Tracks.First(t => t.Id == id);
+        double bpm = Topper().Model.Bpm, speedBefore = Topper().Model.Speed, origin = Topper().Model.TimelineOffsetSeconds;
+        double frame = 1.0 / _vm.Session.SampleRate;
+        double Heard(Benchmix.Core.Model.TrackModel m, int i) => Benchmix.Core.WarpMarkers.TimelineSecondsOf(m, i);
+
+        // Two markers through the view-model, as a press in the lane puts them: one pinned at 40 s,
+        // and one pinned at 60 s with its beat moved half a second later.
+        _vm.WarpMode = true;
+        _vm.PressWarp(Topper(), 40);
+        _vm.ReleaseWarp();
+        double? grab = _vm.PressWarp(Topper(), 60);
+        _vm.BeginWarpDrag();
+        _vm.DragWarpTo((grab ?? 60) + 0.5, free: true);
+        _vm.ReleaseWarp();
+        _vm.WarpMode = false;
+        await Settle();
+        var placed = Topper().Model.Warps.ToList();
+        // With no ramp, a marker's beat is heard where the tempo reaches its TempoSeconds: origin + TempoSeconds ÷ TEMPO.
+        check("two warp markers on the topper, at 40 s and 60 s, the second one's beat moved 0.5 s later",
+              grab is { } g && placed is [{ } w0, { } w1] && w0.TrackSeconds == w0.TempoSeconds && w1.TrackSeconds != w1.TempoSeconds
+              && Math.Abs(origin + w1.TempoSeconds / speedBefore - (g + 0.5)) <= frame);
+
+        var match = buttons("Match BPM");
+        var reset = buttons("Reset");
+        if (match.Count != 2 || reset.Count < 2 || placed.Count != 2) { check("Match BPM and Reset buttons for the warped topper", false); return; }
+
+        await click(match[1]);
+        double matched = Topper().Model.Speed;
+        var m = Topper().Model;
+        check($"Match BPM changes the tempo ({bpm * matched:0.0} BPM) and leaves the warp markers as they were, so their beats move with it and stay pinned",
+              matched != speedBefore && m.Warps.SequenceEqual(placed)
+              && Math.Abs(Heard(m, 0) - (origin + placed[0].TempoSeconds / matched)) <= frame
+              && Math.Abs(Heard(m, 1) - (origin + placed[1].TempoSeconds / matched)) <= frame
+              && labels().Contains("2 warp markers moved with their beats"));
+
+        // A tempo ramp before them too, so Reset has both to take away.
+        _vm.PlaceRampPoint(Topper(), 20, free: true);
+        _vm.PlaceRampPoint(Topper(), 30, free: true);
+        bool ramped = _vm.CommitRampEntry(id, "100");
+        await Settle();
+
+        await click(reset[1]);
+        m = Topper().Model;
+        check("Reset takes the warp markers away in the same step as the tempo ramp, and the engine plays the track untouched again",
+              ramped && m.Warps.Count == 0 && m.Ramps.Count == 0 && m.Speed == 1
+              && _vm.Session.VoiceFor(m)?.Tempo.IsConstant == true && labels().Contains("tempo ramps and warp markers removed"));
+
+        await Undo();
+        m = Topper().Model;
+        check("one Ctrl+Z brings back the warp markers and the tempo ramp, with the matched tempo",
+              m.Warps.SequenceEqual(placed) && m.Ramps.Count == 1 && m.Speed == matched);
+        await Undo();
+        bool rampUndone = Topper().Model.Ramps.Count == 0 && Topper().Model.Warps.SequenceEqual(placed);
+        await Undo();
+        bool matchUndone = Topper().Model.Speed == speedBefore && Topper().Model.Warps.SequenceEqual(placed);
+        await Undo();
+        bool secondUndone = Topper().Model.Warps.Count == 1 && Topper().Model.Warps[0] == placed[0];
+        await Undo();
+        check("four more Ctrl+Z take back the ramp, the match, the second marker with its move, and the first, one each",
+              rampUndone && matchUndone && secondUndone && Topper().Model.Warps.Count == 0);
     }
 
     private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,
@@ -3685,7 +4173,7 @@ public partial class MainWindow : Window
             return true;
         }
         if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(at); return true; }
-        if (_vm.RampMode) return true;                     // in ramp mode a press acts on ramps only
+        if (_vm.RampMode || _vm.WarpMode) return true;     // in ramp or warp mode a press acts on ramps or markers only
         if (_vm.MarkMode) { _vm.SeekTo(at); return true; } // and in mark mode it is a place in time, as on a lane
         BandDown(surface, window, additive: shift || ctrl);
         return true;
@@ -4189,6 +4677,7 @@ public partial class MainWindow : Window
         if (_band is not null) { _vm.Status = "Let go of the selection box first."; return false; }
         if (_dragClip is not null) { _vm.Status = "Let go of the section first."; return false; }
         if (_markPress is not null) { _vm.Status = "Let go of the mark first."; return false; }
+        if (_warpPress is not null) { _vm.Status = "Let go of the warp marker first."; return false; }
         return _vm.DeleteSelection(fallBackToPlayhead: false);
     }
 
@@ -4360,7 +4849,7 @@ public partial class MainWindow : Window
             _markPress = null;
             _vm.PointerHeld = false;
         }
-        else if (_dragClip is not null || _rampGrab is not null || _markPress is not null) LaneUp((FrameworkElement)sender);
+        else if (_dragClip is not null || _rampGrab is not null || _markPress is not null || _warpPress is not null) LaneUp((FrameworkElement)sender);
     }
 
     private bool LaneDown(FrameworkElement lane, Point window, int clickCount = 1)
@@ -4372,6 +4861,8 @@ public partial class MainWindow : Window
         // point down, and may have opened the box it would otherwise close straight away.
         if (_vm.RampMode) { _clickMemo = null; return clickCount >= 2 || RampDown(lane, vm, window); }
         if (_vm.MarkMode) { _clickMemo = null; return MarkDown(lane, vm, window, clickCount); }
+        // In warp mode too: the first press already put a marker down, or grabbed one.
+        if (_vm.WarpMode) { _clickMemo = null; return clickCount >= 2 || WarpDown(lane, vm, window); }
         double x = LaneX(lane, window);
         var memo = _clickMemo;
         _clickMemo = null;
@@ -4481,6 +4972,25 @@ public partial class MainWindow : Window
                 else _vm.BeginMark(mp.Track, mp.GrabSeconds, free: Modifiers.HasFlag(ModifierKeys.Control));
             }
             _vm.DragMarkTo(mp.GrabSeconds + moved / Math.Max(0.01, _vm.PixelsPerSecond), free: Modifiers.HasFlag(ModifierKeys.Control));
+            return;
+        }
+        if (_warpPress is { } wp)
+        {
+            if (!(pressed || _scriptedWindowPoint is not null)) return;
+            double moved = window.X - _warpPressOrigin.X;
+            if (!_warpDragging)
+            {
+                if (Math.Abs(moved) < 4) return;
+                _warpDragging = true;
+                _vm.BeginWarpDrag();
+            }
+            _vm.DragWarpTo(wp.GrabSeconds + moved / Math.Max(0.01, _vm.PixelsPerSecond), free: Modifiers.HasFlag(ModifierKeys.Control));
+            return;
+        }
+        if (_vm.WarpMode)
+        {
+            if (lane.DataContext is TrackViewModel wh)
+                lane.Cursor = WarpMarkerAt(wh, LaneX(lane, window)) >= 0 ? Cursors.SizeWE : Cursors.Cross;
             return;
         }
         if (_vm.MarkMode)
@@ -4609,6 +5119,18 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (_warpPress is not null)
+        {
+            // State first: releasing capture raises LostMouseCapture, which comes straight back here.
+            _warpPress = null;
+            _warpDragging = false;
+            _vm.PointerHeld = false;
+            if (_scriptedWindowPoint is null && lane.IsMouseCaptured) lane.ReleaseMouseCapture();
+            _vm.ReleaseWarp();
+            _vm.EndGesture();
+            return;
+        }
+
         // State first: releasing capture raises LostMouseCapture, which comes straight back here.
         bool dragging = _dragging;
         var toggle = _pendingToggle;
@@ -4653,16 +5175,19 @@ public partial class MainWindow : Window
     private void LaneRightDown(FrameworkElement lane, Point window)
     {
         _rampUnderMenu = null;                       // never one from an earlier right-click
+        _warpUnderMenu = null;
         if (lane.DataContext is not TrackViewModel vm) return;
 
         // The left button is still holding a box or a section: a right-press — the start of a pan,
         // say, to reach further — must not swap what they hold for what is under the pointer.
-        if (_band is not null || _dragClip is not null || _rampGrab is not null || _markPress is not null) return;
+        if (_band is not null || _dragClip is not null || _rampGrab is not null || _markPress is not null || _warpPress is not null) return;
         TakeKeyboardFromText();
         _vm.SelectedTrack = vm;
         double x = LaneX(lane, window);
         int under = Benchmix.Core.TempoRamps.IndexUnder(vm.Model, SecondsAtLaneX(x), 4 / Math.Max(0.01, _vm.PixelsPerSecond));
         _rampUnderMenu = under >= 0 ? (vm, vm.Model.Ramps[under]) : null;
+        int marker = WarpMarkerAt(vm, x);
+        _warpUnderMenu = marker >= 0 ? (vm, vm.Model.Warps[marker]) : null;
         var clip = ClipAtLaneX(vm, x);
 
         // Right-clicking one of several selected sections keeps the selection, so the menu's
@@ -4675,18 +5200,22 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// Sets the lane menu up for where it was opened: loop mode's tick, "Remove tempo ramp" only over
-    /// a ramp, and — while a stretch is marked — Cut, Copy, Repeat and Delete named for the mark,
-    /// which is what they then act on.
+    /// a ramp and "Remove warp marker" only over a marker, and — while a stretch is marked — Cut,
+    /// Copy, Repeat and Delete named for the mark, which is what they then act on.
     /// </summary>
     private void PrepareLaneMenu(FrameworkElement lane)
     {
         if (lane.ContextMenu is not { } menu) return;
         bool overRamp = _rampUnderMenu is { } r && ReferenceEquals(r.Track, lane.DataContext);
+        bool overWarp = _warpUnderMenu is { } w && ReferenceEquals(w.Track, lane.DataContext);
         bool marked = _vm.MarkedTrack is not null;
         foreach (var item in menu.Items.OfType<FrameworkElement>())
         {
             if (item is MenuItem { Tag: "loopmode" } loop) loop.IsChecked = _vm.LoopMode;
             if (item.Tag as string == "removeRamp") item.Visibility = overRamp ? Visibility.Visible : Visibility.Collapsed;
+            // Over a ramp and a marker both, the two Remove items sit together under the ramp's separator.
+            if (item is MenuItem { Tag: "removeWarp" }) item.Visibility = overWarp ? Visibility.Visible : Visibility.Collapsed;
+            if (item is Separator { Tag: "removeWarp" }) item.Visibility = overWarp && !overRamp ? Visibility.Visible : Visibility.Collapsed;
             if (item is MenuItem { Tag: "cut" } cut) cut.Header = marked ? "Cut marked stretch" : "Cut section";
             if (item is MenuItem { Tag: "copy" } copy) copy.Header = marked ? "Copy marked stretch" : "Copy section";
             if (item is MenuItem { Tag: "repeat" } repeat) repeat.Header = marked ? "Repeat marked stretch" : "Repeat this section";
@@ -4703,6 +5232,17 @@ public partial class MainWindow : Window
             else _vm.Status = "That tempo ramp is no longer there.";
         }
         else _vm.Status = "Right-click on a tempo ramp to remove it.";
+    }
+
+    private void OnRemoveWarpMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t && _warpUnderMenu is { } w && ReferenceEquals(w.Track, t))
+        {
+            int i = t.Model.Warps.IndexOf(w.Marker);   // the marker right-clicked, by value: the old index could name another one
+            if (i >= 0) _vm.RemoveWarp(t, i);
+            else _vm.Status = "That warp marker is no longer there.";
+        }
+        else _vm.Status = "Right-click on a warp marker to remove it.";
     }
 
     // ---------------- tempo ramps in the lane (Daniel, 2026-10-11) ----------------
@@ -4754,6 +5294,45 @@ public partial class MainWindow : Window
                 return (i, false, vm.Model.Ramps[i].StartSeconds);
         }
         return null;
+    }
+
+    // ---------------- warp markers in the lane (Daniel, 2026-10-18) ----------------
+
+    /// <summary>
+    /// A press in WARP MODE holding a marker — the one it was on, or the one it put down — waiting to
+    /// see whether it becomes a drag: the track, and where the marker's beat was heard at the press.
+    /// </summary>
+    private (TrackViewModel Track, double GrabSeconds)? _warpPress;
+    private bool _warpDragging;
+    private Point _warpPressOrigin;
+    private (TrackViewModel Track, Benchmix.Core.Model.WarpMarker Marker)? _warpUnderMenu;
+
+    /// <summary>
+    /// A left press on a lane in WARP MODE. On a marker it grabs it — a drag moves the beat it is on;
+    /// anywhere else on the track it puts a marker down there, which changes nothing heard, and a
+    /// drag on from there moves that beat. Alt+click only moves the playhead. Sections are not
+    /// selected or dragged.
+    /// </summary>
+    private bool WarpDown(FrameworkElement lane, TrackViewModel vm, Point window)
+    {
+        double x = LaneX(lane, window);
+        if (Modifiers.HasFlag(ModifierKeys.Alt)) { _vm.SeekTo(SecondsAtLaneX(x)); return true; }
+
+        // Before PointerHeld is set: the view-model refuses a press while something is already held.
+        if (_vm.PressWarp(vm, SecondsAtLaneX(x)) is not { } grab) return true;     // refused: the status bar says why
+        _warpPress = (vm, grab);
+        _warpPressOrigin = window;
+        _warpDragging = false;
+        _vm.PointerHeld = true;
+        if (_scriptedWindowPoint is null) lane.CaptureMouse();
+        return true;
+    }
+
+    /// <summary>The warp marker under a lane x, nearest first, within its grab; −1 when none is. Laid out as it is drawn.</summary>
+    private int WarpMarkerAt(TrackViewModel vm, double x)
+    {
+        int i = Controls.WarpLayout.IndexAt(vm.WarpVisuals, x, _vm.PixelsPerSecond, _vm.ScrollSeconds);
+        return i < vm.Model.Warps.Count ? i : -1;
     }
 
     // ---------------- marking a stretch (Daniel, 2026-10-12) ----------------

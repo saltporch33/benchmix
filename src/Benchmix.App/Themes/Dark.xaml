@@ -17,6 +17,10 @@
     <Color x:Key="Warn">#F5C518</Color>
     <Color x:Key="Bad">#E5484D</Color>
     <Color x:Key="Playhead">#FF6B3D</Color>
+    <!-- Warp markers (2026-10-18). Tempo ramps are yellow (RampLayout.Yellow); this is kept clear of
+         that, of the white of a selection or a mark, and of the paler sky-blue of loop handles and
+         the snap guide, which is drawn right over a marker while it is dragged onto something. -->
+    <Color x:Key="Warp">#1DE9B6</Color>
 
     <SolidColorBrush x:Key="Bg0Brush" Color="{StaticResource Bg0}"/>
     <SolidColorBrush x:Key="Bg1Brush" Color="{StaticResource Bg1}"/>
@@ -32,6 +36,7 @@
     <SolidColorBrush x:Key="WarnBrush" Color="{StaticResource Warn}"/>
     <SolidColorBrush x:Key="BadBrush" Color="{StaticResource Bad}"/>
     <SolidColorBrush x:Key="PlayheadBrush" Color="{StaticResource Playhead}"/>
+    <SolidColorBrush x:Key="WarpBrush" Color="{StaticResource Warp}"/>
 
     <Style TargetType="Button" x:Key="ToolButton">
         <Setter Property="Background" Value="{StaticResource Bg3Brush}"/>

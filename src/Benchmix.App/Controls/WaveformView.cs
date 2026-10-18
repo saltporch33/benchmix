@@ -15,8 +15,8 @@ namespace Benchmix.App.Controls;
 /// </param>
 /// <param name="LoopHandleRight">The same for the loop's outer right end.</param>
 /// <param name="Tempo">
-/// The track's tempo map in seconds from its origin when it has tempo ramps, else null — and then
-/// every position is worked out with the one speed exactly as before.
+/// The track's tempo map in seconds from its origin when it has tempo ramps or a moved warp marker,
+/// else null — and then every position is worked out with the one speed exactly as before.
 /// </param>
 public sealed record ClipVisual(
     PeakData? Peaks,
@@ -108,6 +108,24 @@ public sealed class WaveformView : FrameworkElement
         set => SetValue(MarkProperty, value);
     }
 
+    /// <summary>The track's warp markers (2026-10-18), drawn over its sections whatever the mode.</summary>
+    public static readonly DependencyProperty WarpsProperty = DependencyProperty.Register(
+        nameof(Warps), typeof(IReadOnlyList<WarpVisual>), typeof(WaveformView),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public IReadOnlyList<WarpVisual>? Warps
+    {
+        get => (IReadOnlyList<WarpVisual>?)GetValue(WarpsProperty);
+        set => SetValue(WarpsProperty, value);
+    }
+
+    /// <summary>What warp markers are drawn in: the theme's WarpBrush, handed in by the lane.</summary>
+    public static readonly DependencyProperty WarpBrushProperty = DependencyProperty.Register(
+        nameof(WarpBrush), typeof(Brush), typeof(WaveformView),
+        new FrameworkPropertyMetadata(Brushes.Turquoise, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public Brush WarpBrush { get => (Brush)GetValue(WarpBrushProperty); set => SetValue(WarpBrushProperty, value); }
+
     public IReadOnlyList<ClipVisual>? Clips
     {
         get => (IReadOnlyList<ClipVisual>?)GetValue(ClipsProperty);
@@ -134,6 +152,13 @@ public sealed class WaveformView : FrameworkElement
 
         // The marked stretch over the sections it covers, and under the ramps.
         if (Mark is { } mark) DrawMark(dc, mark, w, h);
+
+        // Warp markers over the sections and the mark, and under the ramps: a marker's line runs the
+        // full height of the lane, and over a ramp's tempo labels it would cut them in two. The ramps'
+        // dots and labels have a backing of their own, so a marker under one is still seen either side.
+        if (Warps is { Count: > 0 } warps)
+            WarpLayout.Draw(dc, warps, WarpBrush, Math.Max(0.01, PixelsPerSecond), ScrollSeconds, w, h,
+                            VisualTreeHelper.GetDpi(this).PixelsPerDip);
 
         // Tempo ramps over everything: they belong to the track, not to any one section.
         if (Ramps is { Count: > 0 } ramps)
@@ -168,7 +193,7 @@ public sealed class WaveformView : FrameworkElement
         double srcEnd = clip.SourceEndSeconds < 0 ? srcTotal : Math.Min(clip.SourceEndSeconds, srcTotal);
         if (srcEnd <= srcStart) return;
 
-        // Timeline extent of this section after the stretch — and its tempo ramps.
+        // Timeline extent of this section after the stretch — and its tempo ramps and warp markers.
         double clipStart = clip.TimelineStartSeconds;
         var tempo = clip.Tempo;
         double clipEnd = tempo is null ? clipStart + (srcEnd - srcStart) / speed : clip.TimelineEndSeconds;

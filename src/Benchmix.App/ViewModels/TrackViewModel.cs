@@ -100,7 +100,7 @@ public sealed partial class TrackViewModel : ObservableObject
         // The loop the selected section belongs to, so loop mode can mark its two outer ends.
         var selected = Clips.FirstOrDefault(c => c.IsSelected);
         var run = selected is null ? null : LoopRun.Of(Model, selected.Model, _session);
-        var tempo = TimelineEditor.SecondsMapOf(Model);         // once for the lot; null with no tempo ramp
+        var tempo = TimelineEditor.SecondsMapOf(Model);         // once for the lot; null with no tempo ramp or moved warp marker
 
         ClipVisuals = Clips.Select(c => new Controls.ClipVisual(
             c.Peaks, c.SampleRate, c.TimelineStartSeconds, c.SourceStartSeconds,
@@ -116,6 +116,7 @@ public sealed partial class TrackViewModel : ObservableObject
         OnPropertyChanged(nameof(ClipVisuals));
         NotifyMarkChanged();                                    // a turn of TEMPO moves the audio a mark covers
         NotifyRampsChanged();                                   // a turn of TEMPO changes where the first ramp starts from
+        NotifyWarpsChanged();                                   // and moves the beats the warp markers are on
         OnPropertyChanged(nameof(TimelineDurationSeconds));
         OnPropertyChanged(nameof(TimelineEndSeconds));
         OnPropertyChanged(nameof(TrimText));
@@ -204,6 +205,32 @@ public sealed partial class TrackViewModel : ObservableObject
                 : new Controls.RampVisual(d.Start, d.Start, d.FromBpm, d.FromBpm, Controls.RampLook.StartOnly));
         RampVisuals = list.ToArray();
         OnPropertyChanged(nameof(RampVisuals));
+    }
+
+    // ---- warp markers (Daniel, 2026-10-18) ----
+
+    /// <summary>
+    /// What the lane draws for this track's warp markers, as one immutable array, in order. A marker
+    /// is on the audio, not on the timeline, so where each is drawn is worked out again with the
+    /// sections: a turn of TEMPO, a tempo ramp, the origin moving or the warp itself all move them.
+    /// </summary>
+    public IReadOnlyList<Controls.WarpVisual> WarpVisuals { get; private set; } = Array.Empty<Controls.WarpVisual>();
+
+    /// <summary>Republishes what the lane draws for the warp markers. Never throws: it runs on every repaint path.</summary>
+    public void NotifyWarpsChanged()
+    {
+        var list = new Controls.WarpVisual[Model.Warps.Count];
+        // The first stretch runs from the track's start, where its origin is.
+        double from = TimelineEditor.TimelineSecondsAt(Model, 0);
+        for (int i = 0; i < list.Length; i++)
+        {
+            double at = WarpMarkers.TimelineSecondsOf(Model, i);
+            double spread = WarpMarkers.SpreadBefore(Model, i);
+            list[i] = new Controls.WarpVisual(at, from, double.IsFinite(spread) ? WarpMarkers.Label(spread) : null);
+            from = at;
+        }
+        WarpVisuals = list;
+        OnPropertyChanged(nameof(WarpVisuals));
     }
 
     /// <summary>Nothing on this track yet — the lane says how to put something there.</summary>

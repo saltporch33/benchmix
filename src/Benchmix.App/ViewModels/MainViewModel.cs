@@ -486,7 +486,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         int n = track.Model.Ramps.Count;
         string ramps = n == 0 ? ""
             : $" Its tempo ramp{(n > 1 ? "s" : "")} still go{(n > 1 ? "" : "es")} to {track.Model.Bpm * track.Model.Ramps[^1].ToSpeed:0.0} BPM.";
-        Status = $"{track.Name}: {(speed - 1) * 100:+0.0;-0.0}% to hit {target:F1} BPM{folded}.{ramps}";
+        // Warp markers are on the audio, counted in its tempo, so they ride along with their beats.
+        int w = track.Model.Warps.Count;
+        string warps = w == 0 ? ""
+            : w == 1 ? " Its warp marker moved with its beat." : $" Its {w} warp markers moved with their beats.";
+        Status = $"{track.Name}: {(speed - 1) * 100:+0.0;-0.0}% to hit {target:F1} BPM{folded}.{ramps}{warps}";
     }
 
     /// <summary>Suggests and applies a pitch shift so a track sits with the project's key reference.</summary>
@@ -599,18 +603,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (track is null) return;
 
         if (_ramp?.TrackId == track.Id) ClearRampDraft();
-        bool hadRamps = track.Model.Ramps.Count > 0;
+        bool hadRamps = track.Model.Ramps.Count > 0, hadWarps = track.Model.Warps.Count > 0;
         AsOneUndoStep($"reset {track.Name}", () =>
         {
             track.Model.Ramps.Clear();
+            track.Model.Warps.Clear();                // in the same step: one Ctrl+Z puts the lot back
             track.Speed = 1;
             track.Semitones = 0;
             track.EqLow = track.EqMid = track.EqHigh = 1;
             track.Gain = 1;
         });
-        if (hadRamps) Redraw(track);                // TEMPO may already have been 1, and then nothing pushed the ramps away
+        if (hadRamps || hadWarps) Redraw(track);    // TEMPO may already have been 1, and then nothing pushed the ramps or markers away
         MarkDirty();
-        Status = $"{track.Name} back to its original tempo, pitch and EQ{(hadRamps ? ", with its tempo ramps removed" : "")}.";
+        string removed = (hadRamps, hadWarps) switch
+        {
+            (true, true) => ", with its tempo ramps and warp markers removed",
+            (true, false) => ", with its tempo ramps removed",
+            (false, true) => ", with its warp markers removed",
+            _ => "",
+        };
+        Status = $"{track.Name} back to its original tempo, pitch and EQ{removed}.";
     }
 
     // ---------------- project ----------------
@@ -622,6 +634,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!ConfirmDiscard()) return;
         if (_session is null) return;
         EndRampEntry();
+        EndWarpPress();
 
         // Go through OpenAsync so the graph, the voices, the decoded clips and the loop region are
         // all released. Clearing the collections in place leaves the audio in memory and the old
@@ -664,6 +677,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public async Task<bool> OpenProjectFileAsync(string path)
     {
         EndRampEntry();
+        EndWarpPress();
         IsBusy = true;
         try
         {
@@ -849,6 +863,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // than being written later into a track that is no longer in the project.
         foreach (var t in Tracks) t.IsRenaming = false;
         EndRampEntry();                 // and so does a ramp being placed, or its tempo being typed
+        EndWarpPress();                 // and a warp marker held, which could only be stale by now
 
         var keepTrack = SelectedTrack?.Id;
         var keepClip = SelectedClip?.Id;
@@ -1408,6 +1423,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             RampMode = false;
             MarkMode = false;
+            WarpMode = false;
         }
         Status = value
             ? "Loop mode on: drag either end of a section to repeat it. Hold Ctrl for part of a repeat."
@@ -1423,8 +1439,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// While on, a drag across a track marks a stretch of it instead of moving sections, and a click
-    /// puts the playhead there. Never on together with LOOP MODE or RAMP MODE: all three change
-    /// what a press in a lane does.
+    /// puts the playhead there. Never on together with LOOP MODE, RAMP MODE or WARP MODE: all four
+    /// change what a press in a lane does.
     /// </summary>
     [ObservableProperty] private bool _markMode;
 
@@ -1441,6 +1457,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             LoopMode = false;
             RampMode = false;
+            WarpMode = false;
             Status = "Mark mode on: drag across a track to mark a stretch of it. Then Ctrl+C copies it, Ctrl+X cuts it, Delete removes it and Ctrl+D repeats it; a click puts the playhead there for Ctrl+V (Ctrl+M turns it off).";
             return;
         }
@@ -1623,7 +1640,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// While on, a click on a track places a tempo ramp's dots instead of selecting or dragging
-    /// sections. Never on together with LOOP MODE: both change what a press in a lane does.
+    /// sections. Never on together with LOOP MODE, MARK MODE or WARP MODE: all four change what a
+    /// press in a lane does.
     /// </summary>
     [ObservableProperty] private bool _rampMode;
 
@@ -1640,6 +1658,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             LoopMode = false;
             MarkMode = false;
+            WarpMode = false;
             Status = "Ramp mode on: click a track where its tempo should start changing, then where the change should be complete, then type the tempo. Sections stay put while it is on (Ctrl+R turns it off).";
             return;
         }
@@ -1885,6 +1904,140 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SnapLineSeconds = null;
     }
 
+    // ---------------- warp markers (Daniel, 2026-10-18) ----------------
+    //
+    // His words: "you basically match the bpm as closely as possible for starters, then you flag the
+    // beats that start to drift apart, and then you click warp to match them up." What a marker does
+    // to the project lives in Core (WarpMarkers, WarpDrag); this is the glue, one undo step per press.
+
+    /// <summary>
+    /// While on, a press on a track puts a warp marker down there, or grabs the one under it, and a
+    /// drag moves the beat it is on, instead of selecting or dragging sections. Never on together with
+    /// LOOP MODE, RAMP MODE or MARK MODE: all four change what a press in a lane does.
+    /// </summary>
+    [ObservableProperty] private bool _warpMode;
+
+    [RelayCommand]
+    private void ToggleWarpMode()
+    {
+        if (HeldUnderTheMouse()) return;
+        WarpMode = !WarpMode;
+    }
+
+    partial void OnWarpModeChanged(bool value)
+    {
+        if (value)
+        {
+            LoopMode = false;
+            RampMode = false;
+            MarkMode = false;
+            Status = "Warp mode on: click a track on a beat that is still in time to pin it, then drag a beat that has drifted onto where it should be. The audio between two markers is evened out; nothing before the one on the left moves. Ctrl+W turns it off.";
+            return;
+        }
+        if (_warpDrag is not null) EndDrag();
+        _warpPress = null;
+        SnapLineSeconds = null;
+        Status = "Warp mode off: clicking and dragging sections works again.";
+    }
+
+    /// <summary>
+    /// A press in warp mode that holds a marker: the one it was on, or the one it put down — and then
+    /// the message that said so, which a release without moving leaves in the status bar.
+    /// </summary>
+    private sealed record WarpPressState(TrackViewModel Track, int Index, string? Placed);
+
+    private WarpPressState? _warpPress;
+    private WarpDrag? _warpDrag;
+
+    /// <summary>
+    /// A press on a track in warp mode. On a marker (within <see cref="Controls.WarpLayout.GrabPixels"/>)
+    /// it holds that one, to drag. Anywhere else it puts a marker down there and holds that: it changes
+    /// nothing that is heard, and a drag on from there moves the beat it is on. The place and the move
+    /// are one undo step. Returns where the held marker's beat is heard, for the drag to count from,
+    /// or null when nothing is held — the status bar then says why.
+    /// </summary>
+    public double? PressWarp(TrackViewModel t, double seconds)
+    {
+        if (HeldUnderTheMouse()) return null;
+        _warpPress = null;
+
+        int near = WarpMarkers.IndexNear(t.Model, seconds, Controls.WarpLayout.GrabPixels / Math.Max(0.01, PixelsPerSecond));
+        if (near >= 0)
+        {
+            _warpPress = new WarpPressState(t, near, null);
+            return WarpMarkers.TimelineSecondsOf(t.Model, near);
+        }
+
+        // Before the change, as every edit. A refused one leaves a step identical to the project,
+        // which Ctrl+Z steps over (UndoStack.Undo), as a refused tempo ramp does.
+        PushUndo($"{t.Name}: warp marker");
+        var result = WarpMarkers.Add(t.Model, seconds, Session, out int index);
+        Status = result.Message;
+        if (!result.Changed) return null;
+
+        _warpPress = new WarpPressState(t, index, result.Message);
+        Redraw(t);                  // the engine is handed the same map — nothing moved — and the lane draws the marker
+        MarkDirty();
+        return WarpMarkers.TimelineSecondsOf(t.Model, index);
+    }
+
+    /// <summary>
+    /// The held marker starts to move: the press has gone 4 px. One undo step for the whole drag of a
+    /// marker that was already there; a marker this press put down is covered by the step it took.
+    /// </summary>
+    public void BeginWarpDrag()
+    {
+        if (_warpPress is not { } p || _warpDrag is not null) return;
+        if (p.Index < 0 || p.Index >= p.Track.Model.Warps.Count) { _warpPress = null; return; }
+        if (p.Placed is null) PushUndo($"{p.Track.Name}: move warp marker");
+        _warpDrag = new WarpDrag(Session, p.Track.Model, p.Index);
+    }
+
+    /// <summary>Hears the held marker's beat at <paramref name="seconds"/>, snapped unless <paramref name="free"/>, and redraws the lane through the new warp.</summary>
+    public void DragWarpTo(double seconds, bool free)
+    {
+        if (_warpDrag is null || _warpPress is not { } p) return;
+        _warpDrag.DragTo(seconds, SnapFor(free), PositionSeconds);
+        Redraw(p.Track);
+        RecomputeLength();
+        SnapLineSeconds = _warpDrag.SnapLineSeconds;
+        Status = _warpDrag.Describe();
+    }
+
+    /// <summary>
+    /// The press is let go. After a drag it is settled as any drag is (<see cref="EndDrag"/>). Without
+    /// one, a marker the press put down stays where it is, changing nothing heard, and a press on a
+    /// marker already there did nothing at all — not even an undo step.
+    /// </summary>
+    public void ReleaseWarp()
+    {
+        if (_warpPress is not { } p) return;
+        if (_warpDrag is not null) { EndDrag(); return; }
+        _warpPress = null;
+        Status = p.Placed ?? $"{p.Track.Name}: drag a warp marker to move the beat it is on; right-click it to remove it.";
+        EndGesture();
+    }
+
+    /// <summary>Drops a held marker without a word: the project is being replaced or rebuilt.</summary>
+    public void EndWarpPress()
+    {
+        _warpPress = null;
+        _warpDrag = null;
+    }
+
+    /// <summary>The lane menu's "Remove warp marker". Ctrl+Z puts it back.</summary>
+    public void RemoveWarp(TrackViewModel t, int i)
+    {
+        if (HeldUnderTheMouse()) return;
+        if (i < 0 || i >= t.Model.Warps.Count) { Status = "That warp marker is no longer there."; return; }
+        PushUndo($"{t.Name}: remove warp marker");
+        var result = WarpMarkers.Remove(t.Model, i, Session);
+        Redraw(t);
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
+    }
+
     // ---------------- dragging sections ----------------
     //
     // The window turns the pointer into timeline positions and target tracks; everything about
@@ -1900,7 +2053,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// True while a section is being dragged. Removing a section then would leave the drag holding
     /// one that is no longer on the track, and its drop would clear what is under the ghost.
     /// </summary>
-    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null || _markDrag is not null;
+    public bool DragInProgress => _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null || _markDrag is not null || _warpDrag is not null;
     private TrackViewModel? _dragHome;
     private Guid _dragClipId;
 
@@ -2124,13 +2277,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (_rampDragTrack is not null) Redraw(_rampDragTrack);
         }
 
-        bool changed = _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null;
+        bool warped = false;
+        if (_warpDrag is not null)
+        {
+            // A marker dragged back to where it was is unmoved again. One this press put down is
+            // still there, as a click would have left it; one already there is just as it was, and
+            // the undo step taken for its drag is identical to the project, so Ctrl+Z steps over it.
+            var result = _warpDrag.Finish();
+            var placed = _warpPress?.Placed;
+            Status = result.Changed || placed is null ? result.Message : placed;
+            warped = result.Changed || placed is not null;
+            if (_warpPress is { } p) Redraw(p.Track);
+        }
+
+        bool changed = _move is not null || _trim is not null || _loopDrag is not null || _group is not null || _rampDrag is not null || warped;
         _move = null;
         _trim = null;
         _loopDrag = null;
         _group = null;
         _rampDrag = null;
         _rampDragTrack = null;
+        _warpDrag = null;
+        _warpPress = null;
         _groupIds = new();
         _dragHome = null;
         SnapLineSeconds = null;

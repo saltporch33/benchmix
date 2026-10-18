@@ -64,7 +64,8 @@ public partial class App : Application
     /// The compensation for the phase vocoder's latency reaches into the native library through a
     /// P/Invoke that nothing else uses, and a single-file self-contained exe is exactly where a new
     /// native entry point fails to resolve. Proving it in the tests proves it in the dev build; this
-    /// proves it in the thing actually on Daniel's machine.
+    /// proves it in the thing actually on Daniel's machine. Then the same for a track through a tempo
+    /// ramp, and (2026-10-18) for a pitched track through moved warp markers.
     /// </summary>
     public static bool LatencyCheck { get; private set; }
 
@@ -77,8 +78,10 @@ public partial class App : Application
 
     /// <summary>
     /// Sets up the 2026-09-24 editing features before a --uiprobe shot: an empty track, a section
-    /// dragged onto it and looped, loop mode on. Like --demosections, a picture is the only
-    /// evidence that the lanes draw these — none of the drawing is reachable from the tests.
+    /// dragged onto it and looped, loop mode on — and the later ones: tempo ramps, a marked stretch,
+    /// the box for typing a knob's value and (2026-10-18) two warp markers, one moved. Like
+    /// --demosections, a picture is the only evidence that the lanes draw these — none of the drawing
+    /// is reachable from the tests.
     /// </summary>
     public static bool DemoEditing { get; private set; }
 
