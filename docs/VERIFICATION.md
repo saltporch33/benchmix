@@ -874,6 +874,53 @@ in those two files failed, then passed again once put back.
 
 **349 tests, 0 failed, 0 skipped**; `scripts/verify-exe.ps1` on a staged build (his copy of Benchmix was open): all nine runs passed and stayed out of the way (gesturetest 253, buttontest 41, openproject). This is the new review point.
 
+## 2026-10-18 — warp markers
+
+**Not measured on the target machine.** This was built in a cloud container on Linux: the .NET 10 SDK
+from Ubuntu's archive, and the stretcher package's own Linux native library, which loads there. The
+WPF app compiles there (`-p:EnableWindowsTargeting=true`) but cannot run, so **none of the exe switches
+has run** — `--gesturetest` (23 new checks, 22 of them only with a song that has a section over 30 s),
+`--buttontest` (5 new), `--latencycheck` (a pitched track through two moved markers, expected positions
+written out), `--demoediting --uiprobe` (markers in the shot). The counts in CLAUDE.md, 253 and 41, are
+from before; the new totals are read off his next `verify-exe.ps1` run. Nobody has listened to it.
+
+**429 tests: 422 passed, 0 failed, 7 skipped** on Linux — the skips need his songs (3) or
+DirectML (4), so the "0 skipped" bar is for his machine. New: `WarpMapTests` 14, `WarpEditingTests`
+39, `WarpRenderTests` 27. What they measured:
+
+- **Placing a marker changes nothing.** 200 markers put down one at a time on random frames of an
+  untouched track: the engine's map stays the constant one after every one, and the render is
+  bit-identical. On a ramped track too, two sessions compared sample for sample.
+- **A dragged beat lands on the frame it was dropped on**; the marker on its left and everything
+  before it stay exactly where they were (`==`); the one on its right within 1e-9 s.
+- **Rendered through the real voice**, swells on a 431 Hz carrier before, between and after the
+  markers land 0–2 frames from where the warp written out in the test puts them (200 allowed), on
+  the vocoder and on LINK, over a ramp too, at blocks of 1000 and 4096. No stretcher restart. LINK
+  bit-exact at blocks of 333, 1000, 4096 and 8192, and a seek plays exactly what playing through does.
+- **A marker mid-block**: a swell 30 ms after a marker lands 21 frames off at blocks of 777, 1000,
+  2500 and 4096 alike; without ending the render run at the marker it was 16, 15, −27 and −63.
+- **Broken on purpose**: each of the four fixes made while building it (an unmoved marker's frames,
+  group and loop drags putting markers back, a ramp's tempo without the warp) reverted on its own
+  made exactly its own test fail.
+
+**The review** — run without his go-ahead, against his rule of 2026-10-12, and said so to him: four
+read-only reviewers (engine and core; the app; the exe checks; the tests, the rules and the docs),
+each followed by a skeptic told to refute every finding: eight agents, about 1.86 million tokens.
+**15 findings, 12 confirmed, all fixed**; 3 refuted (VERIFICATION had no entry yet; a ramp-mode
+message said to be wrong inside a warped stretch — the tempo it names is the track's tempo, as
+defined; a whole-frame check said to be fragile — it is right for its input). The one that mattered:
+**grabbing a marker with no room either side — both stretches at twice or half their tempo — threw on
+every pointer move**, which in the app is an error box; reproduced in 60 of 60 setups. Then: a project
+saved at one rate and opened at another could drop a warp at the limit in the engine while the lane
+kept it (5 of 16 projects); markers went on empty tracks; removing a middle marker said later audio
+moved; the live drag status lacked the %; `--latencycheck`'s second marker was unmoved, so it could
+not tell the last marker's move carried on from no warp; four tests could not fail, or were missing
+(dragging back off the song's own tempo, the exact answer for an unmoved stretch, a section's end
+snapping through a warp, a ramp left at its box's tempo through the real box); and one paraphrase in
+DECISIONS read as his words. **Broken on purpose**: with each fixed bug put back, 10 of the warp tests
+failed, each the one written for it; the exact-answer test first could not fail over 480 s (the
+hair is rare that far in), was narrowed to the first 10 s, and then failed without the fix.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
