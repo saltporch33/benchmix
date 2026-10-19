@@ -858,4 +858,152 @@ public class WarpEditingTests : IDisposable
             Assert.True(Math.Abs(Beat(t, i) - beats[i]) <= 1e-9, "a ramp that changes no tempo moved a warp marker's beat");
         Assert.True(TempoRamps.BpmAt(t, (start + end) / 2) == 100 * V, "inside the new ramp the tempo is not the one it was filled in with");
     }
+
+    // ---------------------------------------------------------------- from the review, 2026-10-18
+
+    [Theory]
+    [InlineData(true)]      // both stretches either side at twice their tempo
+    [InlineData(false)]     // both at half
+    public async Task AMarkerBoxedInAtTheLimitOnBothSidesCanStillBeGrabbed(bool faster)
+    {
+        foreach (double origin in new[] { 0.0, 2, 3.7, 5, 10 })
+            foreach (double speed in new[] { 1.0, 0.95, 1.07 })
+            {
+                var (s, t) = await DeckAsync(origin, speed, 10, 20, 30, 40);
+                foreach (double p in new[] { 2.3, 7.3, 19.1 }) Pin(s, t, p);
+                // Each dragged as far as it goes, the same way, until the middle one has no room either side.
+                for (int round = 0; round < 3; round++)
+                    foreach (int i in new[] { 1, 2 })
+                        Drag(s, t, i, faster ? Beat(t, i) - 60 : Beat(t, i) + 600);
+                double limit = faster ? TempoMap.HighestWarp : TempoMap.LowestWarp;
+                Assert.True(Math.Abs(WarpMarkers.SpreadBefore(t, 1) - limit) < 1e-6 && Math.Abs(WarpMarkers.SpreadBefore(t, 2) - limit) < 1e-6,
+                    $"setup at {origin}s, {speed}: the middle marker should be at the limit on both sides");
+
+                var held = t.Warps[1];
+                var d = new WarpDrag(s, t, 1);
+                var thrown = Record.Exception(() => d.DragTo(Beat(t, 1) + (faster ? -0.5 : 0.5), SnapSettings.Off, null));
+                Assert.True(thrown is null, $"at {origin}s, {speed}: grabbing a marker with no room either side threw ({thrown?.Message}) — the app would show an error on every pointer move");
+                Assert.True(t.Warps[1] == held && d.Clamped && !d.Finish().Changed,
+                    $"at {origin}s, {speed}: a marker with no room either side moved, or did not say it was as far as it goes");
+            }
+    }
+
+    [Fact]
+    public async Task AMarkerPutBetweenTwoAtTheLimitCanStillBeGrabbed()
+    {
+        var (s, t) = await DeckAsync(O, V, 10, 20, 30, 40);
+        Pin(s, t, 10);
+        Pin(s, t, 20);
+        Drag(s, t, 1, Beat(t, 1) - 30);                                  // as far as it goes: twice the tempo from 10 s to 20 s
+        Assert.True(Math.Abs(WarpMarkers.SpreadBefore(t, 1) - TempoMap.HighestWarp) < 1e-6, "setup: the stretch should be at twice its tempo");
+        var r = WarpMarkers.Add(t, TimelineEditor.TimelineSecondsAt(t, 12.5), s, out int m);
+        Assert.True(r.Changed, $"setup: {r.Message}");
+        var held = t.Warps[m];
+        var d = new WarpDrag(s, t, m);
+        var thrown = Record.Exception(() => d.DragTo(Beat(t, m) + 0.3, SnapSettings.Off, null));
+        Assert.True(thrown is null && t.Warps[m] == held,
+            $"refining a stretch already at the limit with a marker in between threw or moved it ({thrown?.Message}) — the app would show an error on every pointer move");
+    }
+
+    [Fact]
+    public async Task AMarkerCannotGoOnATrackWithNothingOnIt()
+    {
+        var (s, t) = await DeckAsync(O, V, 10);
+        var empty = s.AddEmptyTrack();
+        var r = WarpMarkers.Add(empty, 5, s, out int i);
+        Assert.True(!r.Changed && i < 0 && empty.Warps.Count == 0,
+            "a warp marker went on an empty track — the next song put there would be warped by a marker nobody set on it, or lose it without a word");
+        foreach (var c in t.Clips.ToList()) TimelineEditor.Delete(t, c);
+        Assert.True(!WarpMarkers.Add(t, O + 5, s, out _).Changed && t.Warps.Count == 0, "a warp marker went on a track whose sections were all deleted");
+    }
+
+    [Fact]
+    public async Task RemovingAMiddleMarkerSaysNothingMovedAfterTheNextOne()
+    {
+        var (s, t) = await StandardAsync();                             // markers on 12, 24 and 36 s
+        Drag(s, t, 2, Beat(t, 2) + 0.05);
+        Drag(s, t, 1, Beat(t, 1) + 0.1);
+        var after = AtTrackSeconds(t, 40);                              // after the marker on 36 s
+        double at = When(t, after, s);
+        var r = WarpMarkers.Remove(t, 1, s);
+        Assert.True(r.Changed && !r.Message.Contains("Anything later"),
+            $"removing a middle marker said later audio moved, when everything after the next marker stays where it was: {r.Message}");
+        Assert.True(Math.Abs(When(t, after, s) - at) <= 1e-9, "removing a middle marker moved audio after the next marker");
+    }
+
+    [Fact]
+    public async Task DraggingAMarkerBackToWhereItStartedOffTheSongsOwnTempoLeavesItExactlyUnmoved()
+    {
+        // At 0.95 the tempo of the frame it started on, worked out afresh, is a hair off the marker's
+        // own: only coming back to the very frame keeps it exactly unmoved.
+        var (s, t) = await StandardAsync();
+        var original = t.Warps[1];
+        var d = new WarpDrag(s, t, 1);
+        d.DragTo(d.StartSeconds + 0.3, SnapSettings.Off, null);
+        Assert.True(t.Warps[1] != original, "setup: the drag did not move the marker");
+        d.DragTo(d.StartSeconds, SnapSettings.Off, null);
+        Assert.True(t.Warps[1] == original && !d.Finish().Changed,
+            "a marker dragged away and back is not exactly unmoved at 0.95 — the track would stay warped by a hair and go through the stretcher");
+        s.ApplyAll();
+        Assert.True(TimelineEditor.SecondsMapOf(t) is null && s.EngineTempoOf(t).IsConstant,
+            "a track whose only moved marker was put back still plays through a warp");
+    }
+
+    [Fact]
+    public async Task ASectionsEndSnapsToAnotherTracksEdgeThroughTheWarp()
+    {
+        var (s, t) = await DeckAsync(O, V, 13, 23, 40);
+        foreach (double p in new[] { 12.0, 24, 36 }) Pin(s, t, p);
+        Drag(s, t, 1, Beat(t, 1) + 0.6);                                // the stretch from 12 s to 24 s now plays slower
+        var markers = t.Warps.Select(w => (w.TrackSeconds, w.TempoSeconds)).ToArray();
+        double TrackAt(double x)                                        // the inverse of Heard, by bisection
+        {
+            double lo = 0, hi = 60;
+            for (int k = 0; k < 200; k++) { double mid = (lo + hi) / 2; if (Heard(mid, markers) < x) lo = mid; else hi = mid; }
+            return lo;
+        }
+
+        var section = AtTrackSeconds(t, 13);                            // 13 s to 23 s of the song, inside the slowed stretch
+        double proposed = When(t, section, s) + 0.5;
+        double endThere = Heard(TrackAt(proposed) + 10, markers);
+        double edge = endThere + 0.08;                                  // within 10 px at 50 px/s; the start is clear of every edge
+        await s.AddTrackAsync(_wav, edge);
+
+        var move = new SectionMove(s, t, section);
+        move.DragTo(t, proposed, new SnapSettings(true, 50));
+        double end = Heard(TimelineEditor.SecondsOf(End(section, s), s), markers);
+        Assert.True(move.SnapLineSeconds == edge && move.SnappedTo == "a section" && Math.Abs(end - edge) <= 2 * Frame,
+            $"on a warped track a section's end snapped to {move.SnapLineSeconds}, and ends at {end:0.000000}s, not on the edge at {edge:0.000000}s — its end was worked out at one speed, not through the warp");
+    }
+
+    [Fact]
+    public async Task AWarpAtTheLimitSavedAtOneRateAndOpenedAtAnotherPlaysWhereItIsDrawn()
+    {
+        int disagree = 0, cases = 0;
+        foreach (double first in new[] { 4.7000123, 3.3333, 5.123457, 6.66661 })
+            foreach (double gap in new[] { 5.3, 7.77 })
+                foreach (bool late in new[] { true, false })
+                {
+                    var s = ProjectSession.CreateOffline(44100);
+                    var t = await s.AddTrackAsync(_wav, O);
+                    t.Speed = 1.0;
+                    Assert.True(WarpMarkers.Add(t, TimelineEditor.TimelineSecondsAt(t, first), s, out _).Changed, "setup");
+                    Assert.True(WarpMarkers.Add(t, TimelineEditor.TimelineSecondsAt(t, first + gap), s, out _).Changed, "setup");
+                    s.ApplyAll();
+                    Drag(s, t, 1, late ? Beat(t, 1) + 300 : Beat(t, 1) - 60);  // as far as it goes: half or twice the tempo
+                    string path = Path.Combine(_dir, $"rate-{cases++}.benchmix");
+                    ProjectStore.Save(s.Project, path);
+
+                    var again = ProjectSession.CreateOffline(48000);
+                    await again.OpenAsync(ProjectStore.Load(path).Project);
+                    var u = again.Project.Tracks[0];
+                    bool drawn = TimelineEditor.SecondsMapOf(u)?.IsWarped == true;
+                    bool played = again.EngineTempoOf(u).IsWarped;
+                    double lane = TimelineEditor.TimelineSecondsAt(u, 20) * 48000;
+                    double engine = again.SecondsToFrames(u.TimelineOffsetSeconds) + again.EngineTempoOf(u).RelAt(20 * 48000.0);
+                    if (drawn != played || Math.Abs(lane - engine) > 2) disagree++;
+                }
+        Assert.True(disagree == 0,
+            $"{disagree} of {cases} projects with a marker at the limit, saved at 44.1 kHz and opened at 48 kHz, play somewhere other than where the lane draws them — the engine dropped the warp the lane kept");
+    }
 }

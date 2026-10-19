@@ -460,12 +460,13 @@ public partial class MainWindow : Window
 
             // --- warp markers (2026-10-18) ---
             // The same bursts, pitched, at TEMPO 1.04 through two moved markers: the audio at 5 s heard
-            // when the tempo reaches 5.3 s, and at 12 s when it reaches 12 s. Each burst must come out
+            // when the tempo reaches 5.3 s, and at 12 s when it reaches 12.4 s. Each burst must come out
             // where the warp puts it, worked out here: a burst at audio a is heard when the tempo has
-            // reached a ÷ (5 / 5.3) before the first marker, 5.3 + (a − 5) ÷ (7 / 6.7) between them,
-            // and 12 + (a − 12) after the last; the tempo reaches T at T ÷ 1.04. No burst is near a
-            // marker, where the speed jumps.
-            const double WarpTempo = 1.04, A1 = 5.0, T1 = 5.3, A2 = 12.0, T2 = 12.0;
+            // reached a ÷ (5 / 5.3) before the first marker, 5.3 + (a − 5) ÷ (7 / 7.1) between them,
+            // and 12.4 + (a − 12) after the last — so the bursts after it show the last marker's move
+            // carried on, which an unmoved one could not (review, 2026-10-18); the tempo reaches T at
+            // T ÷ 1.04. No burst is near a marker, where the speed jumps.
+            const double WarpTempo = 1.04, A1 = 5.0, T1 = 5.3, A2 = 12.0, T2 = 12.4;
             var warpMap = Benchmix.Engine.Audio.TempoMap.Warped(Benchmix.Engine.Audio.TempoMap.Constant(WarpTempo), new[]
             {
                 new Benchmix.Engine.Audio.TempoMap.Pin(A1 * Rate, T1 * Rate),
@@ -3112,6 +3113,28 @@ public partial class MainWindow : Window
         double tbLimited = Marker(1).TempoSeconds;
         Check($"a beat dragged further than the audio can be spread stops where it plays twice as fast, and says so (\"{limitStatus}\")",
               limitStatus.Contains("as far as it goes") && Math.Abs(tbLimited - tbLimit) <= 1e-6 && Math.Abs(Heard(1) - (o + tbLimit / v0)) <= frame);
+
+        // --- a tempo ramp left at the tempo its box was filled in with, inside the stretch the warp now
+        // spreads, through the real box: it starts from the track's tempo, not the warp, so it ends
+        // where it starts and moves nothing (review, 2026-10-18) ---
+        if (Song().Model.Bpm > 0)
+        {
+            var model = Song().Model;
+            double r0 = Heard(0) + (Heard(1) - Heard(0)) * 0.25, r1 = Heard(0) + (Heard(1) - Heard(0)) * 0.75;
+            var sectionsBefore = Song().Clips.ToDictionary(c => c.Id, c => c.TimelineStartSeconds);
+            double beat0 = Heard(0), beat1 = Heard(1);
+            _vm.RampMode = true;
+            bool rampPlaced = _vm.PlaceRampPoint(Song(), r0, free: true) && _vm.PlaceRampPoint(Song(), r1, free: true);
+            bool committed = rampPlaced && _vm.CommitRampEntry(Song().Id, Song().RampBpmDraft);
+            bool flat = committed && model.Ramps is [{ } ramp] && ramp.ToSpeed == Benchmix.Core.TimelineEditor.TempoSpeedAt(model, ramp.StartSeconds);
+            bool stayed = Song().Clips.All(c => sectionsBefore.TryGetValue(c.Id, out double was) && Math.Abs(c.TimelineStartSeconds - was) <= 1e-9)
+                          && Math.Abs(Heard(0) - beat0) <= 1e-9 && Math.Abs(Heard(1) - beat1) <= 1e-9;
+            Undo(() => Song().Model.Ramps.Count == 0);
+            _vm.WarpMode = true;
+            Check("a tempo ramp left at the tempo its box was filled in with, inside a stretch the warp spreads, ends at the tempo it starts at and moves nothing",
+                  flat && stayed && Song().Model.Ramps.Count == 0 && Song().Model.Warps.Count == 2 && _vm.WarpMode);
+        }
+        else notes.Add("the song's tempo is unknown, so a tempo ramp on a warped stretch is untested in the window");
 
         // --- losing the mouse during a press lets it go, and changes nothing ---
         var pressA = At(Lane(), Heard(0));

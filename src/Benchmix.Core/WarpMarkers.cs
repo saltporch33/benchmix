@@ -107,6 +107,10 @@ public static class WarpMarkers
     {
         index = -1;
         if (!double.IsFinite(timelineSeconds)) return EditResult.No("That is not a place on the track.");
+        // A marker pins a beat of the track's audio. On a track with nothing on it there is no beat,
+        // and the next song put there — pasted, dropped or dragged — would be warped by a marker
+        // nobody set on it, or silently lose it (review, 2026-10-18).
+        if (t.Clips.Count == 0) return EditResult.No($"A warp marker goes on a beat of a song; {t.Name} has nothing on it yet.");
         double at = TimelineEditor.SecondsOf(TimelineEditor.TrackFrameAt(t, timelineSeconds, s), s);
         if (at < MinimumSeconds) return EditResult.No("A warp marker goes on the track's audio, after where the track starts.");
         if (t.Warps.Any(w => Math.Abs(w.TrackSeconds - at) < MinimumSeconds))
@@ -133,10 +137,16 @@ public static class WarpMarkers
     public static EditResult Remove(TrackModel t, int index, ProjectSession s)
     {
         if (index < 0 || index >= t.Warps.Count) return EditResult.No("That warp marker is no longer there.");
-        var later = TempoRamps.FirstSectionFrom(t, TimelineSecondsOf(t, index), s);
+        // Only the last marker moves what comes after it; without one after, everything later goes
+        // back. With one after, the audio from there on stays exactly where it was.
+        bool last = index == t.Warps.Count - 1;
+        var later = last ? TempoRamps.FirstSectionFrom(t, TimelineSecondsOf(t, index), s) : null;
         double before = later is null ? 0 : When(t, later, s);
         t.Warps.RemoveAt(index);
-        return new EditResult(true, $"{t.Name}: warp marker removed; the audio around it is spread evenly again. Ctrl+Z puts it back." + LaterClause(t, later, before, s));
+        string around = last
+            ? "the audio before it is spread evenly again, and after it plays at its tempo."
+            : "the audio between the markers either side of it is spread evenly again.";
+        return new EditResult(true, $"{t.Name}: warp marker removed; {around} Ctrl+Z puts it back." + LaterClause(t, later, before, s));
     }
 
     /// <summary>
@@ -229,7 +239,10 @@ public sealed class WarpDrag
             lo = Math.Max(lo, n.TempoSeconds - (n.TrackSeconds - m.TrackSeconds) / TempoMap.LowestWarp);
             hi = Math.Min(hi, n.TempoSeconds - (n.TrackSeconds - m.TrackSeconds) / TempoMap.HighestWarp);
         }
-        (_lo, _hi) = (lo + Margin, hi - Margin);
+        // A marker boxed in at a limit on both sides has no room at all, and the margin would leave
+        // the window inside out (review, 2026-10-18: Math.Clamp threw on every pointer move). Where
+        // it is now is good by construction, so it stays there.
+        (_lo, _hi) = lo + Margin <= hi - Margin ? (lo + Margin, hi - Margin) : (m.TempoSeconds, m.TempoSeconds);
         _targets = WarpMarkers.SnapTargets(track, session);
     }
 
@@ -309,10 +322,12 @@ public sealed class WarpDrag
     {
         double d = NowSeconds - StartSeconds;
         string where = Math.Abs(d) < 0.0005 ? "where it was" : $"{Math.Abs(d):0.000}s {(d > 0 ? "later" : "sooner")}";
+        string spreads = $"; {WarpMarkers.Describe(WarpMarkers.SpreadBefore(_track, _index))} {(_index == 0 ? "from the start of the track" : "from the marker before")}"
+                       + (_index + 1 < _track.Warps.Count ? $", {WarpMarkers.Describe(WarpMarkers.SpreadBefore(_track, _index + 1))} to the next" : "");
         string tail = BeyondEngine ? " — as far as it goes: the track would play faster or slower there than Benchmix can"
                     : Clamped ? " — as far as it goes: the audio either side would play more than twice as fast or half as fast"
                     : SnappedTo is { } on ? " — on " + on : "";
-        return $"{_track.Name}: beat at {StartSeconds:0.000}s → {NowSeconds:0.000}s, {where}{tail}";
+        return $"{_track.Name}: beat at {StartSeconds:0.000}s → {NowSeconds:0.000}s, {where}{spreads}{tail}";
     }
 
     public EditResult Finish()

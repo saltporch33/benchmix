@@ -371,14 +371,16 @@ public sealed class ProjectSession : IDisposable
             : TempoMap.Lenient(v0, model.Ramps.Select(r => new TempoMap.Ramp(
                 SecondsToFrames(r.StartSeconds) - origin, SecondsToFrames(r.EndSeconds) - origin, r.ToSpeed)));
         if (model.Warps.Count == 0) return tempo;
-        // Warp markers, in frames: each one's audio on its whole frame, its tempo exactly as far in
-        // frames as it is in seconds. An unmoved marker's tempo is its very frame — seconds times
-        // the rate is not always a whole number in floating point, and a hair off would count as
-        // moved and put an untouched track through the stretcher. With none moved this is the
-        // tempo map itself.
+        // Warp markers, in frames: both coordinates exactly as far in frames as they are in seconds,
+        // not rounded to a frame, so this is the editor's map scaled and both keep or drop the same
+        // markers — a project saved at one rate and opened at another would otherwise round a marker
+        // at the spread limit just past it here and play the track unwarped (review, 2026-10-18).
+        // An unmoved marker's tempo is that very number: seconds times the rate is a hair off a
+        // whole number for many frames, and a hair would count as moved and put an untouched track
+        // through the stretcher. With none moved this is the tempo map itself.
         return TempoMap.LenientWarped(tempo, model.Warps.Select(w =>
         {
-            long audio = SecondsToFrames(w.TrackSeconds);
+            double audio = w.TrackSeconds * SampleRate;
             return new TempoMap.Pin(audio, w.TrackSeconds == w.TempoSeconds ? audio : w.TempoSeconds * SampleRate);
         }));
     }

@@ -220,15 +220,19 @@ public class WarpMapTests
     public void AMarkerPutDownWhereNothingHasMovedIsUnmoved_AndOneOnAMovedStretchMovesNothing()
     {
         var rng = new Random(5);
-        var unmoved = new[] { new TempoMap.Pin(14_400_000, 14_400_000), new TempoMap.Pin(19_200_000, 19_200_000) };
-        // Moved after 360 s only: before the marker at 300 s, nothing has moved.
-        var moved = new[] { new TempoMap.Pin(300 * 48_000, 300 * 48_000), new TempoMap.Pin(360 * 48_000, 360 * 48_000 + 1700) };
+        // In seconds on whole frames, as the editor puts markers down: there a0 + (a − a0) is often a
+        // hair off a, so only the exact answer for an untouched stretch keeps a new marker unmoved
+        // (review, 2026-10-18: in whole frames this could not fail).
+        var unmoved = new[] { new TempoMap.Pin(4801 / 48000.0, 4801 / 48000.0), new TempoMap.Pin(9601 / 48000.0, 9601 / 48000.0) };
+        // Moved after 6 s only: up to the unmoved marker at 0.2 s, nothing has moved.
+        var moved = new[] { unmoved[0], unmoved[1], new TempoMap.Pin(6.0, 6 + 1700 / 48000.0) };
+        // Within the first ten seconds, where a hair is common: a few percent of frames there.
         for (int k = 0; k < 4000; k++)
         {
-            double a = Math.Round(rng.NextDouble() * 4e7);
+            double a = Math.Round(rng.NextDouble() * 10 * 48_000) / 48_000;
             Assert.True(TempoMap.TempoOf(ReadOnlySpan<TempoMap.Pin>.Empty, a) == a && TempoMap.TempoOf(unmoved, a) == a,
                 $"a marker put down at {a} on a track nothing has moved is not exactly unmoved — placing it would put the track through the stretcher");
-            if (a < 300 * 48_000)
+            if (a < unmoved[1].Audio)
                 Assert.True(TempoMap.TempoOf(moved, a) == a, $"a marker put down at {a}, before anything moved, is not exactly unmoved");
         }
 

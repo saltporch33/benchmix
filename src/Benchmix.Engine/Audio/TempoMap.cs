@@ -46,6 +46,14 @@ public sealed class TempoMap
     /// </summary>
     public const double LowestWarp = 0.5, HighestWarp = 2.0;
 
+    // The builders that play and draw (LenientWarped) keep a spread this much past the limits, and
+    // an edit (TryWarped) stops this much short of the engine's speeds. The editor builds in seconds
+    // and the engine in frames; a marker at a limit is then never kept by one and dropped by the
+    // other for a rounding of the units — that dropped the whole warp in the engine while the lane
+    // still drew it (review, 2026-10-18). The engine's own range is never stretched: the voice
+    // refuses a map outside it.
+    private const double Slack = 1e-9;
+
     // Segment i covers [_lo[i], _lo[i + 1]); the first starts at minus infinity and the last runs to
     // plus infinity. Within it the position is RefF + V·dx + ½·B·dx², with dx = x − RefX, and _loF[i]
     // is the position at _lo[i]. _pointX/_pointV are the breakpoints, for MaxSpeedOver.
@@ -241,7 +249,7 @@ public sealed class TempoMap
         {
             if (!(p.Audio > a) || !(p.Tempo > t)) continue;
             double slope = (p.Audio - a) / (p.Tempo - t);
-            if (!(slope >= LowestWarp && slope <= HighestWarp)) continue;
+            if (!(slope >= LowestWarp * (1 - Slack) && slope <= HighestWarp * (1 + Slack))) continue;
             kept.Add(p);
             (a, t) = (p.Audio, p.Tempo);
         }
@@ -271,7 +279,7 @@ public sealed class TempoMap
         if (!moved) return true;
         var all = pins.ToArray();
         var warped = new TempoMap(tempo, all.Select(p => p.Audio).ToArray(), all.Select(p => p.Tempo).ToArray());
-        if (warped.MinSpeed < LowestSpeed || warped.MaxSpeed > HighestSpeed) return false;
+        if (warped.MinSpeed < LowestSpeed * (1 + Slack) || warped.MaxSpeed > HighestSpeed * (1 - Slack)) return false;
         map = warped;
         return true;
     }
