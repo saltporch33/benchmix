@@ -234,9 +234,11 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
   the Desktop shortcut with one named for it — *"Just keep one shortcut to benchmix on my desktop.
   have it point to the latest release, and have it named as usual with release number etc. old
   releases should just stay in a project folder once you make a new release."* (2026-10-27). Never
-  delete an older exe. Double-clicking a `.benchmix` opens the build folder's exe, which was still
-  the 12 Oct one on 2026-10-27 and refuses projects saved by anything newer. Read the shortcut's
-  target and its version (`0.1.0+<commit>`) before saying what his copy has.
+  delete an older exe. **Double-clicking a `.benchmix` opens the newest release too**: at each
+  release, point `HKCU\Software\Classes\benchmix_auto_file` and `...\Applications\Benchmix.exe`
+  (`shell\open\command` and `DefaultIcon`) at the new exe — his yes, 2026-10-27: *"change it so
+  clicking a .benchmix file always opens using the latest release."* Read the shortcut's target
+  and its version (`0.1.0+<commit>`) before saying what his copy has.
 
 ## Working with Daniel
 
