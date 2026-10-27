@@ -702,6 +702,7 @@ reading taken, and it is a default he can change.
 | **With nothing audible, the Render button refuses** and says that every track with sound on it is muted or silenced by a solo. | A file of nothing but two seconds of silence helps nobody, and the reason is on screen. |
 | **The status bar names what was left out, and why**: "Left out: Topper (muted)", or "(not soloed)". | A file shorter than the project should say what it dropped, or a lit M that was forgotten looks like a bug in the render. |
 | **Not changed: the file still starts at 0:00**, even when the first audible section is later, and still ends with the 2 s tail, so fades finish. | The first second of the file is still the first second of the mix, so a render lines up with the project. |
+| **The Render box offers 32-bit float first**, with 24-bit and 16-bit after it (same evening). | His words, after being told 24-bit was the sensible choice: *"keep all options but make 32 default."* |
 
 
 ## 2026-10-27 — snapping to the playhead

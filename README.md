@@ -28,7 +28,7 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 - **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
   the keys you already use act on exactly that part, wherever its ends fall.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
-- **Render** to 16/24-bit or 32-bit float WAV, with a safety limiter. The file is what you hear:
+- **Render** to 32-bit float WAV (the default), or 24/16-bit, with a safety limiter. The file is what you hear:
   muted tracks are left out, a solo leaves out every other track, and it ends where the last track
   you can hear ends.
 

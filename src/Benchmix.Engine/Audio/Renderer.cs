@@ -6,9 +6,12 @@ public enum RenderFormat
 {
     /// <summary>16-bit PCM with TPDF dither. Smallest, and what most people want to play.</summary>
     Pcm16,
-    /// <summary>24-bit PCM. The sensible archival default — no audible quantisation, half the size of float.</summary>
+    /// <summary>24-bit PCM. No audible quantisation, half the size of float; this type's own default.</summary>
     Pcm24,
-    /// <summary>32-bit float. Lossless against the mix bus, including anything above 0 dBFS.</summary>
+    /// <summary>
+    /// 32-bit float. Lossless against the mix bus, including anything above 0 dBFS. What the app's
+    /// Render box offers first (Daniel, 2026-10-27: "keep all options but make 32 default").
+    /// </summary>
     Float32,
 }
 

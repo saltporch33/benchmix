@@ -800,16 +800,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var dlg = new SaveFileDialog
         {
             Title = "Render mashup",
-            Filter = "WAV, 24-bit (*.wav)|*.wav|WAV, 16-bit (*.wav)|*.wav|WAV, 32-bit float (*.wav)|*.wav",
+            // 32-bit float first, so it is what the box offers (Daniel, 2026-10-27: "keep all
+            // options but make 32 default").
+            Filter = "WAV, 32-bit float (*.wav)|*.wav|WAV, 24-bit (*.wav)|*.wav|WAV, 16-bit (*.wav)|*.wav",
             FileName = (Session.Project.Name is { Length: > 0 } n ? n : "Mashup") + ".wav",
         };
         if (dlg.ShowDialog() != true) return;
 
         var format = dlg.FilterIndex switch
         {
-            2 => RenderFormat.Pcm16,
-            3 => RenderFormat.Float32,
-            _ => RenderFormat.Pcm24,
+            2 => RenderFormat.Pcm24,
+            3 => RenderFormat.Pcm16,
+            _ => RenderFormat.Float32,
         };
         await RenderToAsync(dlg.FileName, format);
     }
