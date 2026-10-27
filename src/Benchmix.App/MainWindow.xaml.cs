@@ -3470,6 +3470,7 @@ public partial class MainWindow : Window
         await CheckRenameThroughMenuAsync(Check, Labels);
         await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
         await CheckWarpButtonsAsync(Check, Click, Buttons, Labels);
+        await CheckSoloButtonsAsync(Check);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -3771,6 +3772,84 @@ public partial class MainWindow : Window
         await Undo();
         check("four more Ctrl+Z take back the ramp, the match, the second marker with its move, and the first, one each",
               rampUndone && matchUndone && secondUndone && Topper().Model.Warps.Count == 0);
+    }
+
+    /// <summary>
+    /// The S buttons, pressed as buttons (Daniel, 2026-10-27): a click solos that track alone, a
+    /// click on another moves the solo rather than adding one, Ctrl+click adds, a click on the only
+    /// soloed track turns it off, and one Ctrl+Z takes back a click however many tracks it changed.
+    /// What is checked is the engine's own mute, not the lit button.
+    /// </summary>
+    private async Task CheckSoloButtonsAsync(Action<string, bool> check)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        List<System.Windows.Controls.Primitives.ToggleButton> Solos()
+            => Descendants<System.Windows.Controls.Primitives.ToggleButton>(this)
+                   .Where(b => b.IsVisible && b.Content as string == "S").ToList();
+
+        // A mouse click on a ToggleButton is its toggle and then its Click event; the automation
+        // peer only does the first, so the second is raised here as the button would raise it.
+        async Task Press(int row, bool ctrl)
+        {
+            var button = Solos()[row];
+            _scriptedModifiers = ctrl ? ModifierKeys.Control : ModifierKeys.None;
+            var peer = new System.Windows.Automation.Peers.ToggleButtonAutomationPeer(button);
+            ((System.Windows.Automation.Provider.IToggleProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Toggle)).Toggle();
+            button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent, button));
+            _scriptedModifiers = null;
+            await Settle();
+        }
+
+        // What plays, as the engine has it, and what the two buttons show: "+" heard, "-" silent.
+        string State()
+        {
+            var lit = Solos();
+            return string.Concat(_vm.Tracks.Select((t, i) =>
+                (_vm.Session.VoiceFor(t.Model) is { Muted: false } ? "+" : "-")
+                + (i < lit.Count && lit[i].IsChecked == true ? "S" : "_")));
+        }
+
+        await Settle();
+        if (_vm.Tracks.Count != 2 || Solos().Count != 2 || _vm.Tracks.Any(t => t.Muted || t.Soloed))
+        {
+            check($"two unmuted, unsoloed tracks to solo (found {_vm.Tracks.Count}, {Solos().Count} S buttons)", false);
+            return;
+        }
+
+        await Press(0, ctrl: false);
+        check($"a click on the bed's S plays the bed alone ({State()}, want +S-_)", State() == "+S-_");
+        check("the status bar says how to hear another with it", _vm.Status.Contains("Ctrl+click"));
+
+        await Press(1, ctrl: false);
+        check($"a click on the topper's S moves the solo to it, not adding it ({State()}, want -_+S) — "
+            + "two soloed tracks would play when he asked for one", State() == "-_+S");
+
+        await Press(0, ctrl: true);
+        check($"Ctrl+click on the bed's S adds it, so both play ({State()}, want +S+S)", State() == "+S+S");
+
+        await Press(1, ctrl: false);
+        check($"a click on one of two soloed tracks leaves it alone soloed ({State()}, want -_+S)", State() == "-_+S");
+
+        await Press(1, ctrl: false);
+        check($"a click on the only soloed track turns solo off ({State()}, want +_+_)", State() == "+_+_");
+
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        check($"Ctrl+Z puts that solo back ({State()}, want -_+S)", State() == "-_+S");
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        check($"one Ctrl+Z takes back a click that changed both tracks ({State()}, want +S+S)", State() == "+S+S");
+
+        _vm.RedoCommand.Execute(null);
+        _vm.RedoCommand.Execute(null);
+        await Settle();
+        check($"Ctrl+Y twice ends with nothing soloed ({State()}, want +_+_)", State() == "+_+_");
     }
 
     private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,
@@ -4454,6 +4533,16 @@ public partial class MainWindow : Window
     private void OnRenameTrackMenu(object sender, RoutedEventArgs e)
     {
         if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _vm.BeginRename(t);
+    }
+
+    /// <summary>
+    /// The S button (Daniel, 2026-10-27): a click solos that track alone; Ctrl+click adds it to the
+    /// ones already soloed. The button's own toggle is only a picture — the binding is one-way, and
+    /// the rows are refreshed from the project afterwards.
+    /// </summary>
+    private void OnSoloClick(object sender, RoutedEventArgs e)
+    {
+        if (TrackOf(sender) is { } t) _vm.Solo(t, alongside: (Modifiers & ModifierKeys.Control) != 0);
     }
 
     private void OnRenameKeyDown(object sender, KeyEventArgs e)

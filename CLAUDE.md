@@ -142,8 +142,8 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler and over the waveforms, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo) — 253 checks before warp markers (the new total is read off the next run) |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 41 checks before warp markers (the new total is read off the next run) |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler and over the waveforms, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo) — 276 checks (2026-10-27) |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 55 checks (2026-10-27) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, and warp markers |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
@@ -209,10 +209,13 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - A section dragged onto another track at the same moment dips in level at both ends (each track
   declicks its own cut). That is read off the envelope code, not measured.
 - Stem separation quality is proven only by a 39 dB control test, not by ear.
-- **Warp markers have never been heard or run in the app.** `dotnet test` has run only on Linux
-  (the stretcher's native library loads there; the tests that need his songs or DirectML skip);
-  the WPF app compiled there, but its probes (`--gesturetest`, `--buttontest`, `--latencycheck`,
-  `--uiprobe`) have not been run. The jump in speed at a marker is a measurement.
+- **Warp markers have never been heard.** Since 2026-10-27 `dotnet test` (0 skipped) and every
+  probe have passed on his machine, on a staged build; before that, only on Linux. The jump in speed
+  at a marker is a measurement.
+- **His copy of Benchmix is a standalone `Benchmix.exe` on his OneDrive Desktop**, not the build
+  folder. Double-clicking a `.benchmix` opens the build folder's exe, which was still the 12 Oct one
+  on 2026-10-27 and refuses projects saved by anything newer. Read the Desktop exe's version
+  (`0.1.0+<commit>`) before saying what his copy has; replacing it touches his Desktop, so ask.
 
 ## Working with Daniel
 
@@ -223,4 +226,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-18.*
+*Revised 2026-10-27.*

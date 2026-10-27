@@ -62,7 +62,12 @@ public sealed partial class TrackViewModel : ObservableObject
     [ObservableProperty] private double _eqHigh = 1.0;
     [ObservableProperty] private double _gain = 1.0;
     [ObservableProperty] private bool _muted;
-    [ObservableProperty] private bool _soloed;
+
+    /// <summary>
+    /// Read-only here: a click on S can change every track's solo, so it goes through
+    /// <see cref="MainViewModel.Solo"/>, which refreshes every row.
+    /// </summary>
+    public bool Soloed => Model.Soloed;
     [ObservableProperty] private double _timelineOffsetSeconds;
     [ObservableProperty] private bool _linkPitchToTempo;
     [ObservableProperty] private bool _preserveFormants = true;
@@ -322,7 +327,6 @@ public sealed partial class TrackViewModel : ObservableObject
         _eqHigh = Model.EqHigh;
         _gain = Model.Gain;
         _muted = Model.Muted;
-        _soloed = Model.Soloed;
         _timelineOffsetSeconds = Model.TimelineOffsetSeconds;
         _linkPitchToTempo = Model.Mode == StretchMode.Linked;
         _preserveFormants = Model.PreserveFormants;
@@ -381,7 +385,6 @@ public sealed partial class TrackViewModel : ObservableObject
         => double.IsNaN(value) ? 1.0 : Math.Clamp(value, 0, 4);
 
     partial void OnMutedChanged(bool value) { _pushUndo?.Invoke($"{Name}: mute", null); Model.Muted = value; PushAll(); }
-    partial void OnSoloedChanged(bool value) { _pushUndo?.Invoke($"{Name}: solo", null); Model.Soloed = value; PushAll(); }
 
     partial void OnTimelineOffsetSecondsChanged(double value)
     {

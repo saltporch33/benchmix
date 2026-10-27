@@ -218,6 +218,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// The S button: see <see cref="ProjectSession.Solo"/>. One undo step, however many tracks'
+    /// solo it changes.
+    /// </summary>
+    public void Solo(TrackViewModel track, bool alongside)
+    {
+        if (_session is null || !Tracks.Contains(track)) return;
+        PushUndo($"{track.Name}: solo");
+        var result = Session.Solo(track.Model, alongside);
+        Session.ApplyAll();
+        foreach (var t in Tracks) t.RefreshFromModel();
+        MarkDirty();
+        Status = result.Message;
+    }
+
     // ---------------- renaming a track ----------------
 
     /// <summary>

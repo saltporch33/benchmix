@@ -233,6 +233,38 @@ public sealed class ProjectSession : IDisposable
         return new EditResult(true, $"Moved {track.Name} {(to < from ? "up" : "down")}, to place {to + 1} of {Project.Tracks.Count}.");
     }
 
+    /// <summary>
+    /// The S button (Daniel, 2026-10-27). A click makes this the one track soloed and turns every
+    /// other solo off; a click on the only soloed track turns it off. <paramref name="alongside"/>
+    /// (Ctrl+click) adds this track to the ones already soloed, or takes it away from them, so two
+    /// can still be heard together. The caller pushes the engine with <see cref="ApplyAll"/>.
+    /// </summary>
+    public EditResult Solo(TrackModel track, bool alongside)
+    {
+        if (!Project.Tracks.Contains(track)) return EditResult.No("That track is no longer in the project.");
+        string muted = track.Muted ? $" {track.Name} is muted, so it stays silent: click its M to hear it." : "";
+
+        if (alongside)
+        {
+            track.Soloed = !track.Soloed;
+            int soloed = Project.Tracks.Count(t => t.Soloed);
+            if (!track.Soloed)
+                return new EditResult(true, soloed == 0
+                    ? $"{track.Name} no longer soloed. Every track plays."
+                    : $"{track.Name} no longer soloed. {soloed} soloed track{(soloed == 1 ? "" : "s")} still play.");
+            return new EditResult(true, $"Soloed {track.Name} too: {soloed} tracks play.{muted}");
+        }
+
+        if (track.Soloed && Project.Tracks.All(t => t == track || !t.Soloed))
+        {
+            track.Soloed = false;
+            return new EditResult(true, $"{track.Name} no longer soloed. Every track plays.");
+        }
+
+        foreach (var t in Project.Tracks) t.Soloed = t == track;
+        return new EditResult(true, $"Soloed {track.Name}: only it plays. Ctrl+click another S to hear that one too.{muted}");
+    }
+
     private string NextTrackName()
     {
         var taken = Project.Tracks.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -671,3 +671,19 @@ everything else below is a default he can change.
 | **On LINK a moved marker changes the pitch with the speed** — a 1% change is about 17 cents. Not changed. | LINK is speed and pitch together, as on a record. The default mode keeps the pitch. |
 | **Not changed: the BPM on the strip and the ruler's bar lines ignore warp markers**, as they ignore ramps. How far each stretch is spread is on its label instead. | The strip shows the tempo TEMPO sets; the warp is a correction on top of it. |
 
+
+## 2026-10-27 — solo, one track at a time
+
+Daniel, 2026-10-27, verbatim: *"shouldn’t the “s” button for “solo”
+mean that only one track can be selected thusly at one time? THat’s the functionality i’d like… but i
+do know in other daw’s, there is the ability to do it like you have it here in this app…. if there’s a
+specific reason for it, let me know, otherwise let’s make it a tgoggle so whichever track i click it
+on, that’s the track it will play solo"*
+
+| Decision | Why |
+| --- | --- |
+| **A click on S solos that track alone**: every other solo goes off. A click on the only soloed track turns solo off; a click on one of several soloed tracks leaves just that one. | His words: "whichever track i click it on, that's the track it will play solo". |
+| **Ctrl+click on S adds that track to the ones already soloed, or takes it away**, and leaves the others as they are. | The reason other programs solo several at once: to hear two tracks together — a vocal against its bed — with the rest silent. Ableton does this by default: a click is exclusive, Ctrl+click adds. Ctrl already means "add to" when selecting sections. |
+| **One undo step per click**, however many tracks it changes. | As for every edit. |
+| **Mute still wins over solo**; soloing a muted track now says so in the status bar. | The rule is unchanged; the silence was unexplained. |
+| **A project saved with several tracks soloed opens with them all soloed.** | Nothing in the project file changed. |

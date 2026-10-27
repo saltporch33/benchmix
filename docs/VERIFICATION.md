@@ -921,6 +921,27 @@ DECISIONS read as his words. **Broken on purpose**: with each fixed bug put back
 failed, each the one written for it; the exact-answer test first could not fail over 480 s (the
 hair is rare that far in), was narrowed to the first 10 s, and then failed without the fix.
 
+## 2026-10-27 — solo, one track at a time; warp markers on his PC
+
+The first run on his machine since warp markers. **439 tests: 439 passed, 0 failed, 0 skipped** —
+the seven warp-era skips were his songs and DirectML, both here. (439 = the 429 above, six for solo,
+and the four of `SustainedLoopTests`, still uncommitted, measurement only.)
+
+`scripts/verify-exe.ps1` on a staged build (`-p:ArtifactsPath=%LOCALAPPDATA%\Benchmix.stage\`, so
+neither his Desktop copy nor the build folder that double-clicking a project opens was touched): all
+nine runs passed and stayed out of the way. **The warp exe checks ran for the first time and passed**:
+`--gesturetest` **276 checks** (253 before warp markers), `--latencycheck` with a pitched track through
+two moved markers, the markers in `--demoediting`'s shot. `--buttontest` **55 checks** (46 with warp
+markers, 9 for solo). Nobody has listened to a warped track.
+
+**Solo** (`SoloTests`, `--buttontest`): a click on S plays that track alone, measured — the render
+equals, sample for sample, a session holding only that song (two ramps running opposite ways, so
+either leaking in shows). A click on another S moves the solo; Ctrl+click adds and takes away; a click
+on the only soloed track turns solo off; mute still wins. Through the real S buttons, reading the
+engine's own mute, not the lit button: the same five, the status hint, and one Ctrl+Z taking back a
+click that changed both tracks. **Broken on purpose**: with a plain click made additive again, the two
+tests written for it failed and the other four passed.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

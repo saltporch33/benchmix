@@ -346,7 +346,8 @@
                                                 <ToggleButton Content="M" Style="{StaticResource PillToggle}" Margin="4,0,0,0"
                                                               IsChecked="{Binding Muted, Mode=TwoWay}" ToolTip="Mute this track."/>
                                                 <ToggleButton Content="S" Style="{StaticResource PillToggle}" Margin="3,0,0,0"
-                                                              IsChecked="{Binding Soloed, Mode=TwoWay}" ToolTip="Solo: silence every other track. A muted track stays silent even when soloed."/>
+                                                              IsChecked="{Binding Soloed, Mode=OneWay}" Click="OnSoloClick"
+                                                              ToolTip="Solo: hear only this track. Ctrl+click to hear it alongside the tracks already soloed. A muted track stays silent even when soloed."/>
                                             </StackPanel>
                                         </Grid>
                                     </Border>
