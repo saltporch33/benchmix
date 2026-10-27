@@ -62,13 +62,16 @@ control on screen is one you asked for.
 | double-click a lane, the ruler, or the empty room under the tracks | play from there; if already playing, jump there and keep playing |
 | click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again. (The ■ button goes back to 0:00.) |
 | double-click the scroll wheel | stop, and go back to the very start: the playhead and the view both to 0:00 |
-| turn the scroll wheel over the ruler or a waveform | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot. Over the track controls on the left (or the scrollbar) the wheel scrolls the tracks up and down when they don't all fit, or turns the knob under it |
+| turn the scroll wheel anywhere over the tracks | scroll the tracks up and down when they don't all fit; over a knob it turns that knob instead |
+| <kbd>Alt</kbd>+scroll, over the ruler or a waveform | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | undo / redo |
 | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> | zoom in / out / fit |
 | <kbd>Ctrl</kbd>+scroll | zoom about the pointer |
 | <kbd>Shift</kbd>+scroll | scroll sideways |
+| hold the right mouse button and drag — on the ruler, the lanes or the track controls | pan the view sideways, and up and down through the tracks |
+| <kbd>PageUp</kbd> / <kbd>PageDown</kbd>, <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd> | scroll the tracks a screen at a time, to the top, to the bottom (not while typing in a box) |
 | click the ruler | move the playhead |
 | <kbd>Shift</kbd>+drag the ruler | set a listening loop |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |

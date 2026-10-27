@@ -604,6 +604,95 @@ public partial class MainWindow : Window
 
         _scriptedPointerX = null;
 
+        // --- up and down (Daniel, 2026-10-27: "vertical scrolling is biggest pain at the moment"): a
+        // right-drag pans the tracks up and down as well, and PageUp/PageDown, Ctrl+Home/Ctrl+End
+        // scroll them from the keyboard. Eight empty tracks make room to scroll; undone after. ---
+        int tracksBefore = _vm.Tracks.Count;
+        for (int i = 0; i < 8; i++) _vm.AddEmptyTrackCommand.Execute(null);
+        UpdateLayout();
+        bool room = TrackScroller.ScrollableHeight > 100;
+        Check($"eight empty tracks give the list room to scroll ({TrackScroller.ScrollableHeight:0} px)", room);
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, PresentationSource.FromVisual(this)!, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+        if (room && PresentationSource.FromVisual(this) is not null)
+        {
+            TrackScroller.ScrollToVerticalOffset(0);
+            UpdateLayout();
+            _scriptedPointerX = 500;
+            _scriptedPointerY = 300;
+            OnTimelineRightButtonDown(TimelineGrid, down);
+            _scriptedPointerY = 220;                       // pulled up by 80 px: the tracks follow the hand
+            OnTimelinePreviewMouseMove(TimelineGrid, move);
+            UpdateLayout();
+            double offset = TrackScroller.VerticalOffset;
+            up.Handled = false;
+            OnTimelineRightButtonUp(TimelineGrid, up);
+            Check($"pulling up with the right button scrolls the tracks down by 80 px (offset {offset:0})", Math.Abs(offset - 80) < 0.5);
+            Check("a pan up or down suppresses the clip menu too", ConsumeContextMenuSuppression());
+            _scriptedPointerX = null;
+            _scriptedPointerY = null;
+
+            _scriptedFocus = this;
+            TrackScroller.ScrollToVerticalOffset(0);
+            UpdateLayout();
+            var key = Press(Key.PageDown);
+            OnWindowPreviewKeyDown(this, key);
+            UpdateLayout();
+            Check($"PageDown scrolls the tracks a screen down (offset {TrackScroller.VerticalOffset:0}, screen {TrackScroller.ViewportHeight:0} px)",
+                  key.Handled && TrackScroller.VerticalOffset > 0);
+            key = Press(Key.PageUp);
+            OnWindowPreviewKeyDown(this, key);
+            UpdateLayout();
+            Check("PageUp scrolls them back up", key.Handled && TrackScroller.VerticalOffset == 0);
+            _scriptedModifiers = ModifierKeys.Control;
+            key = Press(Key.End);
+            OnWindowPreviewKeyDown(this, key);
+            UpdateLayout();
+            Check($"Ctrl+End goes to the bottom (offset {TrackScroller.VerticalOffset:0} of {TrackScroller.ScrollableHeight:0})",
+                  key.Handled && Math.Abs(TrackScroller.VerticalOffset - TrackScroller.ScrollableHeight) < 0.5);
+            key = Press(Key.Home);
+            OnWindowPreviewKeyDown(this, key);
+            UpdateLayout();
+            Check("Ctrl+Home goes back to the top", key.Handled && TrackScroller.VerticalOffset == 0);
+            _scriptedModifiers = null;
+            _scriptedFocus = BpmBox;
+            key = Press(Key.PageDown);
+            OnWindowPreviewKeyDown(this, key);
+            UpdateLayout();
+            Check("PageDown with PROJECT BPM focused is left to the box", !key.Handled && TrackScroller.VerticalOffset == 0);
+            _scriptedFocus = null;
+
+            // The plain wheel itself (Daniel, 2026-10-27): a notch down over a waveform, through the
+            // lane's own routing up to the scroller, scrolls the tracks down; over the ruler the
+            // ruler's handler does it.
+            if (_vm.Tracks.FirstOrDefault(t => t.IsLoaded) is { } loaded && LaneOf(loaded) is { } lane0)
+            {
+                TrackScroller.ScrollToVerticalOffset(0);
+                UpdateLayout();
+                lane0.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = MouseWheelEvent, Source = lane0 });
+                UpdateLayout();
+                Check($"a plain notch of the wheel down over a waveform scrolls the tracks down (offset {TrackScroller.VerticalOffset:0})", TrackScroller.VerticalOffset > 0);
+            }
+            else notes.Add("no loaded track, so the plain wheel over a waveform is untested");
+            TrackScroller.ScrollToVerticalOffset(0);
+            UpdateLayout();
+            var r0 = RulerHost.TranslatePoint(new Point(0, 0), this);
+            _scriptedWindowPoint = new Point(r0.X + 300, r0.Y + RulerHost.ActualHeight / 2);
+            _scriptedModifiers = ModifierKeys.None;
+            var rulerWheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = PreviewMouseWheelEvent };
+            OnRulerWheel(RulerHost, rulerWheel);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            UpdateLayout();
+            Check($"a plain notch down over the ruler scrolls the tracks down too (offset {TrackScroller.VerticalOffset:0})", rulerWheel.Handled && TrackScroller.VerticalOffset > 0);
+            TrackScroller.ScrollToVerticalOffset(0);
+            UpdateLayout();
+        }
+        Check("none of PageUp, PageDown, Home and End is a bare KeyBinding, so they cannot fire inside a text box",
+              !InputBindings.OfType<KeyBinding>().Any(b => b.Key is Key.PageUp or Key.PageDown or Key.Home or Key.End));
+        for (int i = 0; i < 8; i++) _vm.UndoCommand.Execute(null);
+        PumpUntil(() => _vm.Tracks.Count == tracksBefore);
+        Check($"the eight empty tracks are undone again ({_vm.Tracks.Count} tracks, want {tracksBefore})", _vm.Tracks.Count == tracksBefore);
+
         // --- double-click on the ruler plays from that point ---
         // A scripted run has no audio device (App.UseAudioDevice), so this drives the offline
         // engine's transport — the same TransportSource the device pulls from — and nothing is
@@ -1185,9 +1274,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The wheel over the ruler, and since his second ask over the waveforms too, moves the playhead
-    /// back and forth (Daniel, 2026-10-12), through the ruler's and the tracks' own wheel handlers
-    /// with a scripted pointer and modifiers. The engine itself is asked where the playhead is.
+    /// Alt+wheel over the ruler and over the waveforms moves the playhead back and forth (the plain
+    /// wheel did, 2026-10-12, until Daniel gave it to scrolling the tracks, 2026-10-27), through the
+    /// ruler's and the tracks' own wheel handlers with a scripted pointer and modifiers. The engine
+    /// itself is asked where the playhead is. The plain wheel is passed on everywhere, to scroll.
     /// </summary>
     private void RunScrubGestures(Action<string, bool> Check, List<string> notes)
     {
@@ -1221,43 +1311,66 @@ public partial class MainWindow : Window
         bool At(double seconds) => Math.Abs(engine.PositionSeconds - seconds) <= frame;
 
         _vm.SeekTo(10);
-        bool used = Turn(overRuler, 120, ruler: true);
-        Check($"a notch of the wheel up over the ruler moves the playhead {notch:0.00}s later (engine at {engine.PositionSeconds:0.000}s)", used && At(10 + notch));
-        Turn(overRuler, -240, ruler: true);
+        bool used = Turn(overRuler, 120, ruler: true, ModifierKeys.Alt);
+        Check($"a notch of Alt+wheel up over the ruler moves the playhead {notch:0.00}s later (engine at {engine.PositionSeconds:0.000}s)", used && At(10 + notch));
+        Turn(overRuler, -240, ruler: true, ModifierKeys.Alt);
         Check($"two notches down move it back {2 * notch:0.00}s (engine at {engine.PositionSeconds:0.000}s)", At(10 - notch));
 
         _vm.SeekTo(0.2);
-        Turn(overRuler, -360, ruler: true);
+        Turn(overRuler, -360, ruler: true, ModifierKeys.Alt);
         Check("it stops at 0:00", engine.PositionSeconds == 0);
 
         _vm.PlayFrom(30);
-        Turn(overRuler, 120, ruler: true);
+        Turn(overRuler, 120, ruler: true, ModifierKeys.Alt);
         Check($"while playing it carries on playing from the new spot (engine at {engine.PositionSeconds:0.000}s)",
               engine.State == Benchmix.Engine.Audio.TransportState.Playing && At(30 + notch));
         _vm.StopCommand.Execute(null);
 
         _vm.SeekTo(10);
-        bool usedOverLane = Turn(overLane, 120, ruler: false);
-        Check($"a notch up over a waveform moves the playhead {notch:0.00}s later too, and is used up (engine at {engine.PositionSeconds:0.000}s)", usedOverLane && At(10 + notch));
-        Turn(overLane, -120, ruler: false);
+        bool usedOverLane = Turn(overLane, 120, ruler: false, ModifierKeys.Alt);
+        Check($"Alt+wheel up over a waveform moves the playhead {notch:0.00}s later too, and is used up (engine at {engine.PositionSeconds:0.000}s)", usedOverLane && At(10 + notch));
+        Turn(overLane, -120, ruler: false, ModifierKeys.Alt);
         Check($"and a notch down moves it back (engine at {engine.PositionSeconds:0.000}s)", At(10));
 
         UpdateLayout();
         var b = BelowTracks.TranslatePoint(new Point(0, 0), this);
         if (BelowTracks.ActualHeight > 4)
         {
-            bool belowUsed = Turn(new Point(b.X + 300, b.Y + 2), 120, ruler: false);
-            Check($"under the last track it moves the playhead as well (engine at {engine.PositionSeconds:0.000}s)", belowUsed && At(10 + notch));
+            bool belowUsed = Turn(new Point(b.X + 300, b.Y + 2), 120, ruler: false, ModifierKeys.Alt);
+            Check($"under the last track Alt+wheel moves the playhead as well (engine at {engine.PositionSeconds:0.000}s)", belowUsed && At(10 + notch));
             _vm.SeekTo(10);
         }
         else notes.Add("no room under the last track on screen, so the wheel there is untested");
 
+        // The plain wheel is the tracks' (Daniel, 2026-10-27): over a waveform and over the track
+        // controls alike it is passed on to scroll them and leaves the playhead alone; over the
+        // ruler, which is outside the scroller, it scrolls them itself.
+        bool plainOverLane = !Turn(overLane, 120, ruler: false);
+        Check("a plain notch over a waveform is passed on to scroll the tracks, and leaves the playhead alone", plainOverLane && At(10));
         var strip = StripOf(track)!;
         var st = strip.TranslatePoint(new Point(0, 0), this);
         bool passedOn = !Turn(new Point(st.X + 8, st.Y + strip.ActualHeight / 2), 120, ruler: false);
-        Check("over the track controls on the left the wheel is passed on — a knob turns, or the tracks scroll up and down — and leaves the playhead alone", passedOn && At(10));
-        var bar = Descendants<System.Windows.Controls.Primitives.ScrollBar>(TrackScroller).FirstOrDefault(x => x.Orientation == Orientation.Vertical);
-        Check("over the tracks' scrollbar it is passed on too, to scroll them", bar is not null && !OverLanes(bar, overLane));
+        Check("over the track controls on the left it is passed on too — a knob under the pointer turns, otherwise the tracks scroll — and leaves the playhead alone", passedOn && At(10));
+        bool plainOverRuler = Turn(overRuler, 120, ruler: true);
+        Check("a plain notch over the ruler is used to scroll the tracks, and leaves the playhead alone", plainOverRuler && At(10));
+
+        // The knob under the pointer still takes the wheel, clicked or not (Daniel, 2026-10-27:
+        // "retain functionality of hovering over knobs and wheeling to make adjustments there").
+        // Seen from the strip above it: a wheel event the knob takes never reaches the strip.
+        var knob = Descendants<Controls.Knob>(strip).FirstOrDefault();
+        if (knob is null) notes.Add("no knob on the strip, so the wheel over a knob is untested");
+        else
+        {
+            double was = knob.Value;
+            bool reachedStrip = false;
+            MouseWheelEventHandler seen = (_, _) => reachedStrip = true;
+            strip.AddHandler(MouseWheelEvent, seen);
+            knob.RaiseEvent(new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, 120) { RoutedEvent = MouseWheelEvent, Source = knob });
+            strip.RemoveHandler(MouseWheelEvent, seen);
+            Check($"the wheel over a knob, clicked or not, turns it and goes no further (from {was:0.###} to {knob.Value:0.###})",
+                  !reachedStrip && knob.Value != was);
+            knob.Value = was;
+        }
 
         double lanePps = _vm.PixelsPerSecond;
         Turn(overLane, 120, ruler: false, ModifierKeys.Control);
@@ -1280,7 +1393,7 @@ public partial class MainWindow : Window
         _vm.ScrollSeconds = 0;
         double edge = _vm.ViewportSeconds - 0.2;
         _vm.SeekTo(edge);
-        Turn(overRuler, 240, ruler: true);
+        Turn(overRuler, 240, ruler: true, ModifierKeys.Alt);
         Check($"turned past the right edge of the view, the view follows the playhead (playhead {_vm.PositionSeconds:0.0}s, view {_vm.ScrollSeconds:0.0}s to {_vm.ScrollSeconds + _vm.ViewportSeconds:0.0}s)",
               _vm.ScrollSeconds > 0 && _vm.PositionSeconds >= _vm.ScrollSeconds && _vm.PositionSeconds <= _vm.ScrollSeconds + _vm.ViewportSeconds);
         _vm.ScrollSeconds = 0;
@@ -4854,15 +4967,34 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The two bare keys that act: Delete removes the selected sections, Space plays and pauses.
-    /// They are handled here, not as KeyBindings, because a bare key bound on the Window also fires
-    /// from inside a text box — Space would start playback instead of typing a space into a track's
-    /// name — so they act only when the keyboard focus is not in a text box or a menu. Being the
-    /// window's Preview, Space also comes here before a focused button, which would otherwise take
-    /// it as a press of itself.
+    /// The bare keys that act: Delete removes the selected sections, Space plays and pauses, PageUp
+    /// and PageDown scroll the tracks (with Ctrl+Home and Ctrl+End, 2026-10-27). They are handled
+    /// here, not as KeyBindings, because a bare key bound on the Window also fires from inside a
+    /// text box — Space would start playback instead of typing a space into a track's name — so
+    /// they act only when the keyboard focus is not in a text box or a menu. Being the window's
+    /// Preview, Space also comes here before a focused button, which would otherwise take it as a
+    /// press of itself.
     /// </summary>
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        // Scrolling the tracks from the keyboard (Daniel, 2026-10-27): PageUp and PageDown a screen
+        // at a time, Ctrl+Home and Ctrl+End to the top and the bottom. Not from a text box, where
+        // Home and End move the caret, and a focused knob keeps bare Home for "back to normal".
+        if ((e.Key is Key.PageUp or Key.PageDown && Modifiers == ModifierKeys.None)
+            || (e.Key is Key.Home or Key.End && Modifiers == ModifierKeys.Control))
+        {
+            if (!BareKeyAppliesTo(e.OriginalSource as IInputElement ?? FocusedForKeys)) return;
+            switch (e.Key)
+            {
+                case Key.PageUp: TrackScroller.PageUp(); break;
+                case Key.PageDown: TrackScroller.PageDown(); break;
+                case Key.Home: TrackScroller.ScrollToTop(); break;
+                default: TrackScroller.ScrollToBottom(); break;
+            }
+            e.Handled = true;
+            return;
+        }
+
         // Escape drops a tempo ramp being placed, or keeps the tempo a retyped one had. Only while
         // there is one, and not from another text box, where Escape is that box's own.
         if (e.Key == Key.Escape && Modifiers == ModifierKeys.None && _vm.RampPending)
@@ -5769,19 +5901,24 @@ public partial class MainWindow : Window
     private void OnDeleteSection(object sender, RoutedEventArgs e) => _vm.DeleteClipCommand.Execute(null);
     private void OnSplitStems(object sender, RoutedEventArgs e) => _vm.SplitStemsCommand.Execute(TrackOf(sender));
 
-    // ---------------- right-drag: pan the timeline ----------------
+    // ---------------- right-drag: pan the timeline, sideways and up and down ----------------
 
     private bool _panArmed;
     private bool _panning;
     private bool _suppressContextMenu;
-    private double _panOriginX;
-    private double _panStartScroll;
+    private double _panOriginX, _panOriginY;
+    private double _panStartScroll, _panStartVertical;
     private Cursor? _cursorBeforePan;
 
     /// <summary>Scripted pointer position for <c>--gesturetest</c>; null in normal use.</summary>
-    private double? _scriptedPointerX;
+    private double? _scriptedPointerX, _scriptedPointerY;
 
     private double PointerX(MouseEventArgs e) => _scriptedPointerX ?? e.GetPosition(TimelineGrid).X;
+
+    // With a scripted X and no scripted Y the pointer is taken not to have moved up or down: the
+    // real mouse, which Daniel may be using meanwhile, must not leak into a pan check.
+    private double PointerY(MouseEventArgs e)
+        => _scriptedPointerY ?? (_scriptedPointerX is not null ? _panOriginY : e.GetPosition(TimelineGrid).Y);
 
     /// <summary>
     /// Arms a pan without taking capture. Capture is what would break the clip menu: a
@@ -5799,7 +5936,9 @@ public partial class MainWindow : Window
         // a stale flag would eat the NEXT right-click's menu.
         _suppressContextMenu = false;
         _panOriginX = PointerX(e);
+        _panOriginY = _scriptedPointerY ?? (_scriptedPointerX is not null ? 0 : e.GetPosition(TimelineGrid).Y);
         _panStartScroll = _vm.ScrollSeconds;
+        _panStartVertical = TrackScroller.VerticalOffset;
     }
 
     private void OnTimelinePreviewMouseMove(object sender, MouseEventArgs e)
@@ -5809,18 +5948,20 @@ public partial class MainWindow : Window
         // The button can be released outside the window, where no up event reaches us.
         if (_scriptedPointerX is null && e.RightButton != MouseButtonState.Pressed) { EndPan(); return; }
 
-        double dx = PointerX(e) - _panOriginX;
+        double dx = PointerX(e) - _panOriginX, dy = PointerY(e) - _panOriginY;
         if (!_panning)
         {
-            if (Math.Abs(dx) < 4) return;       // same slop as a clip drag, so a click never pans
+            if (Math.Abs(dx) < 4 && Math.Abs(dy) < 4) return;       // same slop as a clip drag, so a click never pans
             _panning = true;
             if (_scriptedPointerX is null) TimelineGrid.CaptureMouse();
             _cursorBeforePan = Cursor;
-            Cursor = Cursors.ScrollWE;
+            Cursor = TrackScroller.ScrollableHeight > 0 ? Cursors.ScrollAll : Cursors.ScrollWE;
         }
 
-        // Grab-and-drag: pulling right reveals earlier audio, so the view scrolls back.
+        // Grab-and-drag: pulling right reveals earlier audio, so the view scrolls back; pulling
+        // down reveals the tracks above (Daniel, 2026-10-27: "vertical scrolling is biggest pain").
         _vm.ScrollSeconds = _panStartScroll - dx / Math.Max(0.01, _vm.PixelsPerSecond);
+        TrackScroller.ScrollToVerticalOffset(_panStartVertical - dy);
     }
 
     /// <summary>
@@ -5870,40 +6011,38 @@ public partial class MainWindow : Window
 
     private void OnTimelineWheel(object sender, MouseWheelEventArgs e)
     {
-        // Over the waveforms a plain turn moves the playhead, as over the ruler (Daniel, 2026-10-12:
-        // "I'd like to be able to do it from anywhere my mouse is" — he chose the waveforms). Over
-        // the track controls on the left and the scrollbar it falls through: a knob turns, or the
-        // ScrollViewer scrolls the tracks up and down.
-        var at = WindowPoint(e);
-        if (TimelineWheel(at, e.Delta, scrubs: OverLanes(e.OriginalSource as DependencyObject, at))) e.Handled = true;
+        // A plain turn is left alone, anywhere over the tracks: the ScrollViewer scrolls them up and
+        // down, or the knob under the pointer turns (Knob.OnMouseWheel). Daniel, 2026-10-27:
+        // "vertical scroll when mouse is in the main area. hold alt, and it scrubs. retain
+        // functionality of hovering over knobs and wheeling to make adjustments there." Before that,
+        // a plain turn over the waveforms moved the playhead (2026-10-12).
+        if (TimelineWheel(WindowPoint(e), e.Delta)) e.Handled = true;
     }
 
     private void OnRulerWheel(object sender, MouseWheelEventArgs e)
     {
-        if (TimelineWheel(WindowPoint(e), e.Delta, scrubs: true)) e.Handled = true;
+        // The ruler is outside the ScrollViewer, so a plain turn there scrolls the tracks by hand:
+        // the wheel scrolls them wherever it is over the track area.
+        if (!TimelineWheel(WindowPoint(e), e.Delta)) ScrollTracksByWheel(e.Delta);
+        e.Handled = true;
     }
 
-    /// <summary>
-    /// Whether a point in the track area is over the lanes — a waveform, a gap, or the room under the
-    /// last track — rather than the track controls on the left or the tracks' scrollbar.
-    /// </summary>
-    private bool OverLanes(DependencyObject? source, Point window)
-    {
-        for (var d = source; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
-            if (d is System.Windows.Controls.Primitives.ScrollBar) return false;
-        return window.X - TrackContent.TranslatePoint(new Point(0, 0), this).X >= TrackContent.ColumnDefinitions[0].ActualWidth;
-    }
+    /// <summary>A notch of the plain wheel over the ruler: what the ScrollViewer does for one over the tracks.</summary>
+    private void ScrollTracksByWheel(int delta)
+        => TrackScroller.ScrollToVerticalOffset(TrackScroller.VerticalOffset
+                                                - delta / (double)Mouse.MouseWheelDeltaForOneLine * SystemParameters.WheelScrollLines * 16);
 
-    /// <summary>How far one notch of the wheel over the ruler moves the playhead, on screen.</summary>
+    /// <summary>How far one notch of Alt+wheel moves the playhead, on screen.</summary>
     private const double ScrubPixelsPerNotch = 20;
 
     /// <summary>
     /// A turn of the wheel on the timeline: Ctrl zooms about the pointer, Shift scrolls sideways,
-    /// and over the ruler or the lanes (<paramref name="scrubs"/>) a plain turn moves the playhead
-    /// back and forth (Daniel, 2026-10-12) — up is later, a notch is the same distance on screen
-    /// whatever the zoom, and the view follows it. True when it was used.
+    /// and Alt moves the playhead back and forth (the plain wheel's job from 2026-10-12 until
+    /// 2026-10-27, when Daniel gave the plain wheel to scrolling the tracks) — up is later, a notch
+    /// is the same distance on screen whatever the zoom, and the view follows it. A plain turn is
+    /// not used here: it is for the tracks. True when it was used.
     /// </summary>
-    private bool TimelineWheel(Point window, int delta, bool scrubs)
+    private bool TimelineWheel(Point window, int delta)
     {
         if (Modifiers.HasFlag(ModifierKeys.Control))
         {
@@ -5921,7 +6060,7 @@ public partial class MainWindow : Window
             _vm.ScrollSeconds = Math.Max(0, _vm.ScrollSeconds - delta / 120.0 * (60 / _vm.PixelsPerSecond) * 4);
             return true;
         }
-        if (!scrubs) return false;
+        if (!Modifiers.HasFlag(ModifierKeys.Alt)) return false;
 
         // From where the playhead is going: while playing, a seek can still be waiting for the audio
         // thread, and a tick can put the old position on screen meanwhile. Turned fast, notches built

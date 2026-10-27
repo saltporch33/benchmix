@@ -718,3 +718,22 @@ default he can change.
 | **Ctrl frees a drag from the playhead too**, as from edges. Never to bars. | One rule for snapping. |
 | **The playhead travels with the snap settings** (`SnapSettings.PlayheadSeconds`), decided once per pointer move by the window, instead of being a separate argument. | One source. Mark ends and warp markers took it as a separate argument, and the section drags would have been a third way of passing it. |
 | **The status bar says "on the playhead"** while dragging and "snapped to the playhead" on the drop, and the guide line is drawn on it. | As for an edge. |
+
+
+## 2026-10-27 — scrolling the tracks up and down, and the scroll bars
+
+Daniel, 2026-10-27, verbatim: *"think of possible way to more easily scroll vertically…. currently
+need to do via scroll bar, or by mouse wheel while overing over the tracks area…. problem is, then
+doing that, if im also hovering over a knob, it adjusts that nob up and down…. possibly ctrl end
+jumps to bottom? ctrl home to top? page up page down to scroll vertically? Although i do really
+prefer a mouse method."*, then *"vertical scrolling is biggest pain at the moment"*. On the scroll
+bar: *"more contrast, especially the window scroll bar….currently white vs black and i never know
+which to click and drag"*.
+
+| Decision | Why |
+| --- | --- |
+| **The knob under the pointer still takes the wheel**, clicked or not, exactly as before. | His words, after a first cut that made a knob take the wheel only once clicked: *"retain functionality of hovering over knobs and wheeling to make adjustments there."* The complaint about knobs catching the wheel is answered by the row below instead: the wheel scrolls the tracks over the waveforms, where there is no knob. |
+| **A right-button drag pans the tracks up and down as well as sideways.** The cursor shows four arrows when there is room to scroll up and down, two when there is not. | His preference for a mouse method. The right-drag already panned sideways, and grabbing the picture is the same gesture in both directions. |
+| **PageUp and PageDown scroll a screen of tracks; Ctrl+Home and Ctrl+End go to the top and the bottom.** Not from a text box; bare Home stays the focused knob's "back to normal". | His suggestion. Handled with the other bare keys, never as KeyBindings (DECISIONS 2026-10-03). |
+| **The scroll bars are restyled**: a dark track, a clearly lighter thumb that brightens under the pointer and turns blue while dragged, 14 px wide, arrows kept. | The thumb is the part to drag, and now looks like it. The arrows stay because the one under the lanes moves a second a click (the manual says so). |
+| **The plain wheel scrolls the tracks wherever it is over the track area — the waveforms, the room under the tracks, the ruler, the scrollbar and the track controls away from a knob — and Alt+wheel moves the playhead.** This supersedes 2026-10-12, when a plain turn over the ruler and the waveforms moved the playhead. | His words, 2026-10-27: *"for vertical scroll, just make the mouse wheel do that. If i want to usew mouse wheel to scrub, i can hold alt. that work?"* and then *"vertical scroll when mouse is in the main area. hold alt, and it scrubs."* Alt already means the playhead: Alt+click puts it somewhere. Ctrl+wheel still zooms and Shift+wheel still scrolls sideways. |

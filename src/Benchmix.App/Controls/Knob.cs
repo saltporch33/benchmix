@@ -418,6 +418,11 @@ public sealed class Knob : FrameworkElement
     }
 
     /// <inheritdoc/>
+    /// <remarks>
+    /// The knob under the pointer takes the wheel, clicked or not — kept on purpose (Daniel,
+    /// 2026-10-27: "retain functionality of hovering over knobs and wheeling to make adjustments
+    /// there"). Scrolling the tracks with the wheel is for the waveforms, where there is no knob.
+    /// </remarks>
     protected override void OnMouseWheel(MouseWheelEventArgs e)
     {
         base.OnMouseWheel(e);

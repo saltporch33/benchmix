@@ -986,6 +986,28 @@ one whose end is dropped 4 px past it ends on it; with Ctrl held it stops 4 px s
 playing — the offline engine's transport, the playhead parked — it stops 4 px short too.
 `--buttontest` still 61. Nobody has listened to the result.
 
+## 2026-10-27 — scrolling the tracks, the wheel, and the scroll bars
+
+**452 tests, unchanged**: nothing in Core or the engine changed. `dotnet test` ran on this tree all
+the same (452 passed, 0 failed, 0 skipped).
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **297 checks** (283 before). With eight empty tracks added for room (740 px to
+scroll, undone after): a right-drag pulled up 80 px scrolls the tracks down 80 px and suppresses
+the clip menu; PageDown scrolls a screen (628 px) and PageUp back; Ctrl+End to the bottom (740) and
+Ctrl+Home to the top; PageDown with PROJECT BPM focused is left to the box; none of the four keys
+is a KeyBinding. The plain wheel: a notch down over a waveform, routed through the lane up to the
+scroller, scrolls the tracks 48 px, and a notch over the ruler scrolls them 48 px through the
+ruler's own handler; over a waveform, over the strip and over the ruler a plain notch leaves the
+playhead where it was. Alt+wheel over the ruler, over a waveform and under the last track moves the
+playhead half a second a notch at 40 px/s, stops at 0:00, carries on playing from the new spot, and
+the view follows it past the right edge. The wheel over a knob, clicked or not, turns it (1 → 1.02)
+and goes no further. The scroll bars' new look is in the `--demosections` and `--demoediting`
+shots, but nobody has looked at them, and nobody has used the pan or the wheel by hand.
+
+A first cut made a knob take the wheel only once clicked. It passed the same checks (295, at 16:00)
+and was taken out within the hour on his instruction.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
