@@ -963,6 +963,29 @@ longer song muted (T.R.O.Y., 13,007,151 frames) the file is 13,017,887 frames: t
 out and why, each time; with both muted the button refuses and says why. `--gesturetest` still
 276. Nobody has listened to a render.
 
+## 2026-10-27 — snapping to the playhead
+
+**452 tests: 452 passed, 0 failed, 0 skipped** — the 444 above and the eight of `PlayheadSnapTests`.
+
+**Where things land** (`PlayheadSnapTests`, a 60 s ramp, the snap distance 0.357 s): a section
+dropped 0.2 s from the playhead starts on its exact frame, and a second in, the render is the
+untouched song's a second after the playhead; a section whose *end* is 0.2 s from it ends on its
+frame; a group with one member's edge 0.2 s from it lands that edge on it, the spacing kept in
+frames; a trimmed end lands on it, and a trimmed start with its audio left in place; a tempo
+ramp's dot placed near it, and a ramp's end dragged to it. With the playhead exactly on a
+section's edge the edge wins and the engine sees a butt join; 0.05 s from the playhead and 0.15 s
+from an edge, the playhead wins. Ctrl frees it. **Broken on purpose**: with the playhead taken out
+of the snap settings, 8 of the 10 playhead tests failed — the mark-end and warp-marker ones among
+them, since they now go through the same settings; the two still passing were the tie, where an
+edge wins anyway, and Ctrl.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **283 checks** (276 before): the playhead parked at 58 s, a section dropped 4 px
+short of it lands on it, the guide line marks it and the status says it snapped to the playhead;
+one whose end is dropped 4 px past it ends on it; with Ctrl held it stops 4 px short; and while
+playing — the offline engine's transport, the playhead parked — it stops 4 px short too.
+`--buttontest` still 61. Nobody has listened to the result.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

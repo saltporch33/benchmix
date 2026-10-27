@@ -409,11 +409,11 @@ public class MarkedStretchTests : IDisposable
             var snap = new SnapSettings(true, 40);          // 10 px is a quarter of a second
             double edge = TimelineEditor.TimelineSecondsOfFrame(a, F(10), s);
 
-            long at = TimelineEditor.SnapStretchEnd(a, edge + 0.2, null, snap, s, out var on);
+            long at = TimelineEditor.SnapStretchEnd(a, edge + 0.2, snap, s, out var on);
             Assert.True(at == F(10), $"snapped to frame {at}, not {F(10)}: a cut there would leave a sliver of the next section, or a gap");
             Assert.Equal(edge, on);
 
-            long free = TimelineEditor.SnapStretchEnd(a, edge + 0.2, null, new SnapSettings(false, 40), s, out on);
+            long free = TimelineEditor.SnapStretchEnd(a, edge + 0.2, new SnapSettings(false, 40), s, out on);
             Assert.Null(on);
             Assert.Equal(TimelineEditor.TrackFrameAt(a, edge + 0.2, s), free);
         }
@@ -426,10 +426,10 @@ public class MarkedStretchTests : IDisposable
         using (s)
         {
             var snap = new SnapSettings(true, 40);
-            long at = TimelineEditor.SnapStretchEnd(a, 10.2, 10.1, snap, s, out var on);
+            long at = TimelineEditor.SnapStretchEnd(a, 10.2, snap with { PlayheadSeconds = 10.1 }, s, out var on);
             Assert.Equal(10.1, on);
             Assert.Equal(F(10.1), at);
-            at = TimelineEditor.SnapStretchEnd(a, 10.05, 10.2, snap, s, out on);
+            at = TimelineEditor.SnapStretchEnd(a, 10.05, snap with { PlayheadSeconds = 10.2 }, s, out on);
             Assert.Equal(F(10), at);                         // the edge is nearer
         }
     }

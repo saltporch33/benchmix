@@ -101,10 +101,10 @@ public static class TempoRamps
 
     /// <summary>
     /// Where a ramp's dot lands near <paramref name="seconds"/>, on a whole frame: snapped within the
-    /// snap distance to a section edge on another track, or a ramp end on any track; and, for a
-    /// start only, to an edge of this track's own sections. An end is not offered those: they sit
-    /// after the ramp's start, so they move as soon as the ramp changes the tempo, and an end
-    /// snapped to one would not stay on it.
+    /// snap distance to a section edge on another track, a ramp end on any track, or the playhead
+    /// (2026-10-27) when that is strictly nearer; and, for a start only, to an edge of this track's
+    /// own sections. An end is not offered those: they sit after the ramp's start, so they move as
+    /// soon as the ramp changes the tempo, and an end snapped to one would not stay on it.
     /// </summary>
     /// <param name="except">The ramp being moved, whose own ends are not targets (−1 for a new one).</param>
     public static double SnapPoint(TrackModel t, double seconds, bool isEnd, int except, SnapSettings snap,
@@ -136,6 +136,7 @@ public static class TempoRamps
                 double d = Math.Abs(x - at);
                 if (x >= 0 && d <= best) { best = d; snappedTo = x; }
             }
+            if (snap.Playhead is { } p && Math.Abs(p - at) < best) snappedTo = p;     // an edge wins a tie
             if (snappedTo is { } hit) at = hit;
         }
         return OnFrame(at, s);
@@ -255,7 +256,7 @@ public sealed class RampEdgeDrag
         clamped = TimelineEditor.SecondsOf(_s.SecondsToFrames(clamped), _s);
         bool onSnap = snapped is not null && clamped == at;
         SnapLineSeconds = onSnap ? snapped : null;
-        SnappedTo = onSnap ? "an edge" : null;
+        SnappedTo = !onSnap ? null : snapped == snap.PlayheadSeconds ? "the playhead" : "an edge";
         _track.Ramps[_index] = _end ? _original with { EndSeconds = clamped } : _original with { StartSeconds = clamped };
     }
 

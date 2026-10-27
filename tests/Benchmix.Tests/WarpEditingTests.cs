@@ -99,7 +99,7 @@ public class WarpEditingTests : IDisposable
     static (WarpDrag Drag, EditResult Result) Drag(ProjectSession s, TrackModel t, int index, double to, SnapSettings? snap = null, double? playhead = null)
     {
         var d = new WarpDrag(s, t, index);
-        d.DragTo(to, snap ?? SnapSettings.Off, playhead);
+        d.DragTo(to, (snap ?? SnapSettings.Off) with { PlayheadSeconds = playhead });
         var r = d.Finish();
         s.ApplyAll();
         return (d, r);
@@ -341,14 +341,14 @@ public class WarpEditingTests : IDisposable
         bool InReach(int i) => WarpMarkers.SpreadBefore(t, i) is var x && x >= TempoMap.LowestWarp && x <= TempoMap.HighestWarp;
 
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(b + 20, SnapSettings.Off, null);
+        d.DragTo(b + 20, SnapSettings.Off);
         Assert.True(d.Clamped && InReach(1) && InReach(2),
             $"dragged far later, the audio either side spreads {WarpMarkers.SpreadBefore(t, 1):0.000}× and {WarpMarkers.SpreadBefore(t, 2):0.000}× — more than the engine is allowed to stretch it");
         Assert.True(Math.Abs(WarpMarkers.SpreadBefore(t, 2) - TempoMap.HighestWarp) < 1e-6, "the drag stopped short of as far as the marker can go");
-        d.DragTo(b - 20, SnapSettings.Off, null);
+        d.DragTo(b - 20, SnapSettings.Off);
         Assert.True(d.Clamped && InReach(1) && InReach(2) && Math.Abs(WarpMarkers.SpreadBefore(t, 1) - TempoMap.HighestWarp) < 1e-6,
             "dragged far sooner, the audio before the marker is spread beyond twice its tempo, or the drag stopped short");
-        d.DragTo(b + 0.5, SnapSettings.Off, null);
+        d.DragTo(b + 0.5, SnapSettings.Off);
         Assert.True(!d.Clamped && Math.Abs(d.NowSeconds - OnFrame(b + 0.5)) <= Frame, "a drag within reach was held back");
         Assert.True(d.Finish().Changed, "a drag that moved the beat did not count as a change — Ctrl+Z would skip it");
         s.ApplyAll();
@@ -356,12 +356,12 @@ public class WarpEditingTests : IDisposable
 
         // The last marker: only the stretch before it is limited.
         var last = new WarpDrag(s, t, 2);
-        last.DragTo(c + 60, SnapSettings.Off, null);
+        last.DragTo(c + 60, SnapSettings.Off);
         Assert.True(last.Clamped && InReach(2) && Math.Abs(WarpMarkers.SpreadBefore(t, 2) - TempoMap.LowestWarp) < 1e-6,
             "the last marker dragged far later spreads the audio before it below half its tempo, or stopped short");
         Assert.True(!last.BeyondEngine && last.Describe().Contains("twice as fast or half as fast"),
             "a drag stopped by the spread limit blamed the engine — the status bar would give the wrong reason");
-        last.DragTo(c - 30, SnapSettings.Off, null);
+        last.DragTo(c - 30, SnapSettings.Off);
         Assert.True(last.Clamped && InReach(2) && Math.Abs(WarpMarkers.SpreadBefore(t, 2) - TempoMap.HighestWarp) < 1e-6,
             "the last marker dragged far sooner spreads the audio before it beyond twice its tempo, or stopped short");
         last.Finish();
@@ -380,10 +380,10 @@ public class WarpEditingTests : IDisposable
         double b = Beat(t, 1);
 
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(b - 1.0, SnapSettings.Off, null);
+        d.DragTo(b - 1.0, SnapSettings.Off);
         Assert.True(!d.Clamped && WarpMarkers.AnyMoved(t), "setup: a drag the engine can play was held back");
         var good = t.Warps[1];
-        d.DragTo(b - 2.0, SnapSettings.Off, null);
+        d.DragTo(b - 2.0, SnapSettings.Off);
         Assert.True(d.Clamped && t.Warps[1] == good,
             "a warp marker went where the engine cannot play the audio fast enough — the engine would drop the whole warp and the track would jump out of time");
         Assert.True(d.BeyondEngine && d.Describe().Contains("faster or slower there than Benchmix can"),
@@ -403,10 +403,10 @@ public class WarpEditingTests : IDisposable
         double b = Beat(t, 1);
 
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(b + 0.3, SnapSettings.Off, null);
+        d.DragTo(b + 0.3, SnapSettings.Off);
         Assert.True(t.Warps[1] != original && TimelineEditor.SecondsMapOf(t) is not null, "setup: the drag should have warped the track");
-        d.DragTo(b - 0.2, SnapSettings.Off, null);
-        d.DragTo(b + 0.3 * Frame, SnapSettings.Off, null);              // within the frame it started on
+        d.DragTo(b - 0.2, SnapSettings.Off);
+        d.DragTo(b + 0.3 * Frame, SnapSettings.Off);              // within the frame it started on
 
         Assert.True(t.Warps[1] == original && original.TrackSeconds == original.TempoSeconds,
             "a warp marker dragged away and back is not exactly unmoved — the track stays warped by a hair, and goes through the stretcher for nothing");
@@ -429,14 +429,14 @@ public class WarpEditingTests : IDisposable
         double edge = When(other, other.Clips[0], s);
 
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(b + 0.1, new SnapSettings(true, 20), null);         // half a second either side
+        d.DragTo(b + 0.1, new SnapSettings(true, 20));         // half a second either side
         Assert.True(d.SnapLineSeconds == edge && d.SnappedTo == "a section edge",
             $"a beat dragged 0.15 s from another deck's section did not snap to it (guide at {d.SnapLineSeconds}, on {d.SnappedTo})");
         double beat = TimelineEditor.TimelineSecondsAt(t, 24);
         Assert.True(Math.Abs(beat - edge) <= Frame,
             $"the guide line says the beat is on the other deck's edge at {edge:0.00000}s, but it is heard at {beat:0.00000}s — {(beat - edge) * 1000:0.000} ms out");
 
-        d.DragTo(b + 0.1, SnapSettings.Off, null);                     // Ctrl held
+        d.DragTo(b + 0.1, SnapSettings.Off);                     // Ctrl held
         Assert.True(d.SnapLineSeconds is null && d.SnappedTo is null && Math.Abs(TimelineEditor.TimelineSecondsAt(t, 24) - OnFrame(b + 0.1)) <= Frame,
             "with Ctrl held a warp marker still snapped — it could not be put just off an edge");
         Assert.True(d.Finish().Changed, "a drag that moved the beat did not count as a change — Ctrl+Z would skip it");
@@ -449,10 +449,10 @@ public class WarpEditingTests : IDisposable
         double b = Beat(t, 1), playhead = b + 0.2;
 
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(b + 0.1, new SnapSettings(true, 20), playhead);
+        d.DragTo(b + 0.1, new SnapSettings(true, 20, playhead));
         Assert.True(d.SnapLineSeconds == playhead && d.SnappedTo == "the playhead", $"a beat dragged 0.1 s from the playhead did not snap to it ({d.SnappedTo})");
         Assert.True(Math.Abs(TimelineEditor.TimelineSecondsAt(t, 24) - playhead) <= Frame, "snapped to the playhead, the beat is not heard there");
-        d.DragTo(b + 0.1, SnapSettings.Off, playhead);
+        d.DragTo(b + 0.1, new SnapSettings(false, 20, playhead));
         Assert.True(d.SnapLineSeconds is null && Math.Abs(TimelineEditor.TimelineSecondsAt(t, 24) - OnFrame(b + 0.1)) <= Frame, "with Ctrl held a warp marker still snapped to the playhead");
     }
 
@@ -465,17 +465,17 @@ public class WarpEditingTests : IDisposable
         var wide = new SnapSettings(true, 2);                            // five seconds either side
 
         var d = new WarpDrag(s, t, 2);
-        d.DragTo(ownEdge - 0.1, wide, null);
+        d.DragTo(ownEdge - 0.1, wide);
         Assert.True(d.SnapLineSeconds is null && Math.Abs(TimelineEditor.TimelineSecondsAt(t, 36) - OnFrame(ownEdge - 0.1)) <= Frame,
             "a warp marker snapped to a section on its own track — that section moves as soon as the warp changes, so the beat would not stay on it");
-        d.DragTo(c, wide, null);
+        d.DragTo(c, wide);
         Assert.False(d.Finish().Changed, "setup: the marker should be back where it was");
 
         // A ramp sits on the timeline, so its end stays put whatever the warp does: it pulls.
         double rampEnd = c + 0.3;
         Ramp(s, t, 5, rampEnd, V);
         var e = new WarpDrag(s, t, 2);
-        e.DragTo(c + 0.4, wide, null);
+        e.DragTo(c + 0.4, wide);
         Assert.True(e.SnapLineSeconds == rampEnd && Math.Abs(TimelineEditor.TimelineSecondsAt(t, 36) - rampEnd) <= Frame,
             $"a warp marker did not snap to the end of a tempo ramp on its own track (guide at {e.SnapLineSeconds})");
     }
@@ -881,7 +881,7 @@ public class WarpEditingTests : IDisposable
 
                 var held = t.Warps[1];
                 var d = new WarpDrag(s, t, 1);
-                var thrown = Record.Exception(() => d.DragTo(Beat(t, 1) + (faster ? -0.5 : 0.5), SnapSettings.Off, null));
+                var thrown = Record.Exception(() => d.DragTo(Beat(t, 1) + (faster ? -0.5 : 0.5), SnapSettings.Off));
                 Assert.True(thrown is null, $"at {origin}s, {speed}: grabbing a marker with no room either side threw ({thrown?.Message}) — the app would show an error on every pointer move");
                 Assert.True(t.Warps[1] == held && d.Clamped && !d.Finish().Changed,
                     $"at {origin}s, {speed}: a marker with no room either side moved, or did not say it was as far as it goes");
@@ -900,7 +900,7 @@ public class WarpEditingTests : IDisposable
         Assert.True(r.Changed, $"setup: {r.Message}");
         var held = t.Warps[m];
         var d = new WarpDrag(s, t, m);
-        var thrown = Record.Exception(() => d.DragTo(Beat(t, m) + 0.3, SnapSettings.Off, null));
+        var thrown = Record.Exception(() => d.DragTo(Beat(t, m) + 0.3, SnapSettings.Off));
         Assert.True(thrown is null && t.Warps[m] == held,
             $"refining a stretch already at the limit with a marker in between threw or moved it ({thrown?.Message}) — the app would show an error on every pointer move");
     }
@@ -939,9 +939,9 @@ public class WarpEditingTests : IDisposable
         var (s, t) = await StandardAsync();
         var original = t.Warps[1];
         var d = new WarpDrag(s, t, 1);
-        d.DragTo(d.StartSeconds + 0.3, SnapSettings.Off, null);
+        d.DragTo(d.StartSeconds + 0.3, SnapSettings.Off);
         Assert.True(t.Warps[1] != original, "setup: the drag did not move the marker");
-        d.DragTo(d.StartSeconds, SnapSettings.Off, null);
+        d.DragTo(d.StartSeconds, SnapSettings.Off);
         Assert.True(t.Warps[1] == original && !d.Finish().Changed,
             "a marker dragged away and back is not exactly unmoved at 0.95 — the track would stay warped by a hair and go through the stretcher");
         s.ApplyAll();

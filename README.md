@@ -47,8 +47,8 @@ control on screen is one you asked for.
 2. **Set the project tempo** — it seeds from the first track you add. Everything matches to this.
 3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did.
 4. **Line them up** — drag a section sideways, or up and down onto another track. It snaps to the
-   edges of other sections when it gets close, and otherwise lands exactly where you let go; hold
-   <kbd>Ctrl</kbd> to stop it snapping at all.
+   edges of other sections, and to the playhead while you're stopped, when it gets close, and
+   otherwise lands exactly where you let go; hold <kbd>Ctrl</kbd> to stop it snapping at all.
 5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
 6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak.
 7. **Render to file.** The file holds what you can hear: mute a track, or solo the ones you want,

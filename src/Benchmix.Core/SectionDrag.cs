@@ -5,11 +5,18 @@ namespace Benchmix.Core;
 /// <summary>How a drag should snap, decided once per pointer move by the window.</summary>
 /// <param name="Enabled">False while Ctrl is held: the drag goes exactly where the pointer does.</param>
 /// <param name="PixelsPerSecond">Current zoom, so "close" means close on screen rather than in time.</param>
+/// <param name="PlayheadSeconds">
+/// Where the playhead is, when it is a target (Daniel, 2026-10-27: "should be able to snap to play
+/// marker"). Null while playing — it is moving, and a section would jump as it swept past — and for
+/// a drag that must not land on it, such as the far end of a mark that starts there.
+/// </param>
 /// <remarks>
 /// Nothing snaps to bar lines: Daniel asked for bar snapping to go on 2026-10-11 (docs/DECISIONS.md).
-/// Away from every section edge a drag lands exactly where it is dropped.
+/// Away from every section edge and the playhead a drag lands exactly where it is dropped. A
+/// section edge wins a tie with the playhead: on the dragged section's own track an edge is taken
+/// to its exact frame, which is what makes a butt join, and the playhead is only ever a position.
 /// </remarks>
-public sealed record SnapSettings(bool Enabled, double PixelsPerSecond)
+public sealed record SnapSettings(bool Enabled, double PixelsPerSecond, double? PlayheadSeconds = null)
 {
     /// <summary>How near, on screen, an edge has to come before it pulls.</summary>
     public const double RadiusPixels = 10;
@@ -17,6 +24,9 @@ public sealed record SnapSettings(bool Enabled, double PixelsPerSecond)
     public static readonly SnapSettings Off = new(false, 1);
 
     public double RadiusSeconds => RadiusPixels / Math.Max(0.01, PixelsPerSecond);
+
+    /// <summary>The playhead as a target: only while snapping is on and it is somewhere on the timeline.</summary>
+    public double? Playhead => Enabled && PlayheadSeconds is { } p && p >= 0 ? p : null;
 }
 
 /// <summary>One end of one section, somewhere a dragged edge can snap to.</summary>
@@ -24,8 +34,9 @@ public readonly record struct SnapEdge(double TimelineSeconds, TrackModel Track,
 
 /// <summary>
 /// Where things snap to: section edges, on any track, because lining a vocal up against the end of
-/// a beat on another deck is the everyday case. Nothing else — when no edge is close, a drag goes
-/// exactly where it is dropped.
+/// a beat on another deck is the everyday case; and the playhead (2026-10-27), when it is strictly
+/// nearer than any edge, because parking it on a beat and dropping onto it is how he aims. Nothing
+/// else — when neither is close, a drag goes exactly where it is dropped.
 /// </summary>
 public static class Snapping
 {
@@ -159,7 +170,8 @@ public sealed class SectionMove
 
         SnappedTo = null;
         SnapLineSeconds = null;
-        SnapEdge? edge = null;
+        SnapEdge? edge = null;          // when what it snapped to is an edge: on this track, taken to its exact frame below
+        double? line = null;            // where it snapped to, edge or playhead
         bool endOnEdge = false;
 
         if (snap.Enabled)
@@ -170,19 +182,28 @@ public sealed class SectionMove
             foreach (var e in _edges)
             {
                 double d = Math.Abs(start - e.TimelineSeconds);
-                if (d <= best) { best = d; edge = e; endOnEdge = false; }
+                if (d <= best) { best = d; edge = e; line = e.TimelineSeconds; endOnEdge = false; }
                 // Its end on this edge only if the whole section then fits after 0:00. Otherwise the
                 // start would land before the timeline begins and the only way to honour the snap
                 // would be to push the track's other sections later, which is not what was asked.
                 d = Math.Abs(EndFrom(start) - e.TimelineSeconds);
-                if (d < best && StartForEnd(e.TimelineSeconds) >= 0) { best = d; edge = e; endOnEdge = true; }
+                if (d < best && StartForEnd(e.TimelineSeconds) >= 0) { best = d; edge = e; line = e.TimelineSeconds; endOnEdge = true; }
+            }
+            // The playhead (Daniel, 2026-10-27), only when it is strictly nearer than every edge: an
+            // edge on this track is taken to its exact frame, and a tie must not cost a butt join.
+            if (snap.Playhead is { } p)
+            {
+                double d = Math.Abs(start - p);
+                if (d < best) { best = d; edge = null; line = p; endOnEdge = false; }
+                d = Math.Abs(EndFrom(start) - p);
+                if (d < best && StartForEnd(p) >= 0) { best = d; edge = null; line = p; endOnEdge = true; }
             }
 
-            if (edge is { } hit)
+            if (line is { } hit)
             {
-                start = Math.Max(0, endOnEdge ? StartForEnd(hit.TimelineSeconds) : hit.TimelineSeconds);
-                SnappedTo = "a section";
-                SnapLineSeconds = hit.TimelineSeconds;
+                start = Math.Max(0, endOnEdge ? StartForEnd(hit) : hit);
+                SnappedTo = edge is null ? "the playhead" : "a section";
+                SnapLineSeconds = hit;
             }
         }
 
@@ -252,7 +273,7 @@ public sealed class SectionMove
 /// by ONE whole number of the track's frames, so a seam or a butt join between two of them is still
 /// exactly that — the seam rule. Each track turns the same move in time into its own frames. The
 /// group stops at 0:00 as a whole and is never squeezed. It snaps as a unit, to other sections'
-/// edges only, and on the drop overwrites what it lands on — never its own sections.
+/// edges and to the playhead, and on the drop overwrites what it lands on — never its own sections.
 /// </para>
 /// <para>
 /// The picture is put back before every pointer move and the group placed afresh, as
@@ -350,7 +371,8 @@ public sealed class GroupMove
 
         SnappedTo = null;
         SnapLineSeconds = null;
-        (Member M, SnapEdge E, bool End)? hit = null;
+        // E is the edge snapped to, or null for the playhead; Line is where that is on the timeline.
+        (Member M, SnapEdge? E, double Line, bool End)? hit = null;
         if (snap.Enabled)
         {
             double best = snap.RadiusSeconds, shift = 0;
@@ -360,9 +382,17 @@ public sealed class GroupMove
                 foreach (var e in _edges)
                 {
                     double d = e.TimelineSeconds - s0;              // ties go to a start, as in SectionMove
-                    if (Math.Abs(d) <= best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, false); }
+                    if (Math.Abs(d) <= best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, e.TimelineSeconds, false); }
                     d = e.TimelineSeconds - e0;
-                    if (Math.Abs(d) < best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, true); }
+                    if (Math.Abs(d) < best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, e, e.TimelineSeconds, true); }
+                }
+                // The playhead (Daniel, 2026-10-27), only when strictly nearer than every edge, as in SectionMove.
+                if (snap.Playhead is { } p)
+                {
+                    double d = p - s0;
+                    if (Math.Abs(d) < best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, null, p, false); }
+                    d = p - e0;
+                    if (Math.Abs(d) < best && delta + d >= lowest) { best = Math.Abs(d); shift = d; hit = (m, null, p, true); }
                 }
             }
             if (hit is { } h)
@@ -372,17 +402,17 @@ public sealed class GroupMove
                 // the same frames — so adding the gap to the grabbed section's start would leave a
                 // member's edge short of the line it snapped to.
                 var on = Dest(h.M);
-                long at = Snapping.FrameOn(on, h.E, _s);
+                long at = h.E is { } e ? Snapping.FrameOn(on, e, _s) : TimelineEditor.TrackFrameAt(on, h.Line, _s);
                 long anchor = (h.End ? at - h.M.Length : at) - FromRef(h.M);
                 delta = TimelineEditor.TimelineSecondsOfFrame(on, anchor, _s) - RefStart(on);
-                SnappedTo = "a section";
-                SnapLineSeconds = h.E.TimelineSeconds;
+                SnappedTo = h.E is null ? "the playhead" : "a section";
+                SnapLineSeconds = h.Line;
             }
         }
         Place(delta, hit);
     }
 
-    private void Place(double delta, (Member M, SnapEdge E, bool End)? hit)
+    private void Place(double delta, (Member M, SnapEdge? E, double Line, bool End)? hit)
     {
         foreach (var dest in Destinations())
         {
@@ -393,8 +423,9 @@ public sealed class GroupMove
             if (hit is { } h && ReferenceEquals(Dest(h.M), dest))
             {
                 // The snapped edge is taken to its exact frame: on the same track a true butt join,
-                // not a near miss; on another, the nearest frame to the line, ramp or not.
-                long at = Snapping.FrameOn(dest, h.E, _s);
+                // not a near miss; on another, the nearest frame to the line, ramp or not. The
+                // playhead is only ever a line.
+                long at = h.E is { } e ? Snapping.FrameOn(dest, e, _s) : TimelineEditor.TrackFrameAt(dest, h.Line, _s);
                 anchor = (h.End ? at - h.M.Length : at) - FromRef(h.M);
             }
             long first = anchor + here.Min(FromRef);
@@ -502,10 +533,10 @@ public sealed class GroupMove
 }
 
 /// <summary>
-/// Dragging one edge of a section to trim it. Snaps to other sections' edges, and stops at its
-/// neighbours on the same track rather than eating into them — trimming is about this section, so
-/// it never changes another one. (A move or a paste does overwrite; that is putting something new
-/// somewhere, not adjusting what is there.)
+/// Dragging one edge of a section to trim it. Snaps to other sections' edges and to the playhead,
+/// and stops at its neighbours on the same track rather than eating into them — trimming is about
+/// this section, so it never changes another one. (A move or a paste does overwrite; that is
+/// putting something new somewhere, not adjusting what is there.)
 /// </summary>
 public sealed class SectionTrim
 {
@@ -560,11 +591,21 @@ public sealed class SectionTrim
 
     public void DragTo(double proposedEdge, SnapSettings snap)
     {
-        double at = Math.Max(0, proposedEdge);
-        var hit = Snapping.Nearest(_edges, at, snap);
-        SnapLineSeconds = hit?.TimelineSeconds;
-        SnappedTo = hit is null ? null : "a section";
-        if (hit is { } h) at = h.TimelineSeconds;
+        double asked = Math.Max(0, proposedEdge), at = asked;
+        var hit = Snapping.Nearest(_edges, asked, snap);
+        double? line = hit?.TimelineSeconds;
+        string? what = hit is null ? null : "a section";
+        // The playhead (Daniel, 2026-10-27), only when it is strictly nearer than every edge.
+        if (snap.Playhead is { } p && Math.Abs(p - asked) <= snap.RadiusSeconds
+            && (hit is not { } nearest || Math.Abs(p - asked) < Math.Abs(nearest.TimelineSeconds - asked)))
+        {
+            hit = null;
+            line = p;
+            what = "the playhead";
+        }
+        if (line is { } l) at = l;
+        SnapLineSeconds = line;
+        SnappedTo = what;
 
         long minimum = _minimum;
         var (prevEnd, nextStart) = Neighbours();

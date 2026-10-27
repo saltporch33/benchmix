@@ -272,10 +272,10 @@ public sealed class WarpDrag
 
     /// <summary>
     /// Puts the marker's beat at <paramref name="timelineSeconds"/> — snapped as <paramref name="snap"/>
-    /// says to an edge, a ramp's end, another track's marker or the playhead, and on a whole frame —
-    /// as far as the markers either side allow.
+    /// says to an edge, a ramp's end, another track's marker or the playhead it carries, and on a
+    /// whole frame — as far as the markers either side allow.
     /// </summary>
-    public void DragTo(double timelineSeconds, SnapSettings snap, double? playheadSeconds)
+    public void DragTo(double timelineSeconds, SnapSettings snap)
     {
         double at = Math.Max(0, timelineSeconds);
         string? what = null;
@@ -288,7 +288,7 @@ public sealed class WarpDrag
                 double d = Math.Abs(x - at);
                 if (x >= 0 && d <= best) { best = d; on = x; what = w; }
             }
-            if (playheadSeconds is { } p && p >= 0 && Math.Abs(p - at) <= best) { on = p; what = "the playhead"; }
+            if (snap.Playhead is { } p && Math.Abs(p - at) <= best) { on = p; what = "the playhead"; }
             if (on is { } hit) at = hit;
         }
         long frame = _s.SecondsToFrames(at);

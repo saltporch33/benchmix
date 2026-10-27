@@ -3363,6 +3363,51 @@ public partial class MainWindow : Window
               $"(at {moved.TimelineStartSeconds:0.00000}s, expected 49.47000)",
               Math.Abs(moved.TimelineStartSeconds - 49.47) <= frame);
 
+        // --- the playhead (Daniel, 2026-10-27): parked at 58 s, well away from the hole's edges at
+        // 48 and 52, a section dropped 4 px short of it lands on it; so does one whose end is 4 px
+        // past it; Ctrl frees it; and while playing the playhead is moving, so it is not a target ---
+        const double ph = 58;
+        double len = moved.TimelineLengthSeconds;
+        double? DragStartTo(double target)
+            => Drag(emptyLane, At(emptyLane, moved.TimelineStartSeconds + 1), At(emptyLane, target + 1));
+        _vm.SeekTo(ph);
+        guide = DragStartTo(ph - 4 / pps);
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"a section dropped 4 px short of the playhead lands on it (at {moved.TimelineStartSeconds:0.00000}s, playhead at {ph})",
+              Math.Abs(moved.TimelineStartSeconds - ph) <= frame);
+        Check($"the guide line marks the playhead ({guide:0.000})", guide is { } gp && Math.Abs(gp - ph) <= frame);
+        Check($"the status bar says it snapped to the playhead (\"{_vm.Status}\")", _vm.Status.Contains("snapped to the playhead"));
+
+        DragStartTo(ph - len + 4 / pps);                      // its end 4 px past the playhead
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"a section whose end is dropped 4 px past the playhead ends on it (ends at {moved.TimelineEndSeconds:0.00000}s)",
+              Math.Abs(moved.TimelineEndSeconds - ph) <= frame);
+
+        _scriptedModifiers = ModifierKeys.Control;
+        DragStartTo(ph - 4 / pps);
+        _scriptedModifiers = null;
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"with Ctrl held it stops 4 px short of the playhead (at {moved.TimelineStartSeconds:0.00000}s, want {ph - 4 / pps:0.00000})",
+              Math.Abs(moved.TimelineStartSeconds - (ph - 4 / pps)) <= frame);
+
+        _scriptedModifiers = ModifierKeys.Control;
+        DragStartTo(ph - 3);                                  // away again, freely
+        _scriptedModifiers = null;
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        _vm.PlayPauseCommand.Execute(null);
+        bool playing = _vm.IsPlaying;
+        DragStartTo(ph - 4 / pps);
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        _vm.StopCommand.Execute(null);
+        Check($"while playing, the playhead is not a target: the section stops 4 px short of it (playing: {playing}; at {moved.TimelineStartSeconds:0.00000}s, want {ph - 4 / pps:0.00000})",
+              playing && Math.Abs(moved.TimelineStartSeconds - (ph - 4 / pps)) <= frame);
+
+        _scriptedModifiers = ModifierKeys.Control;            // back where the checks below expect it
+        DragStartTo(49.47);
+        _scriptedModifiers = null;
+        moved = empty.Clips.First(c => c.Id == sectionId);
+        Check($"put back at 49.47 for the loop checks (at {moved.TimelineStartSeconds:0.00000}s)", Math.Abs(moved.TimelineStartSeconds - 49.47) <= frame);
+
         // --- loop mode: drag the right end three lengths further ---
         _vm.LoopMode = true;
         double end = moved.TimelineEndSeconds;

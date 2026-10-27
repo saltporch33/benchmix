@@ -559,11 +559,11 @@ public static class TimelineEditor
     /// <summary>
     /// Where one end of a stretch being marked lands near <paramref name="timelineSeconds"/>, as a
     /// frame of <paramref name="track"/>: snapped, within the snap distance, to the nearest section
-    /// edge on any track or to the playhead; otherwise exactly there. An edge on the track itself is
-    /// taken to its exact frame, so a stretch marked from one section's edge to another's cuts
-    /// exactly there and leaves no sliver behind. Never before 0:00.
+    /// edge on any track or to the playhead in <paramref name="snap"/>; otherwise exactly there. An
+    /// edge on the track itself is taken to its exact frame, so a stretch marked from one section's
+    /// edge to another's cuts exactly there and leaves no sliver behind. Never before 0:00.
     /// </summary>
-    public static long SnapStretchEnd(TrackModel track, double timelineSeconds, double? playheadSeconds,
+    public static long SnapStretchEnd(TrackModel track, double timelineSeconds,
                                       SnapSettings snap, ProjectSession session, out double? snappedTo)
     {
         snappedTo = null;
@@ -572,7 +572,7 @@ public static class TimelineEditor
         {
             var edge = Snapping.Nearest(Snapping.EdgesOf(session.Project.Tracks, session, null), at, snap);
             double edgeDistance = edge is { } e ? Math.Abs(e.TimelineSeconds - at) : double.PositiveInfinity;
-            if (playheadSeconds is { } p && p >= 0 && Math.Abs(p - at) <= snap.RadiusSeconds && Math.Abs(p - at) < edgeDistance)
+            if (snap.Playhead is { } p && Math.Abs(p - at) <= snap.RadiusSeconds && Math.Abs(p - at) < edgeDistance)
             {
                 snappedTo = p;
                 return TrackFrameAt(track, p, session);

@@ -702,3 +702,19 @@ reading taken, and it is a default he can change.
 | **With nothing audible, the Render button refuses** and says that every track with sound on it is muted or silenced by a solo. | A file of nothing but two seconds of silence helps nobody, and the reason is on screen. |
 | **The status bar names what was left out, and why**: "Left out: Topper (muted)", or "(not soloed)". | A file shorter than the project should say what it dropped, or a lit M that was forgotten looks like a bug in the render. |
 | **Not changed: the file still starts at 0:00**, even when the first audible section is later, and still ends with the 2 s tail, so fades finish. | The first second of the file is still the first second of the mix, so a render lines up with the project. |
+
+
+## 2026-10-27 — snapping to the playhead
+
+Daniel, 2026-10-27, verbatim: *"should be able to snap to play
+marker"*. How it should behave beyond that was not discussed with him; everything below is a
+default he can change.
+
+| Decision | Why |
+| --- | --- |
+| **A section being dragged, a group being dragged, an end being trimmed and a tempo ramp's dot all snap to the playhead**, within the same 10 px as to a section edge, by whichever end of the section is nearer. Mark ends and warp markers already did. | His request. Parking the playhead on a beat — a click on the ruler, or Alt+click in a lane — and dropping onto it is how he aims. |
+| **A section edge wins a tie with the playhead.** | On the dragged section's own track an edge is taken to its exact frame, which is what makes a butt join. The playhead is only ever a position, and a tie that went to it could turn a butt join into a near miss with a declick either side. |
+| **While playing, the playhead is not a target** — for any drag, mark ends and warp markers included. (Those two used to snap to it whatever the transport was doing.) | It is moving: a section dragged while a loop plays would jump as the playhead swept past it. |
+| **Ctrl frees a drag from the playhead too**, as from edges. Never to bars. | One rule for snapping. |
+| **The playhead travels with the snap settings** (`SnapSettings.PlayheadSeconds`), decided once per pointer move by the window, instead of being a separate argument. | One source. Mark ends and warp markers took it as a separate argument, and the section drags would have been a third way of passing it. |
+| **The status bar says "on the playhead"** while dragging and "snapped to the playhead" on the drop, and the guide line is drawn on it. | As for an edge. |

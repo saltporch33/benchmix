@@ -1545,7 +1545,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public void BeginMark(TrackViewModel t, double pressedSeconds, bool free)
     {
-        long anchor = TimelineEditor.SnapStretchEnd(t.Model, pressedSeconds, PositionSeconds, SnapFor(free), Session, out _);
+        long anchor = TimelineEditor.SnapStretchEnd(t.Model, pressedSeconds, SnapFor(free), Session, out _);
         _markDrag = new MarkDragState(t, anchor);
         SelectClip(null);
     }
@@ -1561,11 +1561,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void DragMarkTo(double seconds, bool free)
     {
         if (_markDrag is not { } d || !Tracks.Contains(d.Track)) return;
-        long at = TimelineEditor.SnapStretchEnd(d.Track.Model, seconds, PositionSeconds, SnapFor(free), Session, out var snapped);
+        var snap = SnapFor(free);
+        long at = TimelineEditor.SnapStretchEnd(d.Track.Model, seconds, snap, Session, out var snapped);
         SnapLineSeconds = snapped;
         SetMark(d.Track, d.Anchor, at);
         var m = d.Track.Mark!.Value;
-        Status = $"Marking {Describe(d.Track, m.Start, m.End)}{(snapped is null ? "" : " — on an edge")}";
+        Status = $"Marking {Describe(d.Track, m.Start, m.End)}{(snapped is null ? "" : snapped == snap.PlayheadSeconds ? " — on the playhead" : " — on an edge")}";
     }
 
     /// <summary>The drag let go: a stretch too short to be meant is taken away again.</summary>
@@ -1599,7 +1600,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void MarkFromPlayhead(TrackViewModel t, double seconds, bool free)
     {
         long from = TimelineEditor.TrackFrameAt(t.Model, PositionSeconds, Session);
-        long to = TimelineEditor.SnapStretchEnd(t.Model, seconds, null, SnapFor(free), Session, out _);
+        // The mark runs from the playhead, so its far end must not snap back onto it.
+        long to = TimelineEditor.SnapStretchEnd(t.Model, seconds, SnapFor(free) with { PlayheadSeconds = null }, Session, out _);
         if (Math.Abs(to - from) < MinimumMarkFrames)
         {
             Status = "That is where the playhead is. Shift+click further along to mark from the playhead to there.";
@@ -2035,7 +2037,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void DragWarpTo(double seconds, bool free)
     {
         if (_warpDrag is null || _warpPress is not { } p) return;
-        _warpDrag.DragTo(seconds, SnapFor(free), PositionSeconds);
+        _warpDrag.DragTo(seconds, SnapFor(free));
         Redraw(p.Track);
         RecomputeLength();
         SnapLineSeconds = _warpDrag.SnapLineSeconds;
@@ -2119,10 +2121,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
-    /// <summary>Where a drag is lined up against another section's edge, for the guide line.</summary>
+    /// <summary>Where a drag is lined up against another section's edge or the playhead, for the guide line.</summary>
     [ObservableProperty] private double? _snapLineSeconds;
 
-    private SnapSettings SnapFor(bool free) => new(!free, PixelsPerSecond);
+    /// <summary>
+    /// How this pointer move snaps: off with Ctrl held, and to the playhead only while stopped
+    /// (Daniel, 2026-10-27) — playing, it is moving, and a section would jump as it swept past.
+    /// </summary>
+    private SnapSettings SnapFor(bool free) => new(!free, PixelsPerSecond, IsPlaying ? null : PositionSeconds);
 
     /// <summary>The track a section is currently on during a move.</summary>
     public TrackViewModel? MovingOn => _move is null ? null : Tracks.FirstOrDefault(t => ReferenceEquals(t.Model, _move.Current));
@@ -2245,7 +2251,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Redraw(_dragHome);
         SelectById(_dragClipId);
         SnapLineSeconds = _trim.SnapLineSeconds;
-        Status = $"{_dragHome.Name}: section {SelectedClip?.LengthSeconds ?? 0:0.0}s{(_trim.SnappedTo is null ? "" : " — on a section edge")}";
+        Status = $"{_dragHome.Name}: section {SelectedClip?.LengthSeconds ?? 0:0.0}s{(_trim.SnappedTo is { } s ? $" — on {s}" : "")}";
     }
 
     /// <summary>
