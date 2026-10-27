@@ -37,6 +37,12 @@ clip → stretch → 3-band EQ → clip envelope → gain/pan → sum → master
 Live playback pulls blocks from that chain in realtime. The renderer pulls blocks from *the same
 object* as fast as the CPU allows. There is no second implementation that could disagree.
 
+A render holds what can be heard, and no more. A muted track — by its own M, or because another
+track is soloed — is silent in the file as it is in the speakers, and the file ends where the last
+track that can be heard ends (`MixGraph.AudibleLengthFrames`), not where the longest track does
+(2026-10-27, his request). The one place the two differ: with nothing audible the speakers play
+silence, and the Render button refuses.
+
 ## Keeping untouched audio untouched
 
 Three things could quietly alter audio that nobody asked to alter, and each is handled:

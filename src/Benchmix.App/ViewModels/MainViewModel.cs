@@ -786,6 +786,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private async Task RenderAsync()
     {
         if (_session is null || Tracks.Count == 0) { Status = "Nothing to render yet."; return; }
+        // A render holds what can be heard (Daniel, 2026-10-27). With nothing audible there is no
+        // file worth writing, and the reason is on screen: an M that is lit, or an S on another track.
+        if (Session.Graph.AudibleLengthFrames == 0)
+        {
+            Status = Session.LeftOutOfRender().Count > 0
+                ? "Nothing can be heard — every track with sound on it is muted, or silenced by a solo — so there is nothing to render."
+                : "Nothing to render yet: the tracks are empty.";
+            return;
+        }
         if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
 
         var dlg = new SaveFileDialog
@@ -802,7 +811,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             3 => RenderFormat.Float32,
             _ => RenderFormat.Pcm24,
         };
+        await RenderToAsync(dlg.FileName, format);
+    }
 
+    /// <summary>
+    /// The Render button's work once its dialog has a file name: renders what can be heard —
+    /// muted tracks and, while anything is soloed, the tracks that are not, are left out, and the
+    /// file ends where the last audible track ends. The status bar names what was left out and
+    /// why. Public so a scripted run can render without the dialog.
+    /// </summary>
+    public async Task RenderToAsync(string path, RenderFormat format)
+    {
         bool wasPlaying = IsPlaying;
         Session.Engine.Pause();
         // Pausing stops the next block; this waits out the one already in flight, so the renderer
@@ -822,14 +841,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 TailSeconds = 2.0,
                 ApplyLimiter = Session.Project.LimiterEnabled,
             };
-            var result = await Session.RenderAsync(dlg.FileName, options, progress);
+            var result = await Session.RenderAsync(path, options, progress);
 
             double peakDb = result.PeakBefore > 1e-6 ? 20 * Math.Log10(result.PeakBefore) : -120;
+            var leftOut = Session.LeftOutOfRender();
+            string without = leftOut.Count == 0 ? ""
+                : $" Left out: {string.Join(", ", leftOut.Select(x => $"{x.Track.Name} ({x.Why})"))}.";
             Status = $"Rendered {result.Seconds:0.0}s to {Path.GetFileName(result.Path)} in {result.ElapsedSeconds:0.0}s, "
                    + $"peaking at {peakDb:+0.0;-0.0} dBFS"
                    + (result.Clipped
                         ? " — the limiter pulled that down. Lower the master if you would rather it did not."
-                        : ".");
+                        : ".")
+                   + without;
         }
         catch (Exception ex)
         {

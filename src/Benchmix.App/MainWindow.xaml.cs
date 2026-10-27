@@ -3471,6 +3471,7 @@ public partial class MainWindow : Window
         await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
         await CheckWarpButtonsAsync(Check, Click, Buttons, Labels);
         await CheckSoloButtonsAsync(Check);
+        await CheckRenderHeardAsync(Check);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -3850,6 +3851,79 @@ public partial class MainWindow : Window
         _vm.RedoCommand.Execute(null);
         await Settle();
         check($"Ctrl+Y twice ends with nothing soloed ({State()}, want +_+_)", State() == "+_+_");
+    }
+
+    /// <summary>
+    /// A render holds only what can be heard and ends where the last audible track ends (Daniel,
+    /// 2026-10-27): through the view-model's render — the Render button's work once its dialog
+    /// has a name — to a file in the temp folder, with the longer song muted and then with the
+    /// shorter one soloed, reading the file back; and the button itself refuses, saying why, when
+    /// nothing can be heard.
+    /// </summary>
+    private async Task CheckRenderHeardAsync(Action<string, bool> check)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        }
+        await Settle();
+        if (_vm.Tracks.Count != 2 || _vm.Tracks.Any(t => t.Muted || t.Soloed))
+        {
+            check($"two unmuted, unsoloed tracks to render (found {_vm.Tracks.Count})", false);
+            return;
+        }
+
+        long rate = _vm.Session.SampleRate;
+        long EndOf(TrackViewModel t) => _vm.Session.VoiceFor(t.Model) is { } v ? v.TimelineOffsetFrames + v.TimelineLengthFrames : 0;
+        var (longer, shorter) = EndOf(_vm.Tracks[0]) >= EndOf(_vm.Tracks[1])
+            ? (_vm.Tracks[0], _vm.Tracks[1]) : (_vm.Tracks[1], _vm.Tracks[0]);
+        long want = EndOf(shorter) + 2 * rate;                     // the shorter song, then the 2 s tail
+        check($"the two songs differ in length, so the checks below can tell ({EndOf(longer)} and {EndOf(shorter)} frames)",
+              EndOf(longer) > EndOf(shorter));
+
+        static long FramesIn(string path)
+        {
+            using var reader = new NAudio.Wave.WaveFileReader(path);
+            return reader.Length / reader.WaveFormat.BlockAlign;
+        }
+
+        var dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "render-check");
+        Directory.CreateDirectory(dir);
+        string wav = Path.Combine(dir, "render-check.wav");
+        try
+        {
+            longer.Muted = true;                                    // what the M button's binding does
+            await _vm.RenderToAsync(wav, Benchmix.Engine.Audio.RenderFormat.Pcm16);
+            await Settle();
+            long got = FramesIn(wav);
+            check($"with the longer song muted, the file ends 2 s after the shorter one ({got} frames, want {want}) — "
+                + "otherwise the muted song's length is silence on the end of the file", got == want);
+            check($"the status names the muted song as left out (\"{_vm.Status}\")", _vm.Status.Contains($"{longer.Name} (muted)"));
+
+            longer.Muted = false;
+            _vm.Solo(shorter, alongside: false);                    // what a click on its S does
+            await _vm.RenderToAsync(wav, Benchmix.Engine.Audio.RenderFormat.Pcm16);
+            await Settle();
+            got = FramesIn(wav);
+            check($"with the shorter song soloed, the file ends 2 s after it ({got} frames, want {want})", got == want);
+            check($"the status names the other song as left out, not soloed (\"{_vm.Status}\")", _vm.Status.Contains($"{longer.Name} (not soloed)"));
+            _vm.Solo(shorter, alongside: false);                    // and off again
+
+            longer.Muted = true;
+            shorter.Muted = true;
+            _vm.RenderCommand.Execute(null);
+            await Settle();
+            check($"with every track muted the Render button refuses and says why (\"{_vm.Status}\")",
+                  _vm.Status.Contains("nothing to render") && _vm.Status.Contains("muted"));
+            longer.Muted = false;
+            shorter.Muted = false;
+            await Settle();
+        }
+        finally
+        {
+            try { if (File.Exists(wav)) File.Delete(wav); } catch { }
+        }
     }
 
     private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,

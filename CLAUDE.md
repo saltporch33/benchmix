@@ -42,6 +42,10 @@ mistakes, not by describing the project.
   position is counted in its frames. When Windows moves playback to an output at another rate,
   `DeviceRateConverter` converts on the way out, live only (2026-10-12) — a render is the mix as
   it is. Do not "fix" it by rebuilding the graph at the new rate.
+- **A render ends where the last track you can hear ends**, not where the longest track does, and
+  leaves out muted tracks and, while anything is soloed, the rest (`MixGraph.AudibleLengthFrames`;
+  his request, 2026-10-27). A file shorter than the project is not a truncated render: look for a
+  lit M or S. The status bar names what was left out, and with nothing audible the button refuses.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.
@@ -143,7 +147,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
 | `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, the wheel over the ruler and over the waveforms, renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo) — 276 checks (2026-10-27) |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 55 checks (2026-10-27) |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), a render with the longer song muted and with the shorter one soloed, read back from the file, and the Render button refusing with nothing audible, Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 61 checks (2026-10-27) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, and warp markers |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
@@ -212,10 +216,13 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - **Warp markers have never been heard.** Since 2026-10-27 `dotnet test` (0 skipped) and every
   probe have passed on his machine, on a staged build; before that, only on Linux. The jump in speed
   at a marker is a measurement.
-- **His copy of Benchmix is a standalone `Benchmix.exe` on his OneDrive Desktop**, not the build
-  folder. Double-clicking a `.benchmix` opens the build folder's exe, which was still the 12 Oct one
-  on 2026-10-27 and refuses projects saved by anything newer. Read the Desktop exe's version
-  (`0.1.0+<commit>`) before saying what his copy has; replacing it touches his Desktop, so ask.
+- **His copy of Benchmix is on his OneDrive Desktop**, not the build folder: one standalone exe per
+  release, named as the release asset (`Benchmix-v2026.10.27.exe`). Each verified release goes
+  there too, without asking — *"just name each new exe with a versioned serial number. and put it on
+  desktop"* (2026-10-27). Copy the very exe verify-exe passed and never overwrite an older one.
+  Double-clicking a `.benchmix` opens the build folder's exe, which was still the 12 Oct one on
+  2026-10-27 and refuses projects saved by anything newer. Read the newest Desktop exe's version
+  (`0.1.0+<commit>`) before saying what his copy has.
 
 ## Working with Daniel
 

@@ -374,8 +374,8 @@ public class TempoRampRenderTests
         // Track frames reached by the end of the ramp, then the rest at 1.25.
         double atRampEnd = F(6.0 * Rate, 1.0, 2.0 * Rate, 6.0 * Rate, 1.25);
         double end = 6.0 * Rate + (audio.FrameCount - atRampEnd) / 1.25;
-        Assert.True(Math.Abs(graph.LengthFrames - end) <= 1,
-            $"the render would end at frame {graph.LengthFrames}, not {end:F0}: it stops before the ramped track finishes, or runs on past it");
+        Assert.True(Math.Abs(graph.AudibleLengthFrames - end) <= 1,
+            $"the render would end at frame {graph.AudibleLengthFrames}, not {end:F0}: it stops before the ramped track finishes, or runs on past it");
     }
 
     [Fact]

@@ -28,7 +28,9 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 - **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
   the keys you already use act on exactly that part, wherever its ends fall.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
-- **Render** to 16/24-bit or 32-bit float WAV, with a safety limiter.
+- **Render** to 16/24-bit or 32-bit float WAV, with a safety limiter. The file is what you hear:
+  muted tracks are left out, a solo leaves out every other track, and it ends where the last track
+  you can hear ends.
 
 ## What it deliberately does not do
 
@@ -49,7 +51,8 @@ control on screen is one you asked for.
    <kbd>Ctrl</kbd> to stop it snapping at all.
 5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
 6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak.
-7. **Render to file.**
+7. **Render to file.** The file holds what you can hear: mute a track, or solo the ones you want,
+   and the rest is left out. The status bar names anything it left out.
 
 ### Controls
 

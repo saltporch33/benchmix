@@ -687,3 +687,18 @@ on, that’s the track it will play solo"*
 | **One undo step per click**, however many tracks it changes. | As for every edit. |
 | **Mute still wins over solo**; soloing a muted track now says so in the status bar. | The rule is unchanged; the silence was unexplained. |
 | **A project saved with several tracks soloed opens with them all soloed.** | Nothing in the project file changed. |
+
+
+## 2026-10-27 — a render holds what can be heard
+
+Daniel, 2026-10-27, verbatim: *"mixdown should only do non-muted or
+selected tracks only"*. Which tracks "selected" means was not discussed with him; soloed is the
+reading taken, and it is a default he can change.
+
+| Decision | Why |
+| --- | --- |
+| **A render leaves out every muted track and, while anything is soloed, every track that is not soloed** — exactly what the speakers leave out — **and the file ends where the last track that can be heard ends.** Before, a muted track was already silent in the file, but the file ran on in silence to the end of the longest track, muted or not. | His request. A mixdown is what he heard. |
+| **"Selected tracks" is read as the soloed tracks**: solo the tracks you want, then render. | Solo is the one way Benchmix has of picking tracks to hear, and it is already what decides what the speakers play, so a render decided by the same thing cannot differ from the preview. The highlighted track strip is the paste target, not a choice of what to hear, and a selection of sections is not a choice of tracks. |
+| **With nothing audible, the Render button refuses** and says that every track with sound on it is muted or silenced by a solo. | A file of nothing but two seconds of silence helps nobody, and the reason is on screen. |
+| **The status bar names what was left out, and why**: "Left out: Topper (muted)", or "(not soloed)". | A file shorter than the project should say what it dropped, or a lit M that was forgotten looks like a bug in the render. |
+| **Not changed: the file still starts at 0:00**, even when the first audible section is later, and still ends with the 2 s tail, so fades finish. | The first second of the file is still the first second of the mix, so a render lines up with the project. |

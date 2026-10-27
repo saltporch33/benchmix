@@ -15,7 +15,7 @@ public enum RenderFormat
 public sealed record RenderOptions
 {
     public RenderFormat Format { get; init; } = RenderFormat.Pcm24;
-    /// <summary>Extra silence rendered past the last clip so reverb tails and fades finish.</summary>
+    /// <summary>Extra silence rendered past the last clip that can be heard, so fades finish.</summary>
     public double TailSeconds { get; init; } = 2.0;
     /// <summary>Render only this region, in engine frames. Null renders everything.</summary>
     public (long Start, long End)? Region { get; init; }
@@ -30,6 +30,13 @@ public sealed record RenderResult(string Path, long Frames, double Seconds, floa
 /// Bounces the mix to a file by pulling blocks from the very same <see cref="MixGraph"/> that
 /// feeds the speakers. Nothing is recomputed differently for the render — the only difference is
 /// that blocks are pulled as fast as the CPU allows instead of in realtime.
+///
+/// <para>
+/// The file holds what can be heard, and no more: a muted track is silent in it, as in the
+/// speakers, and the file ends where the last track that can be heard ends — not where the
+/// longest track does (Daniel, 2026-10-27). Before then a muted track longer than the rest left
+/// its whole length as silence on the end of every render.
+/// </para>
 /// </summary>
 public static class Renderer
 {
@@ -42,7 +49,7 @@ public static class Renderer
         var started = System.Diagnostics.Stopwatch.StartNew();
 
         long start = options.Region?.Start ?? 0;
-        long end = options.Region?.End ?? (graph.LengthFrames + (long)(options.TailSeconds * graph.SampleRate));
+        long end = options.Region?.End ?? (graph.AudibleLengthFrames + (long)(options.TailSeconds * graph.SampleRate));
         end = Math.Max(start, end);
         long total = end - start;
 

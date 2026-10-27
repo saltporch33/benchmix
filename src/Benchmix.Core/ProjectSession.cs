@@ -522,11 +522,15 @@ public sealed class ProjectSession : IDisposable
         v.Gain = model.Gain;
         v.Pan = model.Pan;
 
-        // Solo is a project-level idea: soloing one track mutes the others, and an explicit mute
-        // still wins over being soloed.
-        bool anySolo = Project.HasSolo;
-        v.Muted = model.Muted || (anySolo && !model.Soloed);
+        v.Muted = !IsHeard(model);
     }
+
+    /// <summary>
+    /// True when the track plays in the mix — in the speakers and in a render alike. Solo is a
+    /// project-level idea: soloing one track silences the others, and an explicit mute still wins
+    /// over being soloed.
+    /// </summary>
+    public bool IsHeard(TrackModel track) => !track.Muted && (!Project.HasSolo || track.Soloed);
 
     public void ApplyAll()
     {
@@ -590,6 +594,9 @@ public sealed class ProjectSession : IDisposable
     public int? SuggestSemitones(TrackModel track, TrackModel reference)
         => Keys.SemitonesBetween(track.Key, reference.Key);
 
+    /// <summary>
+    /// Renders what can be heard (<see cref="IsHeard"/>), ending where the last audible track ends.
+    /// </summary>
     public Task<RenderResult> RenderAsync(string path, RenderOptions options,
                                           IProgress<double>? progress = null,
                                           CancellationToken cancel = default)
@@ -598,6 +605,14 @@ public sealed class ProjectSession : IDisposable
         // the graph is not safe to pull from two threads at once.
         return Task.Run(() => Renderer.Render(Graph, path, options, progress, cancel), cancel);
     }
+
+    /// <summary>
+    /// The tracks with sections on them that a render would leave out, each with why: "muted", or
+    /// "not soloed" while another track is. Empty when the render is the whole project.
+    /// </summary>
+    public List<(TrackModel Track, string Why)> LeftOutOfRender()
+        => Project.Tracks.Where(t => t.Clips.Count > 0 && !IsHeard(t))
+                         .Select(t => (t, t.Muted ? "muted" : "not soloed")).ToList();
 
     private void ReleaseUnusedClips()
     {

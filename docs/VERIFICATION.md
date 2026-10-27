@@ -942,6 +942,27 @@ engine's own mute, not the lit button: the same five, the status hint, and one C
 click that changed both tracks. **Broken on purpose**: with a plain click made additive again, the two
 tests written for it failed and the other four passed.
 
+## 2026-10-27 — a render holds what can be heard
+
+**444 tests: 444 passed, 0 failed, 0 skipped** — the 439 above and the five of `RenderScopeTests`.
+
+**The render's length** (`RenderScopeTests`): two ramps running opposite ways, 4 s and 10 s. With
+the 10 s song muted, or with the 4 s song soloed, the file is 4.5 s (the tail is 0.5 s in the test)
+and byte for byte the file a session holding only the 4 s song renders. Unmuting puts the 10 s song
+back: 10.5 s, byte for byte the file of both. With every track muted, or with the soloed track muted
+too, the audible length is 0 while the longest track is still 10 s. What a render leaves out is listed
+with its reason, and an empty track that is muted is not listed. **Broken on purpose**: with the
+render's end taken from the longest track again, the three tests that measure the file failed and
+the two that read the lists passed.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--buttontest` **61 checks** (55 before): through the view-model's render — the Render button's
+work once its dialog has a name — to a file in the temp folder, read back with NAudio. With the
+longer song muted (T.R.O.Y., 13,007,151 frames) the file is 13,017,887 frames: the shorter song's
+12,921,887 and the 2 s tail; the same with the shorter song soloed; the status names the song left
+out and why, each time; with both muted the button refuses and says why. `--gesturetest` still
+276. Nobody has listened to a render.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

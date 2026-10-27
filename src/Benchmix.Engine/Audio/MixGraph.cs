@@ -83,7 +83,7 @@ public sealed class MixGraph : IDisposable
         set => _targetMasterGain = Math.Clamp(value, 0, 4);
     }
 
-    /// <summary>Longest timeline position any track reaches, in frames.</summary>
+    /// <summary>Longest timeline position any track reaches, in frames, heard or not.</summary>
     public long LengthFrames
     {
         get
@@ -91,6 +91,23 @@ public sealed class MixGraph : IDisposable
             long max = 0;
             foreach (var t in _tracks)
                 max = Math.Max(max, t.TimelineOffsetFrames + t.TimelineLengthFrames);
+            return max;
+        }
+    }
+
+    /// <summary>
+    /// Longest timeline position any track that can be heard reaches, in frames. A track that is
+    /// muted — by its own M, or because another track is soloed — does not count. This is where a
+    /// render ends (Daniel, 2026-10-27): the file does not run on in silence to the end of a track
+    /// nobody can hear.
+    /// </summary>
+    public long AudibleLengthFrames
+    {
+        get
+        {
+            long max = 0;
+            foreach (var t in _tracks)
+                if (!t.Muted) max = Math.Max(max, t.TimelineOffsetFrames + t.TimelineLengthFrames);
             return max;
         }
     }
