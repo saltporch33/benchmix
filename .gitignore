@@ -494,3 +494,6 @@ models/
 
 # Listening clips made for Daniel, not part of the project
 /listen/
+
+# Release exes, one per version; the Desktop shortcut points at the newest (2026-10-27)
+releases/

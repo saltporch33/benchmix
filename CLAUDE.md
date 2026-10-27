@@ -216,13 +216,16 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - **Warp markers have never been heard.** Since 2026-10-27 `dotnet test` (0 skipped) and every
   probe have passed on his machine, on a staged build; before that, only on Linux. The jump in speed
   at a marker is a measurement.
-- **His copy of Benchmix is on his OneDrive Desktop**, not the build folder: one standalone exe per
-  release, named as the release asset (`Benchmix-v2026.10.27.exe`). Each verified release goes
-  there too, without asking — *"just name each new exe with a versioned serial number. and put it on
-  desktop"* (2026-10-27). Copy the very exe verify-exe passed and never overwrite an older one.
-  Double-clicking a `.benchmix` opens the build folder's exe, which was still the 12 Oct one on
-  2026-10-27 and refuses projects saved by anything newer. Read the newest Desktop exe's version
-  (`0.1.0+<commit>`) before saying what his copy has.
+- **His copy of Benchmix is one shortcut on his OneDrive Desktop, named for the release**
+  (`Benchmix-v2026.10.27.2.lnk`), pointing at that release's exe in the project's `releases\`
+  folder (gitignored), where every older release stays. After each verified release, without
+  asking: copy the very exe verify-exe passed to `releases\Benchmix-vYYYY.MM.DD.exe`, and replace
+  the Desktop shortcut with one named for it — *"Just keep one shortcut to benchmix on my desktop.
+  have it point to the latest release, and have it named as usual with release number etc. old
+  releases should just stay in a project folder once you make a new release."* (2026-10-27). Never
+  delete an older exe. Double-clicking a `.benchmix` opens the build folder's exe, which was still
+  the 12 Oct one on 2026-10-27 and refuses projects saved by anything newer. Read the shortcut's
+  target and its version (`0.1.0+<commit>`) before saying what his copy has.
 
 ## Working with Daniel
 
