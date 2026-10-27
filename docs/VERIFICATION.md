@@ -1008,6 +1008,10 @@ shots, but nobody has looked at them, and nobody has used the pan or the wheel b
 A first cut made a knob take the wheel only once clicked. It passed the same checks (295, at 16:00)
 and was taken out within the hour on his instruction.
 
+**32-bit float first in the Render box** (71943fd, the same evening): one line in the dialog, no
+test reaches it; `scripts/verify-exe.ps1` on the build from that commit, all nine runs passed
+(297, 61) and stayed out of the way.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
