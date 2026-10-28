@@ -1125,7 +1125,7 @@ the status says it takes effect once something ends where it starts. `--buttonte
 
 Four messages removed (`MainViewModel`: `StopAndReturn`, `StopToStart`, `PlayFrom`, `MarkModeClick`);
 no test or probe read them (grepped), so the bar is unchanged: **482 tests, 0 failed, 0 skipped**,
-`--gesturetest` 329, `--buttontest` 71, all nine runs passed and stayed out of the way.
+`--gesturetest` **332** (329 before: the zoom keys are bound on the number pad as on the top row — Ctrl with its +, − and 0 — after his comment the same afternoon that Ctrl+0 there did nothing; three checks, all three bindings Ctrl-modified), `--buttontest` 71, all nine runs passed and stayed out of the way.
 
 ## The stretch engine
 

@@ -69,7 +69,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | undo / redo |
-| <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> | zoom in / out / fit |
+| <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> — top row or number pad | zoom in / out / fit |
 | <kbd>Ctrl</kbd>+scroll | zoom about the pointer |
 | <kbd>Shift</kbd>+scroll | scroll sideways |
 | hold the right mouse button and drag — on the ruler, the lanes or the track controls | pan the view sideways, and up and down through the tracks |

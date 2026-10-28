@@ -810,3 +810,12 @@ that i hit play or pause."*
 | --- | --- |
 | **Double-click to play, the wheel click, the wheel double-click, Stop and a click in MARK MODE say nothing.** "Playing from …", "Stopped, back at …", "Stopped, back at 0:00." and "Playhead at … on …" are gone. "Nothing to play yet." stays, as does every message about the listening loop, the sound output, rendering and edits. | His words. The status line is what he reads before Ctrl+Z; a note that he pressed play pushes the edit he wants to see off it. |
 | **Not changed yet: what Ctrl+Z will take back is not shown.** Offered to end every edit's message with it ("… Ctrl+Z: fade in"); waiting on his word. His further idea — an action log to unwind to a chosen state — is his "future idea, not right now (too complex)". | One feature per approval. |
+
+## 2026-10-28 — the number pad zooms too
+
+Daniel, 2026-10-28, verbatim: *"ctrl 0 on top row numbers works, but didnt work
+on keybad on right side of keyboard for some reason (made sure num lock was toggled correctly)"*.
+
+| Decision | Why |
+| --- | --- |
+| **Ctrl with the number pad's +, − and 0 zoom in, out and fit**, exactly as Ctrl with the top row's =, − and 0 do. Three more KeyBindings, all Ctrl-modified. | His comment. The pad's keys are different keys to Windows (`Add`, `Subtract`, `NumPad0`), never bound before. Ctrl keeps them out of any box being typed in, as the rule since 2026-10-03 requires. |

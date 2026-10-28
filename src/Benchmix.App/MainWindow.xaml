@@ -22,6 +22,11 @@
         <KeyBinding Key="OemPlus" Modifiers="Ctrl" Command="{Binding ZoomInCommand}"/>
         <KeyBinding Key="OemMinus" Modifiers="Ctrl" Command="{Binding ZoomOutCommand}"/>
         <KeyBinding Key="D0" Modifiers="Ctrl" Command="{Binding ZoomFitCommand}"/>
+        <!-- The number pad too (Daniel, 2026-10-28: "ctrl 0 on top row numbers works, but didnt work
+             on keybad on right side of keyboard"). Still Ctrl-modified, so a box being typed in is safe. -->
+        <KeyBinding Key="Add"      Modifiers="Ctrl" Command="{Binding ZoomInCommand}"/>
+        <KeyBinding Key="Subtract" Modifiers="Ctrl" Command="{Binding ZoomOutCommand}"/>
+        <KeyBinding Key="NumPad0"  Modifiers="Ctrl" Command="{Binding ZoomFitCommand}"/>
 
         <!-- Sections. Every one is Ctrl-modified on purpose: a bare-key binding on the Window
              fires from inside the PROJECT BPM box too, because a TextBox does not mark a plain

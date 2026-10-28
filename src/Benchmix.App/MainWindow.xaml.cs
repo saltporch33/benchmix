@@ -557,6 +557,14 @@ public partial class MainWindow : Window
         Check($"the tab row shows the one tab from the start ({_vm.Tabs.Count} in the row, {Descendants<Border>(TabRow).Count(b => b.Name == "TabChip")} chip(s) drawn)",
               _vm.Tabs.Count == 1 && _vm.Tabs[0].IsCurrent && Descendants<Border>(TabRow).Count(b => b.Name == "TabChip") == 1);
 
+        // The zoom keys, on the top row and on the number pad alike (Daniel, 2026-10-28: Ctrl+0 on
+        // the number pad did nothing). All Ctrl-modified, so none can fire inside a text box.
+        bool ZoomKey(Key key, ICommand command) => InputBindings.OfType<KeyBinding>()
+            .Any(b => b.Key == key && b.Modifiers == ModifierKeys.Control && ReferenceEquals(b.Command, command));
+        Check("Ctrl+= and Ctrl+NumPad+ both zoom in", ZoomKey(Key.OemPlus, _vm.ZoomInCommand) && ZoomKey(Key.Add, _vm.ZoomInCommand));
+        Check("Ctrl+- and Ctrl+NumPad- both zoom out", ZoomKey(Key.OemMinus, _vm.ZoomOutCommand) && ZoomKey(Key.Subtract, _vm.ZoomOutCommand));
+        Check("Ctrl+0 and Ctrl+NumPad0 both fit", ZoomKey(Key.D0, _vm.ZoomFitCommand) && ZoomKey(Key.NumPad0, _vm.ZoomFitCommand));
+
         // Handled cannot even be read on args with no RoutedEvent, so each one is stamped with the
         // event its handler is actually wired to in XAML.
         var down = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
