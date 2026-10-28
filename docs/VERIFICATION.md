@@ -1145,6 +1145,38 @@ paused on the very frame the playhead had reached when they were made — paused
 pauses it rather than starting it, so it measures only the return; the other seven measure both.)
 `--buttontest` still 71.
 
+## 2026-10-28 — a project follows its songs
+
+**490 tests: 490 passed, 0 failed, 0 skipped** — the 482 before and the eight of `RelinkTests`,
+on real files: small ramp WAVs written to a temp folder, one slope per song so no two share a
+fingerprint, moved and renamed with `File.Move`.
+
+**The search** (`RelinkTests`): a project whose two songs moved with it is relinked to both, "next
+to the project", its paths pointing into the new folder and a track and its section at the same
+file; songs kept in a folder beside the project are found there; a song renamed next to the
+project is found by its fingerprint, the song that did not move is untouched, and the fingerprint
+follows the new name; a decoy of the same size with different content is not taken for a renamed
+song; a song that still exists where the project says is left alone even with a same-named file
+next to the project; a project with nothing missing needs nothing. **Find missing file**
+(`SourceRelinker.Relink`): a song read by two tracks and three sections across two tabs is
+relinked in all five places, every path exists afterwards, and the found file's fingerprint is
+remembered. **The file**: adding a song remembers its fingerprint, which equals a fresh one of the
+file, survives a save and reopen, and leaves the file at version 6. **Broken on purpose**: with
+the fingerprint step taken out of `Resolve`, 2 of the 8 failed — the renamed song and the decoy;
+the six others do not depend on it.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--buttontest` **79 checks** (71 before), last of all, after New has emptied the project: a project
+written to a temp folder with the two songs beside it — the bed under its own name, the topper
+renamed — and paths pointing at `C:\nowhere`, plus a third song that is nowhere, opened the way a
+double-click opens one: it opens with three tracks; the bed is loaded from next to the project;
+the topper is loaded by its fingerprint from `renamed.mp3`; the third still reads `Missing:`; the
+status names 2 found and 1 missing and points at Find missing file; the strip menu offers *Find
+missing file…* on the missing track and not on a loaded one; `RelinkAsync` (what the item's file
+box feeds) loads the chosen file into the missing lane and says so; Save keeps the found places
+and both fingerprints, read back from the file. `--gesturetest` still 333. Never tried on the
+project he actually moved.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

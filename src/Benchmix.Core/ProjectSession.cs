@@ -1,4 +1,5 @@
 using Benchmix.Core.Model;
+using Benchmix.Core.Persistence;
 using Benchmix.Engine.Analysis;
 using Benchmix.Engine.Audio;
 using Benchmix.Engine.Stems;
@@ -162,6 +163,7 @@ public sealed class ProjectSession : IDisposable
             ColorHex = NextColour(),
         };
         model.Clips.Add(new ClipModel { SourcePath = path });
+        SourceRelinker.Remember(Project, path);          // so a rename can be recognised later (2026-10-28)
 
         Project.Tracks.Add(model);
         if (Project.ProjectBpm <= 0 && analysis.Bpm > 0) Project.ProjectBpm = analysis.Bpm;
@@ -342,6 +344,7 @@ public sealed class ProjectSession : IDisposable
         // the whole project for an earlier copy. Carrying on regardless gave the removed track a
         // voice again — audio in every render with no track on screen to mute it.
         await EnsureAudioAsync(path, cancel);
+        SourceRelinker.Remember(Project, path);
         if (!Project.Tracks.Contains(track)) return EditResult.No("That track went away while the file was loading.");
 
         // Refuse before changing anything: a file too short to place must not rename the empty
@@ -406,6 +409,8 @@ public sealed class ProjectSession : IDisposable
             result.Primary.SaveWav(vocalsPath);
             result.Secondary.SaveWav(instPath);
         }, cancel);
+        SourceRelinker.Remember(Project, vocalsPath);
+        SourceRelinker.Remember(Project, instPath);
 
         var vocals = AddSeparatedTrack(source, vocalsPath, $"{source.Name} — vocals", "#E93D82");
         var instrumental = AddSeparatedTrack(source, instPath, $"{source.Name} — instrumental", "#12A594");

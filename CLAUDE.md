@@ -81,6 +81,15 @@ mistakes, not by describing the project.
   (2026-10-28, his words: *"remove these minor notifications. dont need a
   reminder that i hit play or pause."*). It is for edits, saves, renders, errors and the sound
   output — what he reads before Ctrl+Z. Do not add a "Playing from" or "Stopped" message back.
+- **A project follows its songs** (2026-10-28, his request after a move left eight lanes reading
+  `Missing:`). At open, a song that is not where the project says is looked for next to the
+  project file, then under its folder — by name first, then by fingerprint (`SourceRelinker`,
+  `BenchmixProject.SourceFingerprints`: size + a hash of the first 256 KB, taken when a song is
+  added and at every save). What is found is used and written back by the next save; a song that
+  still exists where the project says is never swapped for a same-named file. *Find missing file…*
+  on the strip menu shows only while something is missing. **The file's version stayed 6 on
+  purpose**: the fingerprints are a lookup table an older Benchmix can ignore. Do not bump it for
+  that, and do not make Save rewrite a path that still exists.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.
@@ -182,7 +191,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
 | `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, Alt+wheel over the ruler and over the waveforms, the plain wheel scrolling the tracks (over a waveform, the ruler and the strip; a knob under the pointer still turns), renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo), snapping to the playhead (a section's start and its end, the guide line, Ctrl, not while playing), scrolling the tracks (a right-drag up and down, PageUp/PageDown, Ctrl+Home/Ctrl+End, PageDown left to a text box), tabs (the + button, the chips, Move to tab, undo per tab, rename, remove and bring back, Ctrl+Tab, the row showing its tab from the start), the crossfade X (the standard X at every repeat join and none on a first section, the lane menu's lengths through the real item, the tick, the engine carrying it, undo, a length kept where nothing butts), the zoom keys on the top row and the number pad, the wheel click pausing in place and the double-click going back to where play started — 333 checks (2026-10-28) |
-| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), a render with the longer song muted and with the shorter one soloed, read back from the file, and the Render button refusing with nothing audible, Duplicate track through the real strip menu item (the copy below, its sections, knobs, selection and voice, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 71 checks (2026-10-27) |
+| `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), a render with the longer song muted and with the shorter one soloed, read back from the file, and the Render button refusing with nothing audible, Duplicate track through the real strip menu item (the copy below, its sections, knobs, selection and voice, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window), then a project moved to a temp folder with its songs beside it — one found by name, one renamed and found by its fingerprint, one nowhere and still Missing, the status saying so, *Find missing file…* offered only on the missing track and driven through the view-model (the real item opens a file box), Save keeping the found places — 79 checks (2026-10-28) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, warp markers, and the crossfade X at a loop's joins |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
@@ -257,6 +266,9 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - **No chosen crossfade length has been heard** (2026-10-28): the law and the lengths are
   `CrossfadeTests`, on a ramp and on a sine; the X and the menu are `--gesturetest`. Project files
   have been version 6 since; v2026.10.28 is the first release that opens one.
+- **A project following its songs was proven on copies in `%TEMP%`** (`RelinkTests`, and the
+  `--buttontest` moved-project check), never on the project he actually moved: he said he was not
+  in a hurry to open it, and nothing touches his files without his yes.
 - **His copy of Benchmix is one shortcut on his OneDrive Desktop, named for the release**
   (`Benchmix-v2026.10.27.2.lnk`), pointing at that release's exe in the project's `releases\`
   folder (gitignored), where every older release stays. After each verified release, without

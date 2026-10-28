@@ -754,6 +754,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             var result = ProjectStore.Load(path);
+            // A project that moved with its songs (Daniel, 2026-10-28): a song that is not where the
+            // project says is looked for next to the project, under its folder, and by fingerprint,
+            // before anything loads. What is found is written back on the next save.
+            var relinks = SourceRelinker.Resolve(result.Project, path);
             await Session.OpenAsync(result.Project);
 
             Tracks.Clear();
@@ -782,12 +786,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _histories.Clear();
             _tabPositions.Clear();
             RebuildTabs();
-            _dirty = false;
+            _dirty = relinks.Count > 0;              // the found places are worth a save
             RecomputeLength();
             UpdateTitle();
-            Status = missing > 0
-                ? $"Opened {Path.GetFileName(path)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence."
-                : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(path)}.";
+            string found = relinks.Count == 0 ? ""
+                : $" Found {relinks.Count} song{(relinks.Count == 1 ? "" : "s")} that had moved — "
+                  + string.Join(", ", relinks.GroupBy(r => r.How).Select(g => $"{g.Count()} {g.Key}"))
+                  + $". Save keeps the new place{(relinks.Count == 1 ? "" : "s")}.";
+            Status = (missing > 0
+                ? $"Opened {Path.GetFileName(path)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence. Right-click the track's controls → Find missing file…"
+                : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(path)}.") + found;
             return true;
         }
         catch (Exception ex)
@@ -828,6 +836,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Session.Project.MasterGain = MasterGain;
             Session.Project.LoopStartSeconds = LoopStart;
             Session.Project.LoopEndSeconds = LoopEnd;
+            SourceRelinker.RememberAll(Session.Project);     // every song's fingerprint, so a rename is recognised (2026-10-28)
 
             ProjectStore.Save(Session.Project, path, DateTime.Now.ToString("yyyyMMdd-HHmmss"));
             _projectPath = path;
@@ -2437,6 +2446,56 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private string MissingFileOf(TrackModel track)
         => ProjectSession.SourcePathsOf(track).FirstOrDefault(p => Session.AudioFor(new ClipModel { SourcePath = p }) is null)
            ?? track.SourcePath;
+
+    /// <summary>
+    /// Find missing file (Daniel, 2026-10-28): points the project at a song that moved somewhere the
+    /// open could not find it — a box to pick the file, then <see cref="RelinkAsync"/>.
+    /// </summary>
+    public async Task FindMissingFileAsync(TrackViewModel track)
+    {
+        if (_session is null || !Tracks.Contains(track)) return;
+        string? missing = ProjectSession.SourcePathsOf(track.Model).FirstOrDefault(p => Session.AudioFor(new ClipModel { SourcePath = p }) is null);
+        if (missing is null) { Status = $"{track.Name}: every file it uses is where the project says."; return; }
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
+
+        var dlg = new OpenFileDialog
+        {
+            Title = $"Find {Path.GetFileName(missing)}",
+            Filter = "Audio files|*.mp3;*.m4a;*.aac;*.wav;*.flac;*.wma;*.ogg;*.opus;*.aiff;*.aif|All files|*.*",
+            FileName = Path.GetFileName(missing),
+            InitialDirectory = _projectPath is null ? "" : Path.GetDirectoryName(_projectPath) ?? "",
+        };
+        if (dlg.ShowDialog() != true) return;
+        await RelinkAsync(missing, dlg.FileName);
+    }
+
+    /// <summary>
+    /// Points every track and section that read from <paramref name="from"/> at <paramref name="to"/>,
+    /// on every tab, loads it, and brings the rows back to life. One undo step.
+    /// </summary>
+    public async Task RelinkAsync(string from, string to)
+    {
+        if (_session is null) return;
+        if (!File.Exists(to)) { Status = $"There is no file at {to}."; return; }
+        PushUndo("find missing file");
+        int changed = SourceRelinker.Relink(Session.Project, from, to);
+        if (changed == 0) { Status = $"Nothing in this project reads from {Path.GetFileName(from)}."; return; }
+
+        IsBusy = true;
+        try
+        {
+            foreach (var model in Session.Project.AllTracks.Where(t => ProjectSession.SourcePathsOf(t).Contains(to, StringComparer.OrdinalIgnoreCase)).ToList())
+                await Session.LoadAudioAsync(model, default, wireVoice: Session.Project.Tracks.Contains(model));
+            foreach (var vm in Tracks)
+                if (Session.HasAllAudio(vm.Model)) vm.NotifyAudioLoaded();
+            Session.ApplyAll();
+            RecomputeLength();
+            MarkDirty();
+            Status = $"Found {Path.GetFileName(to)}: {changed} place{(changed == 1 ? "" : "s")} now read from it. Save keeps it.";
+        }
+        catch (Exception ex) { Status = $"Could not load {Path.GetFileName(to)}: {ex.Message}"; }
+        finally { IsBusy = false; }
+    }
 
     /// <summary>
     /// Records the project state before a gesture. Continuous gestures — a knob drag, a clip drag —

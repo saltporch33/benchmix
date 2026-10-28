@@ -3826,6 +3826,9 @@ public partial class MainWindow : Window
         UpdateLayout();
         var before = Labels();
         Check("both tracks loaded", before.Contains("Added 2 tracks"));
+        // Kept for the moved-project check at the end, after New has emptied the project.
+        string bedFile = _vm.Tracks.Count > 0 ? _vm.Tracks[0].Model.SourcePath : "";
+        string topperFile = _vm.Tracks.Count > 1 ? _vm.Tracks[1].Model.SourcePath : "";
         Check("bed tempo from tag", System.Text.RegularExpressions.Regex.IsMatch(before, @"93\.0 BPM"));
         Check("topper tempo from tag", System.Text.RegularExpressions.Regex.IsMatch(before, @"102\.0 BPM"));
         Check("keys read from tags", before.Contains("G#m"));
@@ -3867,6 +3870,7 @@ public partial class MainWindow : Window
         await CheckRenderHeardAsync(Check);
         await CheckDuplicateThroughMenuAsync(Check);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
+        await CheckRelinkAsync(Check, bedFile, topperFile);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
         foreach (var f in fail) App.Log("buttontest: FAIL - " + f);
@@ -4325,6 +4329,84 @@ public partial class MainWindow : Window
     /// below the topper with the same sections at the same places, the same knobs, its own name,
     /// selected and in the mix; one Ctrl+Z takes it away.
     /// </summary>
+    /// <summary>
+    /// A project that moved (Daniel, 2026-10-28): written to a temp folder with its songs beside it —
+    /// one under its own name, one renamed — and paths that point nowhere, then opened the way a
+    /// double-click opens one. Then Find missing file for a song that is nowhere, through the
+    /// view-model (the real item opens a file box, which a scripted run must never show), the strip
+    /// menu's item being offered only where it is needed. Runs last: it replaces the project.
+    /// </summary>
+    private async Task CheckRelinkAsync(Action<string, bool> check, string bedPath, string topperPath)
+    {
+        if (!File.Exists(bedPath) || !File.Exists(topperPath)) { check("the two songs to move a project away from", false); return; }
+        string dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "moved-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(dir);
+            string bedCopy = Path.Combine(dir, Path.GetFileName(bedPath));
+            string topperCopy = Path.Combine(dir, "renamed" + Path.GetExtension(topperPath));
+            File.Copy(bedPath, bedCopy);
+            File.Copy(topperPath, topperCopy);
+            string nowhereBed = Path.Combine(@"C:\nowhere", Path.GetFileName(bedPath));
+            string nowhereTopper = Path.Combine(@"C:\nowhere", Path.GetFileName(topperPath));
+            string lost = Path.Combine(@"C:\nowhere", "lost" + Path.GetExtension(bedPath));
+            var project = new Benchmix.Core.Model.BenchmixProject { SampleRate = _vm.Session.SampleRate };
+            project.Tracks.Add(new Benchmix.Core.Model.TrackModel { Name = "Bed", SourcePath = nowhereBed, Clips = { new Benchmix.Core.Model.ClipModel { SourcePath = nowhereBed } } });
+            project.Tracks.Add(new Benchmix.Core.Model.TrackModel { Name = "Topper", SourcePath = nowhereTopper, Clips = { new Benchmix.Core.Model.ClipModel { SourcePath = nowhereTopper } } });
+            project.Tracks.Add(new Benchmix.Core.Model.TrackModel { Name = "Lost", SourcePath = lost, Clips = { new Benchmix.Core.Model.ClipModel { SourcePath = lost } } });
+            project.SourceFingerprints[nowhereTopper] = Benchmix.Core.Persistence.SourceRelinker.Fingerprint(topperPath)!;   // as remembered when it was added
+            string path = Path.Combine(dir, "moved.benchmix");
+            Benchmix.Core.Persistence.ProjectStore.Save(project, path);
+
+            bool opened = await _vm.OpenProjectFileAsync(path);
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+            var rows = _vm.Tracks.ToList();
+            check($"a moved project opens ({rows.Count} tracks; \"{_vm.Status}\")", opened && rows.Count == 3);
+            if (rows.Count != 3) return;
+            check($"its song under its own name is found next to the project (Bed loaded={rows[0].IsLoaded}, at '{rows[0].Model.SourcePath}')",
+                  rows[0].IsLoaded && string.Equals(rows[0].Model.SourcePath, bedCopy, StringComparison.OrdinalIgnoreCase));
+            check($"its renamed song is found by its fingerprint (Topper loaded={rows[1].IsLoaded}, at '{Path.GetFileName(rows[1].Model.SourcePath)}')",
+                  rows[1].IsLoaded && string.Equals(rows[1].Model.SourcePath, topperCopy, StringComparison.OrdinalIgnoreCase));
+            check($"the song that is nowhere still reads Missing ('{rows[2].LoadError}')",
+                  !rows[2].IsLoaded && rows[2].LoadError is { } err && err.StartsWith("Missing:"));
+            check($"the status says what was found and what is not (\"{_vm.Status}\")",
+                  _vm.Status.Contains("Found 2 songs") && _vm.Status.Contains("1 track's audio is missing"));
+
+            // The strip menu offers Find missing file on the track that needs it, and not on one that does not.
+            MenuItem? Find(ContextMenu? m) => m?.Items.OfType<MenuItem>().FirstOrDefault(i => i.Tag as string == "findfile");
+            if (StripOf(rows[2]) is { ContextMenu: { } lostMenu } lostStrip && StripOf(rows[0]) is { ContextMenu: { } bedMenu } bedStrip)
+            {
+                lostMenu.PlacementTarget = lostStrip;
+                OnStripMenuOpened(lostMenu, new RoutedEventArgs());
+                bedMenu.PlacementTarget = bedStrip;
+                OnStripMenuOpened(bedMenu, new RoutedEventArgs());
+                check("the strip menu offers 'Find missing file…' on the missing track and not on a loaded one",
+                      Find(lostMenu) is { Visibility: Visibility.Visible } && Find(bedMenu) is { Visibility: Visibility.Collapsed });
+            }
+            else check("strips with menus to open", false);
+
+            await _vm.RelinkAsync(lost, topperCopy);
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+            check($"Find missing file loads the chosen file and the lane is no longer Missing (loaded={rows[2].IsLoaded}; \"{_vm.Status}\")",
+                  rows[2].IsLoaded && rows[2].LoadError is null
+                  && string.Equals(rows[2].Model.SourcePath, topperCopy, StringComparison.OrdinalIgnoreCase) && _vm.Status.StartsWith("Found "));
+
+            _vm.SaveTo(path);
+            var saved = Benchmix.Core.Persistence.ProjectStore.Load(path).Project;
+            check("Save keeps the found places and every song's fingerprint",
+                  saved.Tracks.All(t => File.Exists(t.SourcePath) && t.Clips.All(c => File.Exists(c.SourcePath)))
+                  && saved.SourceFingerprints.ContainsKey(bedCopy) && saved.SourceFingerprints.ContainsKey(topperCopy));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     private async Task CheckDuplicateThroughMenuAsync(Action<string, bool> check)
     {
         async Task Settle()
@@ -5120,9 +5202,19 @@ public partial class MainWindow : Window
     private void OnStripMenuOpened(object sender, RoutedEventArgs e)
     {
         if (sender is not ContextMenu menu) return;
+        // Find missing file only while a song this track reads from is not where the project says (2026-10-28).
+        var track = (menu.PlacementTarget as FrameworkElement)?.DataContext as TrackViewModel ?? _vm.SelectedTrack;
+        if (menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "findfile") is { } find)
+            find.Visibility = track is not null && !_vm.Session.HasAllAudio(track.Model) ? Visibility.Visible : Visibility.Collapsed;
         var move = menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == "Move to tab");
         if (move is null) return;
         FillMoveToTab(move);
+    }
+
+    /// <summary>The strip menu's Find missing file (Daniel, 2026-10-28): a box to point at the song, then every section from it follows.</summary>
+    private void OnFindMissingFileMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _ = _vm.FindMissingFileAsync(t);
     }
 
     private void FillMoveToTab(MenuItem move)

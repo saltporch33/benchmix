@@ -46,6 +46,15 @@ public sealed class BenchmixProject
     /// <summary>Which tab is open. Saved, so a project reopens on the tab it was left on.</summary>
     public int CurrentTabIndex { get; set; }
 
+    /// <summary>
+    /// Each song's fingerprint by its path (2026-10-28, Daniel's "if I ever rename the source sound
+    /// files"): the file's size and a hash of its first 256 KB, taken when the song is added and at
+    /// every save (<c>SourceRelinker</c>). When a song is not where the project says, a file next to
+    /// the project with the same fingerprint is it, whatever it is called now. A lookup table only:
+    /// an older Benchmix ignores it and loses nothing, so the file's version did not change for it.
+    /// </summary>
+    public Dictionary<string, string> SourceFingerprints { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
     [JsonIgnore]
     public TabModel CurrentTab
     {
@@ -108,6 +117,7 @@ public sealed class BenchmixProject
             EqMode = EqMode,
             Tabs = Tabs.Select(t => t.Clone()).ToList(),
             CurrentTabIndex = CurrentTabIndex,
+            SourceFingerprints = new Dictionary<string, string>(SourceFingerprints, StringComparer.OrdinalIgnoreCase),
         };
     }
 }

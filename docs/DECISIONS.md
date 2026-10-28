@@ -838,3 +838,22 @@ started."*
 | **A double-click stops and goes back to where play last started.** | What the single click did from 2026-10-11; he still wants the jump back, as the second gesture. Its first click has already paused, which moves nothing, so the second lands on the very frame play started from. |
 | **The double-click no longer goes to 0:00.** The ■ button does; the view no longer scrolls back either. | Two gestures for 0:00 were one too many once the double-click was needed for the return. |
 | **The old return point rules stand**: Space after a pause counts as a start, an undo keeps the point, Stop waits for the block in flight. | Unchanged in the engine (`TransportTests`). |
+
+## 2026-10-28 — a project follows its songs
+
+Daniel, 2026-10-28, verbatim, in chat with a screenshot of eight lanes reading `Missing:` after he
+had moved a project and its mp3s to another folder: *"got this error, logically, because i moved
+the mp3's and project file into a diff folder. Any way we can make these follow each other? like,
+it looks for the source files in current folder project .benchmix file is located? Buit also
+brings up diff issue... if I ever rename the source sound files, would i still get this message
+even if we resolve the folder location following issue?"* Proposed three parts; his answer: *"yes
+please do it. i'm not worried about fixing it right this minute though"*.
+
+| Decision | Why |
+| --- | --- |
+| **A song that is not where the project says is looked for when the project opens: next to the project file, then anywhere under the project's folder — by name first, then by fingerprint.** What is found is used at once and written back by the next save (the project opens with `*` in the title). A song that is still where the project says is never touched, whatever sits next to the project. | His first question. Moving a project with its songs, or a whole folder, then just works. Name first because a same-named file beside the project is almost always the song; a song that exists is left alone because a different file of the same name next to the project must not replace it. |
+| **Every song gets a fingerprint — its size and a hash of its first 256 KB — when it is added and at every save** (`BenchmixProject.SourceFingerprints`, by path). A renamed song under the project's folder is recognised by it. | His second question. The size is compared first, so a folder of a thousand songs costs a few reads, and the hash is of the file, not the audio: nothing is decoded. A re-encoded copy is a different file and is not recognised, which is right. |
+| **The file's version stays 6.** | The fingerprints are a lookup table: an older Benchmix ignores it and loses nothing on save (the next save here makes it again). Refusing the file for that would be the rule's letter against its purpose (versions 3–6 each guarded real data). |
+| **The strip menu offers *Find missing file…* only on a track that reads from a song that is not there.** A file box opens on the project's folder; the file picked replaces the missing one for every track and section that read from it, on every tab, and is loaded at once. One undo step. | His "anywhere else" case — a song moved to a folder the search does not see, or renamed with no fingerprint yet. Every section follows because a song pasted across tracks is still one song. The item hides when nothing is missing rather than saying so. |
+| **The search stops at five thousand files and leaves the project's own Backups folder out.** | A project saved at the root of a drive must not walk the drive; the backups are projects, not songs. |
+| **A scripted run never opens the file box**; the probe drives `RelinkAsync` and reads the item's visibility. | The standing rule: no dialog of any kind in a verification run. |

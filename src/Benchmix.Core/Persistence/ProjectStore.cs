@@ -132,6 +132,8 @@ public static class ProjectStore
     {
         if (p.SampleRate <= 0) p.SampleRate = 48000;
         if (p.MasterGain <= 0) p.MasterGain = 1.0;
+        // Read back as a plain dictionary; paths compare without case on Windows.
+        p.SourceFingerprints = new Dictionary<string, string>(p.SourceFingerprints ?? new(), StringComparer.OrdinalIgnoreCase);
 
         // Version 4 and earlier: one arrangement, written at the top of the file. It becomes the one
         // tab, "Mix", with the tracks, tempo and loop it had, and the old fields are dropped so they

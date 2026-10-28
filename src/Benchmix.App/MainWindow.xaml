@@ -289,6 +289,9 @@
                                                 <MenuItem Header="Rename track" Click="OnRenameTrackMenu"/>
                                                 <MenuItem Header="Duplicate track" Click="OnDuplicateTrackMenu"
                                                           ToolTip="A copy right below it: the same sections, knobs, tempo ramps and warp markers."/>
+                                                <!-- Only while a song this track reads from is not where the project says (OnStripMenuOpened, 2026-10-28). -->
+                                                <MenuItem Header="Find missing file…" Click="OnFindMissingFileMenu" Tag="findfile"
+                                                          ToolTip="Point Benchmix at a song that has moved or been renamed. Every section cut from it follows, on every tab."/>
                                                 <!-- Its items, one per other tab, are built as the menu opens (OnStripMenuOpened). -->
                                                 <MenuItem Header="Move to tab"
                                                           ToolTip="Sends this track to another tab, where it plays instead of here. Ctrl+Z here brings it back."/>

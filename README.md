@@ -29,6 +29,9 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   the keys you already use act on exactly that part, wherever its ends fall.
 - **Tabs.** Several arrangements in one file, like sheets in a workbook: each tab has its own
   tracks, tempo and listening loop, only the open one plays and renders, and Ctrl+Z works per tab.
+- **A project follows its songs.** Move a project and its songs to another folder together and it
+  opens; a renamed song is recognised by its fingerprint; for anything else, *Find missing file…* on
+  the track's menu points at it and every section cut from that song follows.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
 - **Render** to 32-bit float WAV (the default), or 24/16-bit, with a safety limiter. The file is what you hear:
   muted tracks are left out, a solo leaves out every other track, and it ends where the last track
@@ -79,6 +82,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
 | right-click a track's controls → *Duplicate track* | a copy right below it: the same sections, knobs, tempo ramps and warp markers |
 | right-click a track's controls → *Move to tab* ▸ | send it to another tab; <kbd>Ctrl</kbd>+<kbd>Z</kbd> here brings it back |
+| right-click a track's controls → *Find missing file…* | point at a song that moved or was renamed; every section cut from it follows, on every tab. Only there while a song is missing |
 | click a tab / double-click it / right-click it | open it / rename it / rename, move or remove it. <kbd>+</kbd> at the end of the row adds a tab |
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | the next tab / the one before |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
