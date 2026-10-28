@@ -325,6 +325,7 @@ monitor and manage token usage"*. This is the first one; the others are recorded
 | **PROJECT BPM is unchanged.** It still seeds from the first track, sets Match BPM's target and spaces the ruler's bar lines; it no longer affects where anything lands. | The same answer: *"I don't want any project bpm I want to keep full independence. Keep the bpm info exactly as it is."* — read as "do not tie the new features to it, and leave what exists alone". |
 
 ## 2026-10-11 — a click of the scroll wheel stops
+*Superseded 2026-10-28: a click now pauses exactly where the playhead is, and the jump back to where play started is the double-click. See "2026-10-28 — the wheel click pauses in place" below.*
 
 Daniel, 2026-10-11, verbatim: *"5. clicking the mouse 3 button (clicking the scroll wheel) stops
 play"*. Asked what it should do, he chose the offered option "Stop, jump back", which was described
@@ -819,3 +820,21 @@ on keybad on right side of keyboard for some reason (made sure num lock was togg
 | Decision | Why |
 | --- | --- |
 | **Ctrl with the number pad's +, − and 0 zoom in, out and fit**, exactly as Ctrl with the top row's =, − and 0 do. Three more KeyBindings, all Ctrl-modified. | His comment. The pad's keys are different keys to Windows (`Add`, `Subtract`, `NumPad0`), never bound before. Ctrl keeps them out of any box being typed in, as the rule since 2026-10-03 requires. |
+
+## 2026-10-28 — the wheel click pauses in place
+
+Daniel, 2026-10-28, verbatim: *"adjust one click stop functionality. the
+playhead should stop where the playhead currently is at the time of my clicking mouse wheel; it
+should not go to the location of the cursor. This will allow me to listen to a song and hit stop at
+the precise moment i want it to as i listen, so i can identify crucial parts of the song. make
+sense?"* (It never went to the cursor; it went back to where play started.) Proposed to him: a
+single click pauses in place, a double-click goes back to where play started. His answer: *"Yes to
+the wheel-click proposal: a single click stops in place, a double-click goes back to where play
+started."*
+
+| Decision | Why |
+| --- | --- |
+| **A click of the scroll wheel pauses exactly where the playhead is**, anywhere in the window, mid-drag included. Nothing moves; Space plays on from there. A click while nothing plays does nothing. | His words. It is the engine's Pause, which takes hold at the next block boundary — within a tenth of a second on his device — and moves the playhead nowhere. |
+| **A double-click stops and goes back to where play last started.** | What the single click did from 2026-10-11; he still wants the jump back, as the second gesture. Its first click has already paused, which moves nothing, so the second lands on the very frame play started from. |
+| **The double-click no longer goes to 0:00.** The ■ button does; the view no longer scrolls back either. | Two gestures for 0:00 were one too many once the double-click was needed for the return. |
+| **The old return point rules stand**: Space after a pause counts as a start, an undo keeps the point, Stop waits for the block in flight. | Unchanged in the engine (`TransportTests`). |

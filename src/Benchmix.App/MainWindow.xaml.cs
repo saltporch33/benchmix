@@ -325,26 +325,37 @@ public partial class MainWindow : Window
         App.Log($"playtest: wall={sw.Elapsed.TotalSeconds:F2}s audio-advanced={advancedSeconds:F2}s ratio={ratio:F3}");
         bool realtime = ratio is > 0.95 and < 1.05;
 
-        // The scroll-wheel click's jump back, with the real audio thread pulling. A Stop that seeks
-        // while a block is in flight lands a block late; it must land on the very frame play
-        // started from. Eight tries, at different moments of the device's cycle.
-        bool returned = true;
+        // The wheel click pauses where the playhead is (2026-10-28), and the double-click's jump back
+        // lands on the very frame play started from, with the real audio thread pulling. A Stop
+        // that seeks while a block is in flight lands a block late. Eight tries, at different
+        // moments of the device's cycle. The pause takes hold at a block boundary, so "where it is"
+        // allows the block in flight — a fifth of a second is far more than one — and must be past
+        // where play started, never back at it.
+        bool returned = true, stayed = true;
         for (int i = 0; i < 8; i++)
         {
             long from = (long)((20.0 + i * 0.731) * s.SampleRate);
             s.Engine.Seek(from);                       // in frames, so the comparison below is exact
             _vm.PlayPauseCommand.Execute(null);
             await Task.Delay(90 + i * 17);
-            _vm.StopAndReturn();
+            long at = s.Engine.PositionFrames;
+            _vm.WheelClick();                          // a single click: pause where it is
+            await Task.Delay(60);
+            long paused = s.Engine.PositionFrames;
+            bool inPlace = s.Engine.State == Benchmix.Engine.Audio.TransportState.Paused
+                        && paused >= at && paused - at <= s.SampleRate / 5 && paused > from;
+            stayed &= inPlace;
+            _vm.StopAndReturn();                       // the double-click's second press
             long landed = s.Engine.PositionFrames;
-            App.Log($"playtest: wheel-click {i + 1} started={from} landed={landed} off={landed - from}");
+            App.Log($"playtest: wheel-click {i + 1} started={from} clicked-at={at} paused={paused} ({(inPlace ? "in place" : "NOT in place")}) returned={landed} off={landed - from}");
             returned &= landed == from;
         }
 
-        bool passed = realtime && returned;
-        string verdict = passed ? "PASS - device is pulling in realtime, and a wheel-click lands back where play started"
+        bool passed = realtime && returned && stayed;
+        string verdict = passed ? "PASS - device is pulling in realtime, a wheel-click pauses where it is, and a double-click lands back where play started"
                        : !realtime ? "FAIL - stream is not running at realtime"
-                       : "FAIL - a wheel-click did not land back where play started";
+                       : !stayed ? "FAIL - a wheel-click did not pause where the playhead was"
+                       : "FAIL - a double-click did not land back where play started";
         App.Log($"playtest: state={s.Engine.State} verdict={verdict}");
 
         _vm.StopCommand.Execute(null);
@@ -1232,50 +1243,65 @@ public partial class MainWindow : Window
         void Listen(double seconds) { for (int i = 0; i < (int)Math.Round(seconds * 10); i++) s.Graph.Render(block, rate / 10); }
         MouseButtonEventArgs Press(MouseButton button) => new(Mouse.PrimaryDevice, 0, button) { RoutedEvent = PreviewMouseDownEvent };
         bool Stopped() => s.Engine.State == Benchmix.Engine.Audio.TransportState.Stopped;
+        bool Paused() => s.Engine.State == Benchmix.Engine.Audio.TransportState.Paused;
+        bool Playing() => s.Engine.State == Benchmix.Engine.Audio.TransportState.Playing;
         double frame = 1.0 / rate;
 
+        // A click pauses exactly where the playhead is (Daniel, 2026-10-28); nothing moves.
         _vm.PlayFrom(30);
         Listen(1);
         var wheel = Press(MouseButton.Middle);
         lane.RaiseEvent(wheel);
-        Check($"a click of the scroll wheel stops and goes back to where play started " +
-              $"(engine at {s.Engine.PositionSeconds:0.000}s, started at 30.000s)",
-              Stopped() && s.Engine.PositionFrames == 30L * rate);
+        Check($"a click of the scroll wheel pauses exactly where the playhead is " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, {s.Engine.State}; expected 31.000s, paused)",
+              Paused() && s.Engine.PositionFrames == 31L * rate && !_vm.IsPlaying);
         Check("the wheel-click is not passed on to whatever is under the pointer", wheel.Handled);
 
-        // Space's command, as the key runs it: pause at 31 s, then play on from there.
-        _vm.PlayFrom(30);
-        Listen(1);
-        _vm.PlayPauseCommand.Execute(null);
+        // Space plays on from there, and the next click pauses where it has got to.
         _vm.PlayPauseCommand.Execute(null);
         Listen(1);
         lane.RaiseEvent(Press(MouseButton.Middle));
-        Check($"after Space pauses and plays on, the wheel-click goes back to where Space started it " +
-              $"(engine at {s.Engine.PositionSeconds:0.000}s, expected 31.000s)",
-              Stopped() && s.Engine.PositionFrames == 31L * rate);
+        Check($"Space plays on from the pause, and the next click pauses where it has got to " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, expected 32.000s)",
+              Paused() && s.Engine.PositionFrames == 32L * rate);
 
         _vm.PlayFrom(30);
         var left = Press(MouseButton.Left);
         lane.RaiseEvent(left);
-        Check("a left press is not a stop", !Stopped() && !left.Handled);
+        Check("a left press is not a pause", Playing() && !left.Handled);
 
-        // A double-click of the wheel: stop, and the playhead and the view go back to 0:00 (2026-10-12).
+        // A double-click: stop, and go back to where play started — what the single click did until
+        // 2026-10-28. Through the window's own Preview handler, as the wheel's presses arrive: the
+        // click count the event carries is what tells a double-click from two single clicks.
+        var setCount = typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.GetSetMethod(nonPublic: true)!;
+        void DoubleClick()
+        {
+            foreach (int count in new[] { 1, 2 })
+            {
+                var click = Press(MouseButton.Middle);
+                setCount.Invoke(click, new object[] { count });
+                lane.RaiseEvent(click);
+            }
+        }
         _vm.ScrollSeconds = 20;
         _vm.PlayFrom(30);
         Listen(1);
-        bool scrolledAway = _vm.ScrollSeconds > 0;
-        // Through the window's own Preview handler, as the wheel's presses arrive: the click count the
-        // event carries is what tells a double-click from two single clicks.
-        var setCount = typeof(MouseButtonEventArgs).GetProperty(nameof(MouseButtonEventArgs.ClickCount))!.GetSetMethod(nonPublic: true)!;
-        foreach (int count in new[] { 1, 2 })
-        {
-            var click = Press(MouseButton.Middle);
-            setCount.Invoke(click, new object[] { count });
-            lane.RaiseEvent(click);
-        }
-        Check($"a double-click of the scroll wheel stops, and the playhead and the view go back to 0:00 " +
-              $"(engine at {s.Engine.PositionSeconds:0.000}s, view from {_vm.ScrollSeconds:0.0}s)",
-              scrolledAway && Stopped() && s.Engine.PositionFrames == 0 && _vm.ScrollSeconds == 0);
+        DoubleClick();
+        Check($"a double-click of the scroll wheel stops and goes back to where play started, leaving the view alone " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, expected 30.000s; view from {_vm.ScrollSeconds:0.0}s, expected 20.0)",
+              Stopped() && s.Engine.PositionFrames == 30L * rate && _vm.ScrollSeconds == 20);
+
+        // Space's command, as the key runs it: pause at 31 s, then play on from there — and that is
+        // where the double-click comes back to.
+        _vm.PlayFrom(30);
+        Listen(1);
+        _vm.PlayPauseCommand.Execute(null);
+        _vm.PlayPauseCommand.Execute(null);
+        Listen(1);
+        DoubleClick();
+        Check($"after Space pauses and plays on, the double-click goes back to where Space started it " +
+              $"(engine at {s.Engine.PositionSeconds:0.000}s, expected 31.000s)",
+              Stopped() && s.Engine.PositionFrames == 31L * rate);
 
         // In the middle of dragging a section: playback stops, and the drag carries on to its drop.
         var clip = track.Clips.FirstOrDefault(c => c.TimelineLengthSeconds > 4);
@@ -1295,7 +1321,7 @@ public partial class MainWindow : Window
         _scriptedWindowPoint = At(grabAt + 1);
         LaneMove(lane, At(grabAt + 1), true);
         lane.RaiseEvent(Press(MouseButton.Middle));
-        bool stoppedMidDrag = Stopped(), stillHeld = _vm.DragInProgress;
+        bool stoppedMidDrag = Paused(), stillHeld = _vm.DragInProgress;
         _scriptedWindowPoint = At(grabAt + 2);
         LaneMove(lane, At(grabAt + 2), true);
         LaneUp(lane);
@@ -1303,7 +1329,7 @@ public partial class MainWindow : Window
         _scriptedModifiers = null;
         var moved = _vm.Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == id);
         double along = (moved?.TimelineStartSeconds ?? double.NaN) - before;
-        Check($"a wheel-click in the middle of a drag stops playback and the drag carries on " +
+        Check($"a wheel-click in the middle of a drag pauses playback and the drag carries on " +
               $"(landed {along:0.000}s along, expected 2.000)",
               stoppedMidDrag && stillHeld && Math.Abs(along - 2) <= frame);
 
@@ -5317,10 +5343,11 @@ public partial class MainWindow : Window
             _pressEndedRampEntry = true;
         }
         if (button != MouseButton.Middle) return false;
-        // A double-click of the wheel goes all the way back: the playhead and the view to 0:00
-        // (Daniel, 2026-10-12). Its first click has already stopped, as a single click does.
-        if (clickCount >= 2) _vm.StopToStart();
-        else _vm.StopAndReturn();
+        // A click of the wheel pauses exactly where the playhead is (Daniel, 2026-10-28); a
+        // double-click stops and goes back to where play started. Its first click has already
+        // paused, which moves nothing, so the second lands exactly where play started.
+        if (clickCount >= 2) _vm.StopAndReturn();
+        else _vm.WheelClick();
         return true;
     }
 

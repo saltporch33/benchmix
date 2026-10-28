@@ -340,9 +340,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// What a click of the scroll wheel does (Daniel, 2026-10-11): stop, and go back to where play
-    /// last started — a double-click, a seek, or Space after a pause — so Space plays the same
-    /// stretch again. The Stop button still goes back to 0:00.
+    /// What a click of the scroll wheel does (Daniel, 2026-10-28): pause exactly where the playhead
+    /// is — "the playhead should stop where the playhead currently is at the time of my clicking
+    /// mouse wheel", so he can stop on the very moment he is listening for. Nothing moves, and
+    /// Space plays on from there. From 2026-10-11 to 2026-10-28 a click stopped and went back to
+    /// where play last started; that is the double-click now, <see cref="StopAndReturn"/>.
     /// </summary>
     /// <remarks>
     /// No status message, nor for a double-click, Stop, play-from or a playhead move (Daniel,
@@ -350,6 +352,22 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// pause."). The status bar is for edits, saves, renders, errors and the sound output — what
     /// he reads before Ctrl+Z. Leave these quiet.
     /// </remarks>
+    public void WheelClick()
+    {
+        if (_session is null) return;
+        if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
+        if (Session.Engine.State == TransportState.Playing) Session.Engine.Pause();
+        PositionSeconds = Session.Engine.PositionSeconds;
+        IsPlaying = false;
+    }
+
+    /// <summary>
+    /// A double-click of the scroll wheel: stop, and go back to where play last started — a
+    /// double-click, a seek, or Space after a pause — so Space plays the same stretch again. Its
+    /// first click has already paused in place, which moves nothing, so the second lands exactly
+    /// there. The single click did this from 2026-10-11 to 2026-10-28 (and the double-click went to
+    /// 0:00, which the Stop button still does).
+    /// </summary>
     public void StopAndReturn()
     {
         if (_session is null) return;
@@ -357,18 +375,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Session.Engine.Stop();
         PositionSeconds = Session.Engine.PositionSeconds;
         IsPlaying = false;
-    }
-
-    /// <summary>
-    /// A double-click of the scroll wheel (Daniel, 2026-10-12): stops, and the playhead and the view
-    /// both go back to the very start, 0:00.
-    /// </summary>
-    public void StopToStart()
-    {
-        if (_session is null) return;
-        if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
-        Stop();
-        ScrollSeconds = 0;
     }
 
     public void SeekTo(double seconds)
@@ -391,7 +397,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SeekTo(seconds);
         if (Session.Engine.State != TransportState.Playing) Session.Engine.TogglePlay();
         IsPlaying = Session.Engine.State == TransportState.Playing;
-        if (!IsPlaying) Status = "Nothing to play yet.";          // playing says nothing (2026-10-28, see StopAndReturn)
+        if (!IsPlaying) Status = "Nothing to play yet.";          // playing says nothing (2026-10-28, see WheelClick)
     }
 
     [RelayCommand]
@@ -1654,7 +1660,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// A click in MARK MODE: the playhead goes there, ready for Ctrl+V on that track. The mark
     /// stays. Quietly — a playhead move is not worth a status message (2026-10-28, see
-    /// <see cref="StopAndReturn"/>).
+    /// <see cref="WheelClick"/>).
     /// </summary>
     public void MarkModeClick(TrackViewModel t, double seconds) => SeekTo(seconds);
 

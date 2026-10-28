@@ -1127,6 +1127,24 @@ Four messages removed (`MainViewModel`: `StopAndReturn`, `StopToStart`, `PlayFro
 no test or probe read them (grepped), so the bar is unchanged: **482 tests, 0 failed, 0 skipped**,
 `--gesturetest` **332** (329 before: the zoom keys are bound on the number pad as on the top row — Ctrl with its +, − and 0 — after his comment the same afternoon that Ctrl+0 there did nothing; three checks, all three bindings Ctrl-modified), `--buttontest` 71, all nine runs passed and stayed out of the way.
 
+## 2026-10-28 — the wheel click pauses in place
+
+**482 tests: 482 passed, 0 failed, 0 skipped** — unchanged; the engine's return point is as it
+was (`TransportTests`, reworded: the jump back is the double-click now).
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **333 checks** (332 before): a click of the wheel pauses exactly where the
+playhead is (31.000 s, paused, after a second of play from 30 s); Space plays on and the next
+click pauses at 32.000 s; a left press is not a pause; a double-click stops and goes back to
+where play started (30.000 s) and leaves the view where it was; after Space pauses and plays on,
+the double-click goes back to where Space started it (31.000 s); a wheel-click mid-drag pauses
+playback and the drag carries on to its drop. `--playtest`, on the real device: eight wheel clicks
+paused on the very frame the playhead had reached when they were made — paused == clicked-at,
+8 of 8 — and eight double-clicks landed back on the very frame play started from, off by 0,
+8 of 8. (The first of the eight finds the transport already playing from the realtime check and
+pauses it rather than starting it, so it measures only the return; the other seven measure both.)
+`--buttontest` still 71.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

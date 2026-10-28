@@ -4,7 +4,7 @@ using Xunit;
 namespace Benchmix.Tests;
 
 /// <summary>
-/// Where the transport goes when it stops. A click of the scroll wheel (Daniel, 2026-10-11) stops
+/// Where the transport goes when it stops. A double-click of the scroll wheel stops (the single click did, 2026-10-11 to 2026-10-28; it pauses in place now) and
 /// and goes back to where play last started, so Space plays the same stretch again.
 /// </summary>
 public class TransportTests
@@ -34,7 +34,7 @@ public class TransportTests
     }
 
     [Fact]
-    public void SpaceAfterAPauseIsWhereTheWheelClickGoesBackTo()
+    public void SpaceAfterAPauseIsWhereTheWheelDoubleClickGoesBackTo()
     {
         using var engine = PlaybackEngine.OpenOffline(Rate);
         engine.Seek(30L * Rate);
@@ -46,7 +46,7 @@ public class TransportTests
         engine.Stop();
 
         Assert.True(engine.PositionFrames == 31L * Rate,
-            $"the wheel-click went back to {engine.PositionFrames / (double)Rate:0.000}s, not 31.000s: " +
+            $"the wheel double-click went back to {engine.PositionFrames / (double)Rate:0.000}s, not 31.000s: " +
             "it returned to the earlier start, not to where Space last started playing");
     }
 
@@ -63,7 +63,7 @@ public class TransportTests
 
         Assert.True(engine.PositionFrames == 30L * Rate,
             $"stopped at {engine.PositionFrames / (double)Rate:0.000}s, not 30.000s: a second Play while playing " +
-            "moved the point the wheel-click goes back to");
+            "moved the point the wheel double-click goes back to");
     }
 
     [Fact]
@@ -82,6 +82,6 @@ public class TransportTests
 
         Assert.True(engine.PositionFrames == 30L * Rate,
             $"stopped at {engine.PositionFrames / (double)Rate:0.000}s, not 30.000s: an undo while playing would " +
-            "move where the wheel-click goes back to");
+            "move where the wheel double-click goes back to");
     }
 }
