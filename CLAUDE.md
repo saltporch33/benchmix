@@ -291,4 +291,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-27.*
+*Revised 2026-10-28.*
