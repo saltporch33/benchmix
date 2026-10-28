@@ -344,6 +344,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// last started — a double-click, a seek, or Space after a pause — so Space plays the same
     /// stretch again. The Stop button still goes back to 0:00.
     /// </summary>
+    /// <remarks>
+    /// No status message, nor for a double-click, Stop, play-from or a playhead move (Daniel,
+    /// 2026-10-28: "remove these minor notifications. dont need a reminder that i hit play or
+    /// pause."). The status bar is for edits, saves, renders, errors and the sound output — what
+    /// he reads before Ctrl+Z. Leave these quiet.
+    /// </remarks>
     public void StopAndReturn()
     {
         if (_session is null) return;
@@ -351,7 +357,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Session.Engine.Stop();
         PositionSeconds = Session.Engine.PositionSeconds;
         IsPlaying = false;
-        Status = $"Stopped, back at {PositionSeconds:0.00}s where it started playing.";
     }
 
     /// <summary>
@@ -364,7 +369,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (_rendering) { Status = "Still rendering — the transport resumes when it finishes."; return; }
         Stop();
         ScrollSeconds = 0;
-        Status = "Stopped, back at 0:00.";
     }
 
     public void SeekTo(double seconds)
@@ -387,7 +391,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SeekTo(seconds);
         if (Session.Engine.State != TransportState.Playing) Session.Engine.TogglePlay();
         IsPlaying = Session.Engine.State == TransportState.Playing;
-        Status = IsPlaying ? $"Playing from {seconds:0.00}s." : "Nothing to play yet.";
+        if (!IsPlaying) Status = "Nothing to play yet.";          // playing says nothing (2026-10-28, see StopAndReturn)
     }
 
     [RelayCommand]
@@ -1647,12 +1651,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Status = $"Marked {Describe(d.Track, m.Start, m.End)}. Ctrl+C copies it, Ctrl+X cuts it, Delete removes it, Ctrl+D repeats it.";
     }
 
-    /// <summary>A click in MARK MODE: the playhead goes there, ready for Ctrl+V on that track. The mark stays.</summary>
-    public void MarkModeClick(TrackViewModel t, double seconds)
-    {
-        SeekTo(seconds);
-        Status = $"Playhead at {PositionSeconds:0.00}s on {t.Name}{(HasClipboard ? " — Ctrl+V pastes there." : ".")}";
-    }
+    /// <summary>
+    /// A click in MARK MODE: the playhead goes there, ready for Ctrl+V on that track. The mark
+    /// stays. Quietly — a playhead move is not worth a status message (2026-10-28, see
+    /// <see cref="StopAndReturn"/>).
+    /// </summary>
+    public void MarkModeClick(TrackViewModel t, double seconds) => SeekTo(seconds);
 
     /// <summary>A Shift+click in MARK MODE: marks from the playhead to there, on that track.</summary>
     public void MarkFromPlayhead(TrackViewModel t, double seconds, bool free)

@@ -797,3 +797,16 @@ below is a default he can change.
 | **With a fade of its own on either side there is no crossfade, and no X.** | Unchanged since 2026-09-24: the fade is the ramp there, and a crossfade under it would double up. |
 | **Project files are version 6.** A version 5 file opens with every splice at the standard. | An older build would open a version 6 file with the lengths gone and save over them. The rule since version 3. |
 | **Not changed: the law.** Equal power at every length. For a loop of one steady note the 2026-10-21 measurement stands: a longer crossfade makes the bump at each repeat longer, not smaller (same height, 6–14× longer; `SustainedLoopTests`, kept uncommitted). This is for splicing one passage into another, which is what he asked for. | He has not answered the held-note question; the join law stays until he does. |
+
+## 2026-10-28 — the status bar is quiet about the transport
+
+Daniel, 2026-10-28, verbatim: *"no need for status message on
+something simple as changing play position. Instead, statyus messages should be for major events,
+and also is especially helpful for reference when I'm about to hit ctrl z to undo, so I know what
+i'm about to take back."* Then: *"Regardless, remove these minor notifications. dont need a reminder
+that i hit play or pause."*
+
+| Decision | Why |
+| --- | --- |
+| **Double-click to play, the wheel click, the wheel double-click, Stop and a click in MARK MODE say nothing.** "Playing from …", "Stopped, back at …", "Stopped, back at 0:00." and "Playhead at … on …" are gone. "Nothing to play yet." stays, as does every message about the listening loop, the sound output, rendering and edits. | His words. The status line is what he reads before Ctrl+Z; a note that he pressed play pushes the edit he wants to see off it. |
+| **Not changed yet: what Ctrl+Z will take back is not shown.** Offered to end every edit's message with it ("… Ctrl+Z: fade in"); waiting on his word. His further idea — an action log to unwind to a chosen state — is his "future idea, not right now (too complex)". | One feature per approval. |

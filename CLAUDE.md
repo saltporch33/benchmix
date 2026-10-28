@@ -72,6 +72,10 @@ mistakes, not by describing the project.
   puts back only the tabs it touched (`UndoStack`, `TabMerge.Restore`): the open tab whole, another
   tab only its name and its tracks' comings and goings. Adding a tab is not an undo step, on
   purpose. Do not "fix" any of this into one history or one mix.
+- **Play, pause, stop, the wheel click and a playhead move write nothing to the status bar**
+  (2026-10-28, his words: *"remove these minor notifications. dont need a
+  reminder that i hit play or pause."*). It is for edits, saves, renders, errors and the sound
+  output — what he reads before Ctrl+Z. Do not add a "Playing from" or "Stopped" message back.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.

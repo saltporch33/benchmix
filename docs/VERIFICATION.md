@@ -1121,6 +1121,12 @@ the status says it takes effect once something ends where it starts. `--buttonte
 `--demoediting`'s screenshot shows the three X's at the loop's joins (one of them 200 ms — the same
 6 px at that zoom). Nobody has listened to a crossfade longer than 5 ms.
 
+## 2026-10-28 — the status bar is quiet about the transport
+
+Four messages removed (`MainViewModel`: `StopAndReturn`, `StopToStart`, `PlayFrom`, `MarkModeClick`);
+no test or probe read them (grepped), so the bar is unchanged: **482 tests, 0 failed, 0 skipped**,
+`--gesturetest` 329, `--buttontest` 71, all nine runs passed and stayed out of the way.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
