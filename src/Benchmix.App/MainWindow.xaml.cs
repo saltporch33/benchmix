@@ -961,6 +961,16 @@ public partial class MainWindow : Window
             _scriptedFocus = null;
         }
 
+        // --- tabs ---
+        try { RunTabGestures(Check, notes); }
+        finally
+        {
+            _vm.StopCommand.Execute(null);
+            _scriptedWindowPoint = null;
+            _scriptedModifiers = null;
+            _scriptedFocus = null;
+        }
+
         // --- a knob dragged past its end stop must not leave a negative gain in the model ---
         if (_vm.Tracks.FirstOrDefault() is { } track)
         {
@@ -1397,6 +1407,125 @@ public partial class MainWindow : Window
         Check($"turned past the right edge of the view, the view follows the playhead (playhead {_vm.PositionSeconds:0.0}s, view {_vm.ScrollSeconds:0.0}s to {_vm.ScrollSeconds + _vm.ViewportSeconds:0.0}s)",
               _vm.ScrollSeconds > 0 && _vm.PositionSeconds >= _vm.ScrollSeconds && _vm.PositionSeconds <= _vm.ScrollSeconds + _vm.ViewportSeconds);
         _vm.ScrollSeconds = 0;
+    }
+
+    /// <summary>
+    /// Tabs (Daniel, 2026-10-27): through the + above the tracks, the tab chips and the strip menu's
+    /// Move to tab. Only the open tab's tracks are in the engine; a track sent to another tab leaves
+    /// this one and is there; Ctrl+Z undoes only what was done on the tab that is open, and brings
+    /// a sent track back from the other tab; a tab is renamed from the tab he is on, and one removed
+    /// comes back with Ctrl+Z on the tab landed on, opened; Ctrl+Tab. One tab is left for the
+    /// checks that follow.
+    /// </summary>
+    private void RunTabGestures(Action<string, bool> Check, List<string> notes)
+    {
+        UpdateLayout();
+        if (_vm.Tracks.FirstOrDefault(t => t.IsLoaded) is not { } song) { notes.Add("no loaded track, so tabs are untested - pass a file to cover them"); return; }
+        if (PresentationSource.FromVisual(this) is not { } source) { notes.Add("no presentation source, so tabs are untested"); return; }
+        KeyEventArgs Press(Key key) => new(Keyboard.PrimaryDevice, source, 0, key) { RoutedEvent = PreviewKeyDownEvent };
+        void Settle() { PumpUntil(() => !_vm.IsBusy); UpdateLayout(); }
+        List<Border> Chips()
+        {
+            UpdateLayout();                                          // an undo rebuilds the row; its chips exist only once laid out
+            return Descendants<Border>(TabRow).Where(b => b.Name == "TabChip").ToList();
+        }
+        void ClickChip(int i) { TabPress((TabViewModel)Chips()[i].DataContext, 1); Settle(); }
+
+        int onMix = _vm.Tracks.Count;
+        var songId = song.Id;
+        Check($"the project starts with one tab, open ({_vm.Tabs.Count})", _vm.Tabs.Count == 1 && _vm.Tabs[0].IsCurrent);
+
+        // --- + adds a tab and opens it, empty; the first tab keeps its tracks, out of the engine ---
+        var peer = new System.Windows.Automation.Peers.ButtonAutomationPeer(AddTabButton);
+        ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        PumpUntil(() => _vm.Tabs.Count == 2 && !_vm.IsBusy);     // the peer's click is dispatched, not immediate
+        UpdateLayout();
+        Check($"+ adds a second tab and opens it, empty ({_vm.Tabs.Count} tabs, open '{_vm.CurrentTab?.Name}', {_vm.Tracks.Count} tracks on screen, {_vm.Session.Graph.Tracks.Count} in the engine; \"{_vm.Status}\")",
+              _vm.Tabs.Count == 2 && _vm.Tabs[1].IsCurrent && _vm.Tracks.Count == 0 && _vm.Session.Graph.Tracks.Count == 0);
+        if (_vm.Tabs.Count != 2) return;
+        var tab2 = _vm.Tabs[1];
+        Check($"the first tab's {onMix} track(s) are still in the project, on their tab", _vm.Session.Project.Tabs[0].Tracks.Count == onMix);
+
+        // --- a click on the first tab's chip opens it again ---
+        Check($"two tab chips are drawn ({Chips().Count})", Chips().Count == 2);
+        if (Chips().Count < 2) return;
+        ClickChip(0);
+        Check($"a click on the first tab opens it: its tracks back on screen ({_vm.Tracks.Count}) and in the engine ({_vm.Session.Graph.Tracks.Count})",
+              _vm.Tabs[0].IsCurrent && _vm.Tracks.Count == onMix && _vm.Session.Graph.Tracks.Count == onMix);
+
+        // --- Move to tab, through the strip menu ---
+        var row = _vm.Tracks.First(t => t.Id == songId);
+        var menu = StripOf(row)?.ContextMenu;
+        var move = menu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == "Move to tab");
+        Check("the strip's right-click menu offers 'Move to tab'", move is not null);
+        if (menu is null || move is null) return;
+        _vm.SelectedTrack = row;
+        OnStripMenuOpened(menu, new RoutedEventArgs());
+        var toTab2 = move.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == tab2.Name);
+        Check($"it lists the other tab and not this one ({move.Items.Count} item(s))", toTab2 is not null && move.Items.Count == 1);
+        if (toTab2 is null) return;
+        OnMoveTrackToTabMenu(toTab2, new RoutedEventArgs());
+        Settle();
+        Check($"the track leaves this tab ({_vm.Tracks.Count} on screen, want {onMix - 1}), is on the other, and is out of the engine",
+              _vm.Tracks.Count == onMix - 1 && _vm.Session.Project.Tabs[1].Tracks.Any(t => t.Id == songId) && _vm.Session.VoiceFor(song.Model) is null);
+        Check($"the status bar says so (\"{_vm.Status}\")", _vm.Status.Contains("Moved") && _vm.Status.Contains(tab2.Name));
+
+        // --- on the other tab it plays, and Ctrl+Z there has nothing to undo ---
+        ClickChip(1);
+        Check("on the other tab the track is on screen and in the engine", _vm.Tabs[1].IsCurrent && _vm.Tracks.Any(t => t.Id == songId) && _vm.Session.VoiceFor(song.Model) is not null);
+        _vm.UndoCommand.Execute(null);
+        Settle();
+        Check($"Ctrl+Z on the other tab undoes nothing: the move was done from the first tab (\"{_vm.Status}\")",
+              _vm.Tracks.Any(t => t.Id == songId) && _vm.Status.StartsWith("Nothing to undo"));
+
+        // --- back on the first tab, Ctrl+Z brings the track back from the other tab ---
+        ClickChip(0);
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => !_vm.IsBusy && _vm.Tracks.Count == onMix);
+        Check($"Ctrl+Z on the first tab brings the track back ({_vm.Tracks.Count} on screen, want {onMix}) and takes it from the other tab",
+              _vm.Tracks.Count == onMix && _vm.Tracks.Any(t => t.Id == songId) && !_vm.Session.Project.Tabs[1].Tracks.Any(t => t.Id == songId));
+
+        // --- renaming the other tab from this one: double-click its chip, type, Enter; Ctrl+Z here puts the name back ---
+        TabPress((TabViewModel)Chips()[1].DataContext, 2);
+        UpdateLayout();
+        var box = Descendants<TextBox>(TabRow).FirstOrDefault(b => b.Name == "TabRenameBox" && b.Visibility == Visibility.Visible);
+        Check("a double-click on a tab opens its name for typing", _vm.Tabs[1].IsRenaming && box is not null);
+        if (box is not null)
+        {
+            box.Text = "Bites";
+            OnTabRenameKeyDown(box, Press(Key.Enter));
+            Settle();
+            Check($"Enter keeps the new name on the chip and in the project ('{_vm.Tabs[1].Name}' / '{_vm.Session.Project.Tabs[1].Name}')",
+                  !_vm.Tabs[1].IsRenaming && _vm.Tabs[1].Name == "Bites" && _vm.Session.Project.Tabs[1].Name == "Bites");
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => !_vm.IsBusy && _vm.Tabs.Count == 2 && _vm.Tabs[1].Name != "Bites");
+            Check($"Ctrl+Z on this tab puts the old name back ('{_vm.Tabs[1].Name}'), and this tab stays open", _vm.Tabs[1].Name == tab2.Name && _vm.Tabs[0].IsCurrent);
+        }
+
+        // --- removing the other tab while it is open lands here; Ctrl+Z here brings it back and opens it ---
+        ClickChip(1);
+        OnRemoveTabMenu(Chips()[1], new RoutedEventArgs());
+        PumpUntil(() => !_vm.IsBusy && _vm.Tabs.Count == 1);
+        Check($"Remove tab takes the open tab away and lands on the first ({_vm.Tabs.Count} tab(s), open '{_vm.CurrentTab?.Name}', {_vm.Tracks.Count} tracks)",
+              _vm.Tabs.Count == 1 && _vm.Tabs[0].IsCurrent && _vm.Tracks.Count == onMix);
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => !_vm.IsBusy && _vm.Tabs.Count == 2);
+        Check($"Ctrl+Z on the tab landed on brings the removed tab back and opens it ({_vm.Tabs.Count} tabs, open '{_vm.CurrentTab?.Name}')",
+              _vm.Tabs.Count == 2 && _vm.Tabs[1].IsCurrent);
+
+        // --- Ctrl+Tab is bound, and goes to the next tab round the row ---
+        Check("Ctrl+Tab and Ctrl+Shift+Tab are bound",
+              InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Tab && b.Modifiers == ModifierKeys.Control)
+              && InputBindings.OfType<KeyBinding>().Any(b => b.Key == Key.Tab && b.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift)));
+        _vm.NextTabCommand.Execute(null);
+        Settle();
+        Check("Ctrl+Tab from the last tab goes round to the first", _vm.Tabs[0].IsCurrent);
+
+        // --- one tab again for the checks that follow ---
+        if (_vm.Tabs.Count > 1) _ = _vm.RemoveTabAsync(_vm.Tabs[^1]);
+        PumpUntil(() => !_vm.IsBusy && _vm.Tabs.Count == 1);
+        if (!_vm.Tabs[0].IsCurrent) { ClickChip(0); }
+        Check($"the second tab is removed again ({_vm.Tabs.Count} tab, {_vm.Tracks.Count} tracks)", _vm.Tabs.Count == 1 && _vm.Tracks.Count == onMix);
     }
 
     /// <summary>
@@ -4839,6 +4968,75 @@ public partial class MainWindow : Window
         if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _vm.DuplicateTrack(t);
     }
 
+    // ---------------- tabs (2026-10-27) ----------------
+
+    private static TabViewModel? TabOf(object sender) => (sender as FrameworkElement)?.DataContext as TabViewModel;
+
+    /// <summary>A click on a tab opens it; a double-click opens its name for typing.</summary>
+    private void OnTabMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (TabOf(sender) is not { } tab) return;
+        TabPress(tab, e.ClickCount);
+        e.Handled = true;
+    }
+
+    private void TabPress(TabViewModel tab, int clickCount)
+    {
+        if (clickCount >= 2) _vm.BeginTabRename(tab);
+        else _ = _vm.SwitchToTabAsync(tab);
+    }
+
+    private void OnRenameTabMenu(object sender, RoutedEventArgs e) { if (TabOf(sender) is { } tab) _vm.BeginTabRename(tab); }
+    private void OnMoveTabLeftMenu(object sender, RoutedEventArgs e) { if (TabOf(sender) is { } tab) _vm.MoveTab(tab, -1); }
+    private void OnMoveTabRightMenu(object sender, RoutedEventArgs e) { if (TabOf(sender) is { } tab) _vm.MoveTab(tab, +1); }
+    private void OnRemoveTabMenu(object sender, RoutedEventArgs e) { if (TabOf(sender) is { } tab) _ = _vm.RemoveTabAsync(tab); }
+
+    private void OnTabRenameKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: TabViewModel t } box) return;
+        if (e.Key == Key.Enter) { _vm.CommitTabRename(t.Id, box.Text); ReturnKeyboardToTimeline(); e.Handled = true; }
+        else if (e.Key == Key.Escape) { _vm.CancelTabRename(t.Id); ReturnKeyboardToTimeline(); e.Handled = true; }
+    }
+
+    /// <summary>As <see cref="OnRenameLostFocus"/>: the keyboard going elsewhere in this window keeps what was typed.</summary>
+    private void OnTabRenameLostFocus(object sender, KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is not TextBox { DataContext: TabViewModel t } box) return;
+        if (e.NewFocus is not DependencyObject to || to is System.Windows.Controls.Primitives.MenuBase or MenuItem) return;
+        if (!ReferenceEquals(to, this) && !(to is Visual v && v.IsDescendantOf(this))) return;
+        _vm.CommitTabRename(t.Id, box.Text);
+    }
+
+    /// <summary>
+    /// The strip menu opening: its Move to tab item gets one item per other tab, built here because
+    /// the tabs change. Each is a Click handler, as every menu item is (MenuWiringTests).
+    /// </summary>
+    private void OnStripMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu) return;
+        var move = menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == "Move to tab");
+        if (move is null) return;
+        FillMoveToTab(move);
+    }
+
+    private void FillMoveToTab(MenuItem move)
+    {
+        move.Items.Clear();
+        foreach (var tab in _vm.Tabs.Where(t => !t.IsCurrent))
+        {
+            var item = new MenuItem { Header = tab.Name, Tag = tab };
+            item.Click += OnMoveTrackToTabMenu;
+            move.Items.Add(item);
+        }
+        if (move.Items.Count == 0) move.Items.Add(new MenuItem { Header = "No other tab — add one with the + above the tracks", IsEnabled = false });
+    }
+
+    private void OnMoveTrackToTabMenu(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: TabViewModel tab } item) return;
+        if ((TrackOf(item) ?? _vm.SelectedTrack) is { } t) _vm.MoveTrackToTab(t, tab);
+    }
+
     /// <summary>
     /// The S button (Daniel, 2026-10-27): a click solos that track alone; Ctrl+click adds it to the
     /// ones already soloed. The button's own toggle is only a picture — the binding is one-way, and
@@ -4994,6 +5192,13 @@ public partial class MainWindow : Window
         return false;
     }
 
+    private static bool IsInTabRenameBox(DependencyObject? d)
+    {
+        for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+            if (d is TextBox { Name: "TabRenameBox" }) return true;
+        return false;
+    }
+
     /// <summary>Hands the keyboard back to the timeline after typing, so Delete and Space work again.</summary>
     private void ReturnKeyboardToTimeline()
     {
@@ -5020,6 +5225,7 @@ public partial class MainWindow : Window
     private bool WindowPress(MouseButton button, DependencyObject? pressedOn, int clickCount = 1)
     {
         if (!IsInRenameBox(pressedOn)) _vm.CommitOpenRenames();
+        if (!IsInTabRenameBox(pressedOn)) _vm.CommitOpenTabRenames();
         if (_editingKnob is not null && !ReferenceEquals(pressedOn, KnobValueBox) && !IsInside(pressedOn, KnobValueBox)) FinishKnobEdit();
 
         // A press anywhere but in a ramp's BPM box keeps the tempo typed there, if the track can

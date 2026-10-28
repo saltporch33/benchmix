@@ -16,7 +16,18 @@ namespace Benchmix.App.ViewModels;
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly DispatcherTimer _tick;
-    private readonly UndoStack _undo = new();
+    // One undo history per tab (2026-10-27): Ctrl+Z undoes the last thing done on the tab that is
+    // open, never something on a tab that is not on screen. Keyed by the tab's id, so a tab taken
+    // away and brought back keeps its history.
+    private readonly Dictionary<Guid, UndoStack> _histories = new();
+
+    private UndoStack HistoryOf(Guid tabId)
+    {
+        if (!_histories.TryGetValue(tabId, out var stack)) _histories[tabId] = stack = new UndoStack();
+        return stack;
+    }
+
+    private UndoStack _undo => HistoryOf(Session.Project.CurrentTab.Id);
     private ProjectSession? _session;
     private string? _projectPath;
     private bool _dirty;
@@ -689,7 +700,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MasterGain = 1.0;
         ProjectBpm = 0;                 // before _dirty is cleared: setting it marks the project changed
         _projectPath = null;
-        _undo.Clear();
+        _histories.Clear();
+        _tabPositions.Clear();
+        RebuildTabs();
         _dirty = false;
         RecomputeLength();
         UpdateTitle();
@@ -745,7 +758,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             LoopEnd = result.Project.LoopEndSeconds;
             SelectedTrack = Tracks.FirstOrDefault();
 
-            _undo.Clear();
+            _histories.Clear();
+            _tabPositions.Clear();
+            RebuildTabs();
             _dirty = false;
             RecomputeLength();
             UpdateTitle();
@@ -897,9 +912,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void Undo()
     {
         if (_session is null || HeldUnderTheMouse()) return;
+        string? label = _undo.NextUndoLabel;
         var restored = _undo.Undo(Session.Project);
-        if (restored is null) { Status = "Nothing to undo."; return; }
-        _ = ReloadFromProjectAsync(restored, "Undone.");
+        if (restored is null) { Status = Tabs.Count > 1 ? $"Nothing to undo on {CurrentTab?.Name}." : "Nothing to undo."; return; }
+        _ = ReloadFromProjectAsync(restored, label is null ? "Undone." : $"Undone: {label}.");
     }
 
     [RelayCommand]
@@ -907,7 +923,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_session is null || HeldUnderTheMouse()) return;
         var restored = _undo.Redo(Session.Project);
-        if (restored is null) { Status = "Nothing to redo."; return; }
+        if (restored is null) { Status = Tabs.Count > 1 ? $"Nothing to redo on {CurrentTab?.Name}." : "Nothing to redo."; return; }
         _ = ReloadFromProjectAsync(restored, "Redone.");
     }
 
@@ -942,8 +958,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // undone came back in the engine while the band on screen still showed the new one.
         double at = PositionSeconds;
         long returnTo = Session.Engine.StopReturnFrame;     // re-seeking below would move it to here
-        project.LoopStartSeconds = Session.Project.LoopStartSeconds;
-        project.LoopEndSeconds = Session.Project.LoopEndSeconds;
+        // The loop is the open tab's; a step that opens another tab (one brought back) keeps that
+        // tab's own loop instead.
+        if (project.CurrentTab.Id == Session.Project.CurrentTab.Id)
+        {
+            project.LoopStartSeconds = Session.Project.LoopStartSeconds;
+            project.LoopEndSeconds = Session.Project.LoopEndSeconds;
+        }
 
         IsBusy = true;
         try
@@ -951,6 +972,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             await Session.OpenAsync(project);
             SeekTo(at);
             Session.Engine.StopReturnFrame = returnTo;
+            RebuildTabs();
             Tracks.Clear();
             foreach (var m in project.Tracks)
             {
@@ -2409,6 +2431,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _undo.Push(Session.Project, label);
     }
 
+    /// <summary>
+    /// An undo step that reaches beyond the open tab (2026-10-27): onto the history of
+    /// <paramref name="onTab"/>, touching <paramref name="touched"/> tabs, and the tab row itself
+    /// when <paramref name="order"/>. See <see cref="UndoStack.Push"/>.
+    /// </summary>
+    private void PushUndoAcrossTabs(Guid onTab, string label, IEnumerable<Guid> touched, bool order)
+    {
+        if (_session is null) return;
+        _lastCoalesceKey = null;
+        HistoryOf(onTab).Push(Session.Project, label, touched, order);
+    }
+
     /// <summary>Ends a gesture, so the next one of the same kind starts a fresh undo step.</summary>
     public void EndGesture() => _lastCoalesceKey = null;
 
@@ -2456,9 +2490,233 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         if (value > 400) { ProjectBpm = 400; return; }
 
-        if (_session is null) return;
+        if (_session is null || _switchingTab) return;
         Session.Project.ProjectBpm = value;
         MarkDirty();
+    }
+
+    // ---------------- tabs (Daniel, 2026-10-27: "like an excel workbook", each its own arrangement) ----------------
+
+    /// <summary>The tabs in the row above the tracks, in the project's order.</summary>
+    public ObservableCollection<TabViewModel> Tabs { get; } = new();
+
+    [ObservableProperty] private TabViewModel? _currentTab;
+
+    /// <summary>Where the playhead was on each tab, so switching back lands where he left (not saved).</summary>
+    private readonly Dictionary<Guid, double> _tabPositions = new();
+
+    /// <summary>True while a switch fills PROJECT BPM and the loop from the tab opened: that is not an edit.</summary>
+    private bool _switchingTab;
+
+    /// <summary>Rebuilds the tab row from the project; the open tab is the project's.</summary>
+    private void RebuildTabs()
+    {
+        if (_session is null) return;
+        Tabs.Clear();
+        var open = Session.Project.CurrentTab;
+        foreach (var tab in Session.Project.Tabs)
+            Tabs.Add(new TabViewModel(tab) { IsCurrent = ReferenceEquals(tab, open) });
+        CurrentTab = Tabs.FirstOrDefault(t => t.IsCurrent);
+    }
+
+    private void RefreshTabs()
+    {
+        foreach (var t in Tabs) t.RefreshFromModel();
+    }
+
+    /// <summary>
+    /// Opens a tab: the tracks on screen, in the engine and in a render become that tab's. Playback
+    /// stops; the playhead goes where it last was on that tab. Not an undo step.
+    /// </summary>
+    public async Task SwitchToTabAsync(TabViewModel tab)
+    {
+        if (_session is null || !Tabs.Contains(tab) || tab.IsCurrent) return;
+        if (HeldUnderTheMouse()) return;
+        if (IsBusy) { Status = "Wait for that to finish, then switch tabs."; return; }
+        CommitOpenRenames();
+        CommitOpenTabRenames();
+        EndRampEntry();
+        EndWarpPress();
+        ClearMark();
+        int index = Session.Project.Tabs.IndexOf(tab.Model);
+        if (index < 0) return;
+
+        _tabPositions[Session.Project.CurrentTab.Id] = PositionSeconds;
+        IsBusy = true;
+        _switchingTab = true;
+        try
+        {
+            await Session.SwitchTabAsync(index);
+            IsPlaying = false;
+            Tracks.Clear();
+            foreach (var m in Session.Project.Tracks)
+            {
+                var vm = NewTrackViewModel(m);
+                if (Session.HasAllAudio(m)) vm.NotifyAudioLoaded();
+                else vm.LoadError = $"Missing: {MissingFileOf(m)}";
+                Tracks.Add(vm);
+            }
+            foreach (var t in Tabs) t.IsCurrent = ReferenceEquals(t, tab);
+            CurrentTab = tab;
+            ProjectBpm = Session.Project.ProjectBpm;
+            LoopStart = Session.Project.LoopStartSeconds;
+            LoopEnd = Session.Project.LoopEndSeconds;
+            SelectClip(null);
+            SelectedTrack = Tracks.FirstOrDefault();
+            RecomputeLength();
+            SeekTo(_tabPositions.TryGetValue(tab.Id, out double at) ? at : 0);
+        }
+        finally
+        {
+            _switchingTab = false;
+            IsBusy = false;
+        }
+        int n = Tracks.Count;
+        Status = $"Tab {tab.Name}: {(n == 0 ? "nothing on it yet" : n == 1 ? "1 track" : $"{n} tracks")}. Only this tab plays and renders.";
+    }
+
+    /// <summary>Ctrl+Tab and Ctrl+Shift+Tab: the next tab along, or the one before, round the end.</summary>
+    [RelayCommand]
+    private async Task NextTabAsync() => await StepTabAsync(+1);
+
+    [RelayCommand]
+    private async Task PreviousTabAsync() => await StepTabAsync(-1);
+
+    private async Task StepTabAsync(int step)
+    {
+        if (Tabs.Count < 2 || CurrentTab is null) return;
+        int i = (Tabs.IndexOf(CurrentTab) + step + Tabs.Count) % Tabs.Count;
+        await SwitchToTabAsync(Tabs[i]);
+    }
+
+    /// <summary>
+    /// The + at the end of the tab row: a new, empty tab, opened. Not an undo step: Ctrl+Z on the
+    /// new tab must never take the tab away with whatever has been put on it since — Remove tab on
+    /// its menu does that, and is itself undone from the tab landed on.
+    /// </summary>
+    [RelayCommand]
+    private async Task AddTabAsync()
+    {
+        if (_session is null || HeldUnderTheMouse()) return;
+        if (IsBusy) { Status = "Wait for that to finish, then add a tab."; return; }
+        CommitOpenRenames();
+        CommitOpenTabRenames();
+        var tab = Session.AddTab();
+        var vm = new TabViewModel(tab);
+        Tabs.Add(vm);
+        MarkDirty();
+        await SwitchToTabAsync(vm);
+        Status = $"Added tab {tab.Name}, empty. Paste or drag sections onto it, or send a track here with Move to tab. Right-click the tab to rename or remove it.";
+    }
+
+    /// <summary>
+    /// Takes a tab away with its tracks: the tab's right-click menu. Undone from the tab he lands
+    /// on, it comes back. The only tab stays.
+    /// </summary>
+    public async Task RemoveTabAsync(TabViewModel tab)
+    {
+        if (_session is null || !Tabs.Contains(tab) || HeldUnderTheMouse()) return;
+        if (IsBusy) { Status = "Wait for that to finish, then remove the tab."; return; }
+        if (Tabs.Count <= 1) { Status = "The only tab stays. Make another tab first, or remove this one's tracks."; return; }
+        CommitOpenRenames();
+        CommitOpenTabRenames();
+        int index = Tabs.IndexOf(tab);
+        var landing = tab.IsCurrent ? Tabs[index == 0 ? 1 : index - 1] : CurrentTab!;
+        PushUndoAcrossTabs(landing.Id, $"remove tab {tab.Name}", new[] { tab.Id }, order: true);
+        if (tab.IsCurrent) await SwitchToTabAsync(landing);
+        var result = await Session.RemoveTabAsync(Session.Project.Tabs.IndexOf(tab.Model));
+        if (!result.Changed) { Status = result.Message; return; }
+        Tabs.Remove(tab);
+        _tabPositions.Remove(tab.Id);
+        MarkDirty();
+        Status = result.Message;
+    }
+
+    /// <summary>Moves a tab one place along the row. One undo step, on that tab.</summary>
+    public void MoveTab(TabViewModel tab, int step)
+    {
+        if (_session is null || !Tabs.Contains(tab) || HeldUnderTheMouse()) return;
+        int from = Session.Project.Tabs.IndexOf(tab.Model), to = from + step;
+        if (to < 0 || to >= Tabs.Count) { Status = $"{tab.Name} is already at the {(step < 0 ? "left" : "right")} end."; return; }
+        PushUndoAcrossTabs(Session.Project.CurrentTab.Id, $"move tab {tab.Name}", Array.Empty<Guid>(), order: true);
+        var result = Session.MoveTab(from, to);
+        if (!result.Changed) { Status = result.Message; return; }
+        Tabs.Move(from, to);
+        MarkDirty();
+        Status = result.Message;
+    }
+
+    /// <summary>
+    /// Sends a track from the open tab to another: the strip menu's Move to tab. Undone from this
+    /// tab, it comes back, and whatever was done on the other tab since stays.
+    /// </summary>
+    public void MoveTrackToTab(TrackViewModel track, TabViewModel tab)
+    {
+        if (_session is null || !Tracks.Contains(track) || !Tabs.Contains(tab)) return;
+        if (HeldUnderTheMouse()) return;
+        if (IsBusy) { Status = "Wait for that to finish, then move the track."; return; }
+        if (tab.IsCurrent) { Status = $"{track.Name} is on this tab already."; return; }
+        CommitOpenRenames();
+        PushUndoAcrossTabs(Session.Project.CurrentTab.Id, $"move {track.Name} to tab {tab.Name}",
+                           new[] { Session.Project.CurrentTab.Id, tab.Id }, order: false);
+        var result = Session.MoveTrackToTab(track.Model, Session.Project.Tabs.IndexOf(tab.Model));
+        if (!result.Changed) { Status = result.Message; return; }
+        bool wasSelected = ReferenceEquals(SelectedTrack, track);
+        Tracks.Remove(track);
+        if (wasSelected) { SelectClip(null); SelectedTrack = Tracks.FirstOrDefault(); }
+        RefreshTabs();
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
+    }
+
+    // ---- renaming a tab: as a track, a draft in a box, kept on Enter or a click elsewhere ----
+
+    public bool BeginTabRename(TabViewModel tab)
+    {
+        if (_session is null || !Tabs.Contains(tab)) return false;
+        if (tab.IsRenaming) return true;
+        if (IsBusy) { Status = "Wait for that to finish, then rename the tab."; return false; }
+        CommitOpenRenames();
+        CommitOpenTabRenames();
+        tab.RenameDraft = tab.Name;
+        tab.IsRenaming = true;
+        Status = $"Type a new name for tab {tab.Name}, then press Enter. Esc keeps the old one.";
+        return true;
+    }
+
+    public bool CommitTabRename(Guid tabId, string? typed)
+    {
+        var tab = Tabs.FirstOrDefault(t => t.Id == tabId);
+        if (tab is null || !tab.IsRenaming) return false;
+        tab.IsRenaming = false;
+        string? name = ProjectSession.CleanTrackName(typed);
+        if (name is null || name == tab.Model.Name)
+        {
+            Status = name is null ? $"A tab needs a name — kept \"{tab.Name}\"." : $"Kept the name \"{tab.Name}\".";
+            return false;
+        }
+        // On the open tab's history: the row of names is in sight from every tab.
+        PushUndoAcrossTabs(Session.Project.CurrentTab.Id, $"rename tab {tab.Name}", new[] { tab.Id }, order: false);
+        string old = tab.Model.Name;
+        tab.Model.Name = name;
+        tab.RefreshFromModel();
+        MarkDirty();
+        Status = $"Renamed tab \"{old}\" to \"{name}\".";
+        return true;
+    }
+
+    public void CancelTabRename(Guid tabId)
+    {
+        var tab = Tabs.FirstOrDefault(t => t.Id == tabId);
+        if (tab is null || !tab.IsRenaming) return;
+        tab.IsRenaming = false;
+        Status = $"Name left as \"{tab.Name}\".";
+    }
+
+    public void CommitOpenTabRenames()
+    {
+        foreach (var t in Tabs.Where(t => t.IsRenaming).ToList()) CommitTabRename(t.Id, t.RenameDraft);
     }
 
     partial void OnPixelsPerSecondChanged(double value) => NotifyViewportChanged();

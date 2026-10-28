@@ -132,7 +132,45 @@ public static class ProjectStore
     {
         if (p.SampleRate <= 0) p.SampleRate = 48000;
         if (p.MasterGain <= 0) p.MasterGain = 1.0;
-        foreach (var t in p.Tracks)
+
+        // Version 4 and earlier: one arrangement, written at the top of the file. It becomes the one
+        // tab, "Mix", with the tracks, tempo and loop it had, and the old fields are dropped so they
+        // are not written again. (The property's default is a tab already, so the version says
+        // which kind of file this is, not whether the list is empty.) A version 5 file has its tabs.
+        if (p.SchemaVersion < 5)
+        {
+            p.Tabs = new List<TabModel>
+            {
+                new()
+                {
+                    Name = "Mix",
+                    Tracks = p.LegacyTracks ?? new List<TrackModel>(),
+                    ProjectBpm = p.LegacyProjectBpm ?? 0,
+                    LoopStartSeconds = p.LegacyLoopStartSeconds,
+                    LoopEndSeconds = p.LegacyLoopEndSeconds,
+                },
+            };
+            p.CurrentTabIndex = 0;
+        }
+        else if (p.Tabs is null || p.Tabs.Count == 0)
+        {
+            p.Tabs = new List<TabModel> { new() { Name = "Mix" } };
+            p.CurrentTabIndex = 0;
+        }
+        p.LegacyTracks = null;
+        p.LegacyProjectBpm = null;
+        p.LegacyLoopStartSeconds = null;
+        p.LegacyLoopEndSeconds = null;
+        p.CurrentTabIndex = Math.Clamp(p.CurrentTabIndex, 0, p.Tabs.Count - 1);
+        for (int i = 0; i < p.Tabs.Count; i++)
+        {
+            var tab = p.Tabs[i];
+            tab.Tracks ??= new();
+            if (tab.Id == Guid.Empty) tab.Id = Guid.NewGuid();
+            if (string.IsNullOrWhiteSpace(tab.Name)) tab.Name = i == 0 ? "Mix" : $"Tab {i + 1}";
+        }
+
+        foreach (var t in p.AllTracks)
         {
             if (t.Speed <= 0) t.Speed = 1.0;
             t.Ramps ??= new();
@@ -215,17 +253,27 @@ public static class ProjectStore
 }
 
 /// <summary>
-/// Undo by whole-project snapshot.
+/// Undo by whole-project snapshot, restored a tab at a time.
 ///
+/// <para>
 /// A mashup project is a few kilobytes of numbers, so cloning the entire thing per edit costs
 /// nothing and removes every class of bug where an undo command forgets to restore one field.
 /// Command-pattern undo would be the right call if the model were large; here it would only be
 /// more ways to be wrong.
+/// </para>
+/// <para>
+/// Since tabs (2026-10-27) each tab has a stack of its own, and a step puts back only the tabs it
+/// touched (<see cref="TabMerge.Restore"/>): Daniel, verbatim, *"i dont want to hit ctrl z and have
+/// something undone on an unseen tab"*. Nearly every step touches the open tab alone; moving a
+/// track to another tab touches both, and adding, removing or moving a tab touches the tab row.
+/// </para>
 /// </summary>
 public sealed class UndoStack
 {
-    private readonly List<BenchmixProject> _past = new();
-    private readonly List<BenchmixProject> _future = new();
+    private sealed record Entry(BenchmixProject Snapshot, string Label, Guid[] Touched, bool Order);
+
+    private readonly List<Entry> _past = new();
+    private readonly List<Entry> _future = new();
     private readonly int _limit;
 
     public UndoStack(int limit = 100) => _limit = Math.Max(1, limit);
@@ -234,20 +282,23 @@ public sealed class UndoStack
     public bool CanRedo => _future.Count > 0;
     public string? NextUndoLabel { get; private set; }
 
-    private readonly List<string> _labels = new();
-
-    /// <summary>Call immediately BEFORE mutating, with a label describing what is about to happen.</summary>
-    public void Push(BenchmixProject current, string label)
+    /// <summary>
+    /// Call immediately BEFORE mutating, with a label describing what is about to happen.
+    /// <paramref name="touched"/> names the tabs the step may change (null: the open tab only);
+    /// <paramref name="order"/> says it changes the tab row — which tabs there are, or their order.
+    /// </summary>
+    public void Push(BenchmixProject current, string label, IEnumerable<Guid>? touched = null, bool order = false)
     {
-        _past.Add(current.Clone());
-        _labels.Add(label);
-        if (_past.Count > _limit) { _past.RemoveAt(0); _labels.RemoveAt(0); }
+        var ids = (touched ?? new[] { current.CurrentTab.Id }).Distinct().ToArray();
+        _past.Add(new Entry(current.Clone(), label, ids, order));
+        if (_past.Count > _limit) _past.RemoveAt(0);
         _future.Clear();
         NextUndoLabel = label;
     }
 
     /// <summary>
-    /// Steps back to the last state that differs from <paramref name="current"/>.
+    /// Steps back to the last state that differs from <paramref name="current"/>, on the tabs the
+    /// step touched; every other tab stays as it is now.
     ///
     /// <para>
     /// A snapshot is taken before a command knows whether it will change anything, so a refused
@@ -262,16 +313,15 @@ public sealed class UndoStack
         string now = ProjectStore.Fingerprint(current);
         while (_past.Count > 0)
         {
-            var previous = _past[^1];
+            var e = _past[^1];
             _past.RemoveAt(_past.Count - 1);
-            var label = _labels[^1];
-            _labels.RemoveAt(_labels.Count - 1);
-            if (ProjectStore.Fingerprint(previous) == now) continue;
+            var restored = TabMerge.Restore(current, e.Snapshot, e.Touched, e.Order);
+            if (ProjectStore.Fingerprint(restored) == now) continue;
 
-            _future.Add(current.Clone());
-            NextUndoLabel = _labels.Count > 0 ? _labels[^1] : null;
-            RedoLabel = label;
-            return previous;
+            _future.Add(new Entry(current.Clone(), e.Label, e.Touched, e.Order));
+            NextUndoLabel = _past.Count > 0 ? _past[^1].Label : null;
+            RedoLabel = e.Label;
+            return restored;
         }
         NextUndoLabel = null;
         return null;
@@ -282,14 +332,14 @@ public sealed class UndoStack
         string now = ProjectStore.Fingerprint(current);
         while (_future.Count > 0)
         {
-            var next = _future[^1];
+            var e = _future[^1];
             _future.RemoveAt(_future.Count - 1);
-            if (ProjectStore.Fingerprint(next) == now) continue;
+            var restored = TabMerge.Restore(current, e.Snapshot, e.Touched, e.Order);
+            if (ProjectStore.Fingerprint(restored) == now) continue;
 
-            _past.Add(current.Clone());
-            _labels.Add(RedoLabel ?? "change");
-            NextUndoLabel = _labels[^1];
-            return next;
+            _past.Add(new Entry(current.Clone(), e.Label, e.Touched, e.Order));
+            NextUndoLabel = e.Label;
+            return restored;
         }
         return null;
     }
@@ -300,8 +350,79 @@ public sealed class UndoStack
     {
         _past.Clear();
         _future.Clear();
-        _labels.Clear();
         NextUndoLabel = null;
         RedoLabel = null;
+    }
+}
+
+/// <summary>How an undo step puts a snapshot back: a tab at a time, never one it did not touch.</summary>
+public static class TabMerge
+{
+    /// <summary>
+    /// The live project with only the <paramref name="touched"/> tabs put back as the snapshot
+    /// had them. The open tab is put back whole. Another touched tab — the one a track was sent
+    /// to — only gets its tracks' comings and goings put back: a track the step put there goes, one
+    /// it took away comes back where it was, and everything done on that tab since stays, because
+    /// that was done out of sight of this tab. A touched tab the snapshot lacks is taken away; one
+    /// the live project lacks comes back where it was. With <paramref name="order"/>, the tabs are
+    /// also put in the snapshot's order. Every other tab keeps what it has now. The open tab stays
+    /// open unless it went, in which case the snapshot's is opened. The shared settings — master,
+    /// limiter, EQ mode — go back with every step, as they always did.
+    /// </summary>
+    public static BenchmixProject Restore(BenchmixProject live, BenchmixProject snapshot, IReadOnlyCollection<Guid> touched, bool order)
+    {
+        var result = live.Clone();
+        var openId = live.CurrentTab.Id;
+        bool broughtBackTheSnapshotsOpenTab = false;
+        foreach (var id in touched)
+        {
+            int inSnapshot = snapshot.Tabs.FindIndex(t => t.Id == id);
+            int inLive = result.Tabs.FindIndex(t => t.Id == id);
+            if (inSnapshot < 0)
+            {
+                if (inLive >= 0) result.Tabs.RemoveAt(inLive);
+            }
+            else if (inLive < 0)
+            {
+                result.Tabs.Insert(Math.Min(inSnapshot, result.Tabs.Count), snapshot.Tabs[inSnapshot].Clone());
+                if (id == snapshot.CurrentTab.Id) broughtBackTheSnapshotsOpenTab = true;
+            }
+            else if (id == openId)
+            {
+                result.Tabs[inLive] = snapshot.Tabs[inSnapshot].Clone();
+            }
+            else
+            {
+                // Its name is in the tab row, in sight from every tab, so it goes back; its tracks
+                // only come and go as the step moved them.
+                var was = snapshot.Tabs[inSnapshot];
+                var now = result.Tabs[inLive];
+                now.Name = was.Name;
+                var wasIds = was.Tracks.Select(t => t.Id).ToHashSet();
+                now.Tracks.RemoveAll(t => !wasIds.Contains(t.Id));
+                for (int i = 0; i < was.Tracks.Count; i++)
+                    if (now.Tracks.All(t => t.Id != was.Tracks[i].Id))
+                        now.Tracks.Insert(Math.Min(i, now.Tracks.Count), was.Tracks[i].Clone());
+            }
+        }
+        if (order)
+        {
+            var wanted = snapshot.Tabs.Select(t => t.Id).ToList();
+            result.Tabs = result.Tabs.OrderBy(t => { int i = wanted.IndexOf(t.Id); return i < 0 ? int.MaxValue : i; }).ToList();
+        }
+        if (result.Tabs.Count == 0) result.Tabs.Add(new TabModel());
+
+        // A tab that comes back is opened, so what Ctrl+Z did is on screen; otherwise the open tab
+        // stays open, unless it went, when the snapshot's is opened.
+        int open = broughtBackTheSnapshotsOpenTab ? result.Tabs.FindIndex(t => t.Id == snapshot.CurrentTab.Id) : -1;
+        if (open < 0) open = result.Tabs.FindIndex(t => t.Id == openId);
+        if (open < 0) open = result.Tabs.FindIndex(t => t.Id == snapshot.CurrentTab.Id);
+        result.CurrentTabIndex = Math.Clamp(open < 0 ? 0 : open, 0, result.Tabs.Count - 1);
+
+        result.Name = snapshot.Name;
+        result.MasterGain = snapshot.MasterGain;
+        result.LimiterEnabled = snapshot.LimiterEnabled;
+        result.EqMode = snapshot.EqMode;
+        return result;
     }
 }

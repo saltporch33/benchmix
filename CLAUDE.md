@@ -57,6 +57,13 @@ mistakes, not by describing the project.
   still takes the wheel, clicked or not** — his words the same day: *"retain functionality of
   hovering over knobs and wheeling to make adjustments there"* (a first cut that needed a click
   was reverted within the hour). A right-drag pans up and down as well as sideways.
+- **Only the open tab plays and renders, and Ctrl+Z works per tab** (2026-10-27, his choices:
+  *"No, separate"*; *"i dont want to hit ctrl z and have something undone on an unseen tab"*).
+  `Project.Tracks`, `ProjectBpm` and the loop forward to the open tab (`BenchmixProject.CurrentTab`);
+  the other tabs' tracks have no voice (`ProjectSession.SwitchTabAsync` swaps them). An undo step
+  puts back only the tabs it touched (`UndoStack`, `TabMerge.Restore`): the open tab whole, another
+  tab only its name and its tracks' comings and goings. Adding a tab is not an undo step, on
+  purpose. Do not "fix" any of this into one history or one mix.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.
@@ -157,7 +164,7 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, Alt+wheel over the ruler and over the waveforms, the plain wheel scrolling the tracks (over a waveform, the ruler and the strip; a knob under the pointer still turns), renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo), snapping to the playhead (a section's start and its end, the guide line, Ctrl, not while playing), scrolling the tracks (a right-drag up and down, PageUp/PageDown, Ctrl+Home/Ctrl+End, PageDown left to a text box) — 297 checks (2026-10-27) |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, Alt+wheel over the ruler and over the waveforms, the plain wheel scrolling the tracks (over a waveform, the ruler and the strip; a knob under the pointer still turns), renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo), snapping to the playhead (a section's start and its end, the guide line, Ctrl, not while playing), scrolling the tracks (a right-drag up and down, PageUp/PageDown, Ctrl+Home/Ctrl+End, PageDown left to a text box), tabs (the + button, the chips, Move to tab, undo per tab, rename, remove and bring back, Ctrl+Tab) — 317 checks (2026-10-27) |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), a render with the longer song muted and with the shorter one soloed, read back from the file, and the Render button refusing with nothing audible, Duplicate track through the real strip menu item (the copy below, its sections, knobs, selection and voice, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 71 checks (2026-10-27) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
 | `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, and warp markers |
@@ -227,6 +234,9 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - **Warp markers have never been heard.** Since 2026-10-27 `dotnet test` (0 skipped) and every
   probe have passed on his machine, on a staged build; before that, only on Linux. The jump in speed
   at a marker is a measurement.
+- **Tabs have never been used by hand** (2026-10-27): every claim about them is `TabsTests` and
+  `--gesturetest`. Project files have been version 5 since; v2026.10.27.7 is the first release that
+  opens one, and an older one refuses it.
 - **His copy of Benchmix is one shortcut on his OneDrive Desktop, named for the release**
   (`Benchmix-v2026.10.27.2.lnk`), pointing at that release's exe in the project's `releases\`
   folder (gitignored), where every older release stays. After each verified release, without

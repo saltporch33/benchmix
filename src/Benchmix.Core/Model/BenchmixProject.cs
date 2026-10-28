@@ -19,8 +19,11 @@ public sealed class BenchmixProject
     /// 3 added <see cref="TrackModel.Ramps"/>, tempo ramps (2026-10-11). An older build refuses a
     /// version 3 file rather than opening it, dropping its ramps without a word and saving over them.
     /// 4 added <see cref="TrackModel.Warps"/>, warp markers (2026-10-18), for the same reason.
+    /// 5 added <see cref="Tabs"/> (2026-10-27, Daniel: tabs "like an excel workbook", each its own
+    /// arrangement): the tracks, the project tempo and the listening loop moved into a tab. An older
+    /// build refuses a version 5 file rather than opening only one of its tabs and saving over the rest.
     /// </summary>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 5;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -29,13 +32,62 @@ public sealed class BenchmixProject
     public bool LimiterEnabled { get; set; } = true;
     public EqMode EqMode { get; set; } = EqMode.Isolator;
 
-    public double? LoopStartSeconds { get; set; }
-    public double? LoopEndSeconds { get; set; }
+    /// <summary>
+    /// The tabs (2026-10-27): separate arrangements in one file, each with its own tracks, project
+    /// tempo and listening loop. Only the open one, <see cref="CurrentTab"/>, plays and renders.
+    /// Never empty: a project always has at least one tab.
+    /// </summary>
+    public List<TabModel> Tabs { get; set; } = new() { new TabModel() };
 
-    /// <summary>Tempo the whole mashup is built around; tracks are matched to this.</summary>
-    public double ProjectBpm { get; set; }
+    /// <summary>Which tab is open. Saved, so a project reopens on the tab it was left on.</summary>
+    public int CurrentTabIndex { get; set; }
 
-    public List<TrackModel> Tracks { get; set; } = new();
+    [JsonIgnore]
+    public TabModel CurrentTab
+    {
+        get
+        {
+            if (Tabs.Count == 0) Tabs.Add(new TabModel());
+            CurrentTabIndex = Math.Clamp(CurrentTabIndex, 0, Tabs.Count - 1);
+            return Tabs[CurrentTabIndex];
+        }
+    }
+
+    // ---- the open tab's own, forwarded, so the editor reads and writes "the project's tracks" as
+    // it always has. What is on screen, in the engine and in a render is the open tab. ----
+
+    /// <summary>The open tab's tracks.</summary>
+    [JsonIgnore]
+    public List<TrackModel> Tracks { get => CurrentTab.Tracks; set => CurrentTab.Tracks = value; }
+
+    /// <summary>The open tab's tempo: what the mashup on it is built around; tracks are matched to this.</summary>
+    [JsonIgnore]
+    public double ProjectBpm { get => CurrentTab.ProjectBpm; set => CurrentTab.ProjectBpm = value; }
+
+    [JsonIgnore]
+    public double? LoopStartSeconds { get => CurrentTab.LoopStartSeconds; set => CurrentTab.LoopStartSeconds = value; }
+
+    [JsonIgnore]
+    public double? LoopEndSeconds { get => CurrentTab.LoopEndSeconds; set => CurrentTab.LoopEndSeconds = value; }
+
+    // ---- version 4 and earlier wrote these at the top of the file; read on load, then folded into
+    // the one tab such a file becomes (ProjectStore.Migrate) and nulled, so they are not written again. ----
+
+    [JsonPropertyName("tracks")]
+    public List<TrackModel>? LegacyTracks { get; set; }
+
+    [JsonPropertyName("projectBpm")]
+    public double? LegacyProjectBpm { get; set; }
+
+    [JsonPropertyName("loopStartSeconds")]
+    public double? LegacyLoopStartSeconds { get; set; }
+
+    [JsonPropertyName("loopEndSeconds")]
+    public double? LegacyLoopEndSeconds { get; set; }
+
+    /// <summary>Every track on every tab.</summary>
+    [JsonIgnore]
+    public IEnumerable<TrackModel> AllTracks => Tabs.SelectMany(t => t.Tracks);
 
     [JsonIgnore]
     public bool HasSolo => Tracks.Any(t => t.Soloed);
@@ -50,12 +102,39 @@ public sealed class BenchmixProject
             MasterGain = MasterGain,
             LimiterEnabled = LimiterEnabled,
             EqMode = EqMode,
-            LoopStartSeconds = LoopStartSeconds,
-            LoopEndSeconds = LoopEndSeconds,
-            ProjectBpm = ProjectBpm,
-            Tracks = Tracks.Select(t => t.Clone()).ToList(),
+            Tabs = Tabs.Select(t => t.Clone()).ToList(),
+            CurrentTabIndex = CurrentTabIndex,
         };
     }
+}
+
+/// <summary>
+/// One tab (2026-10-27): an arrangement of its own — its tracks, the tempo they are matched to and
+/// its listening loop. Like a sheet in a workbook: the tabs share a file, the master level and the
+/// limiter, nothing else, and only the open one plays or renders.
+/// </summary>
+public sealed class TabModel
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = "Mix";
+    public List<TrackModel> Tracks { get; set; } = new();
+
+    /// <summary>Tempo this tab's mashup is built around; its tracks are matched to this.</summary>
+    public double ProjectBpm { get; set; }
+
+    public double? LoopStartSeconds { get; set; }
+    public double? LoopEndSeconds { get; set; }
+
+    /// <summary>Deep, for the same reason as <see cref="TrackModel.Clone"/>.</summary>
+    public TabModel Clone() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Tracks = Tracks.Select(t => t.Clone()).ToList(),
+        ProjectBpm = ProjectBpm,
+        LoopStartSeconds = LoopStartSeconds,
+        LoopEndSeconds = LoopEndSeconds,
+    };
 }
 
 /// <summary>

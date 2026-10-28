@@ -27,6 +27,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   evens out to fit.
 - **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
   the keys you already use act on exactly that part, wherever its ends fall.
+- **Tabs.** Several arrangements in one file, like sheets in a workbook: each tab has its own
+  tracks, tempo and listening loop, only the open one plays and renders, and Ctrl+Z works per tab.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
 - **Render** to 32-bit float WAV (the default), or 24/16-bit, with a safety limiter. The file is what you hear:
   muted tracks are left out, a solo leaves out every other track, and it ends where the last track
@@ -76,6 +78,9 @@ control on screen is one you asked for.
 | <kbd>Shift</kbd>+drag the ruler | set a listening loop |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
 | right-click a track's controls → *Duplicate track* | a copy right below it: the same sections, knobs, tempo ramps and warp markers |
+| right-click a track's controls → *Move to tab* ▸ | send it to another tab; <kbd>Ctrl</kbd>+<kbd>Z</kbd> here brings it back |
+| click a tab / double-click it / right-click it | open it / rename it / rename, move or remove it. <kbd>+</kbd> at the end of the row adds a tab |
+| <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | the next tab / the one before |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
 | <kbd>Ctrl</kbd>+<kbd>J</kbd>, or right-click → *Join sections* | join pieces of a song back into one: the selected ones, or the one you clicked and the piece next to it. Any gap between them — where you took a piece out — is the song again |
 | <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section — or, in mark mode, the marked stretch |

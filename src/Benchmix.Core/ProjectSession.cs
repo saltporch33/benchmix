@@ -503,8 +503,12 @@ public sealed class ProjectSession : IDisposable
         return name.Length > 80 ? name[..80] : name;
     }
 
-    /// <summary>Decodes a track's audio (shared between tracks pointing at the same file) and wires its voice.</summary>
-    public async Task LoadAudioAsync(TrackModel model, CancellationToken cancel = default)
+    /// <summary>
+    /// Decodes a track's audio (shared between tracks pointing at the same file) and wires its
+    /// voice — unless <paramref name="wireVoice"/> is false, for a track on a tab that is not open:
+    /// its audio is decoded so switching to its tab is instant, but it must not be in the mix.
+    /// </summary>
+    public async Task LoadAudioAsync(TrackModel model, CancellationToken cancel = default, bool wireVoice = true)
     {
         try
         {
@@ -525,8 +529,11 @@ public sealed class ProjectSession : IDisposable
                 _clips[path] = loaded;
             }
 
-            EnsureVoice(model);
-            Apply(model);
+            if (wireVoice)
+            {
+                EnsureVoice(model);
+                Apply(model);
+            }
             TrackLoaded?.Invoke(this, model);
         }
         catch (OperationCanceledException) { throw; }
@@ -608,12 +615,103 @@ public sealed class ProjectSession : IDisposable
         _voices.Clear();
 
         Project = project;
-        foreach (var t in project.Tracks)
-            await LoadAudioAsync(t, cancel);
+        // Every tab's audio is decoded, so switching tabs is instant; only the open tab's tracks
+        // get voices, so only it plays (2026-10-27).
+        foreach (var tab in project.Tabs)
+            foreach (var t in tab.Tracks)
+                await LoadAudioAsync(t, cancel, wireVoice: ReferenceEquals(tab, project.CurrentTab));
 
         ReleaseUnusedClips();
         ApplyAll();
         Engine.Seek(0);
+    }
+
+    // ---------------------------------------------------------------- tabs (2026-10-27)
+
+    /// <summary>
+    /// Opens tab <paramref name="index"/>: the tab left loses its voices and the one opened gets
+    /// its own, so only the open tab is in the mix. Playback stops, and the playhead goes to 0:00;
+    /// the caller puts it where that tab last was.
+    /// </summary>
+    public async Task SwitchTabAsync(int index, CancellationToken cancel = default)
+    {
+        index = Math.Clamp(index, 0, Project.Tabs.Count - 1);
+        if (index == Project.CurrentTabIndex) return;
+        Engine.Pause();
+        Engine.WaitForIdle();
+        foreach (var t in Project.Tracks)
+            if (_voices.Remove(t.Id, out var v)) Graph.RemoveTrack(v);
+        Project.CurrentTabIndex = index;
+        foreach (var t in Project.Tracks)
+        {
+            if (HasAllAudio(t)) { EnsureVoice(t); Apply(t); }
+            else await LoadAudioAsync(t, cancel);
+        }
+        ApplyAll();
+        Engine.Seek(0);
+    }
+
+    /// <summary>A new, empty tab after the last, named "Tab 2", "Tab 3", … unless <paramref name="name"/> says otherwise. Not opened.</summary>
+    public TabModel AddTab(string? name = null)
+    {
+        var tab = new TabModel { Name = CleanTrackName(name) ?? NextTabName() };
+        Project.Tabs.Add(tab);
+        return tab;
+    }
+
+    private string NextTabName()
+    {
+        var taken = Project.Tabs.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        for (int n = Project.Tabs.Count + 1; ; n++)
+            if (!taken.Contains($"Tab {n}")) return $"Tab {n}";
+    }
+
+    /// <summary>
+    /// Takes a tab away with everything on it. The only tab stays. If it is the open one, the tab
+    /// before it (or after it, for the first) is opened first, so the mix never has nothing to play.
+    /// </summary>
+    public async Task<EditResult> RemoveTabAsync(int index, CancellationToken cancel = default)
+    {
+        if (index < 0 || index >= Project.Tabs.Count) return EditResult.No("That tab is no longer there.");
+        if (Project.Tabs.Count <= 1) return EditResult.No("The only tab stays. Make another tab first, or remove this one's tracks.");
+        var tab = Project.Tabs[index];
+        if (index == Project.CurrentTabIndex) await SwitchTabAsync(index == 0 ? 1 : index - 1, cancel);
+        Project.Tabs.RemoveAt(index);
+        if (index < Project.CurrentTabIndex) Project.CurrentTabIndex--;      // the open tab moved up one
+        ReleaseUnusedClips();
+        int n = tab.Tracks.Count;
+        return new EditResult(true, $"Removed tab {tab.Name}{(n == 0 ? "" : n == 1 ? " and its track" : $" and its {n} tracks")}. Ctrl+Z puts it back.");
+    }
+
+    /// <summary>Moves a tab along the row. The open tab stays open, wherever it ends up.</summary>
+    public EditResult MoveTab(int from, int to)
+    {
+        if (from < 0 || from >= Project.Tabs.Count) return EditResult.No("That tab is no longer there.");
+        to = Math.Clamp(to, 0, Project.Tabs.Count - 1);
+        if (to == from) return EditResult.No($"{Project.Tabs[from].Name} is already there.");
+        var open = Project.CurrentTab;
+        var tab = Project.Tabs[from];
+        Project.Tabs.RemoveAt(from);
+        Project.Tabs.Insert(to, tab);
+        Project.CurrentTabIndex = Project.Tabs.IndexOf(open);
+        return new EditResult(true, $"Moved tab {tab.Name} {(to < from ? "left" : "right")}, to place {to + 1} of {Project.Tabs.Count}.");
+    }
+
+    /// <summary>
+    /// Sends a track from the open tab to the end of another (Daniel, 2026-10-27, for sorting
+    /// sound bites into tabs). It leaves the mix here; it plays when that tab is opened.
+    /// </summary>
+    public EditResult MoveTrackToTab(TrackModel track, int tabIndex)
+    {
+        if (!Project.Tracks.Contains(track)) return EditResult.No("That track is no longer in the project.");
+        if (tabIndex < 0 || tabIndex >= Project.Tabs.Count) return EditResult.No("That tab is no longer there.");
+        if (tabIndex == Project.CurrentTabIndex) return EditResult.No($"{track.Name} is on this tab already.");
+        if (_voices.Remove(track.Id, out var v)) Graph.RemoveTrack(v);
+        Project.Tracks.Remove(track);
+        var dest = Project.Tabs[tabIndex];
+        dest.Tracks.Add(track);
+        ApplyAll();
+        return new EditResult(true, $"Moved {track.Name} to tab {dest.Name}. Ctrl+Z brings it back here.");
     }
 
     /// <summary>
@@ -658,7 +756,7 @@ public sealed class ProjectSession : IDisposable
 
     private void ReleaseUnusedClips()
     {
-        var used = Project.Tracks.SelectMany(SourcePathsOf).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var used = Project.AllTracks.SelectMany(SourcePathsOf).ToHashSet(StringComparer.OrdinalIgnoreCase);   // every tab's: a tab not open still comes back
         foreach (var key in _clips.Keys.Where(k => !used.Contains(k)).ToList())
             _clips.Remove(key);
     }

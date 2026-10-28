@@ -752,3 +752,27 @@ clips on it"*. Nothing beyond that was discussed; the rest is defaults he can ch
 | **A soloed track's copy is soloed too**, and the status bar says both play. | The copy plays as the original does; two soloed tracks is what Ctrl+click on S makes anyway. |
 | **One undo step.** | As for every edit. |
 | **No shortcut key**, only the menu item. | Nobody asked for one, and the strip menu is where *Rename track* lives. |
+
+
+## 2026-10-27 — tabs: separate arrangements in one file
+
+Daniel, 2026-10-27, verbatim, pasted in chat: *"possible to create multiple tabs? use case: I'm
+chopping up a long sound bite into smaller bites and the number of tracks is getting very long.
+Moving them to different tabs that can each contain any number of tracks would be dope, like an
+excel workbook."* Asked whether every tab should still play and render together, he chose *"No,
+separate"*. On undo: *"only issue here is that i dont want to hit ctrl z and have something undone
+on an unseen tab, know what I mean?"* Then *"Yes, build tabs"*. Everything else below is a default
+he can change.
+
+| Decision | Why |
+| --- | --- |
+| **A tab is an arrangement of its own**: its tracks, its PROJECT BPM and its listening loop, in one `.benchmix` file. The MASTER slider, the limiter and the EQ mode are shared. | "No, separate" — like sheets in a workbook. The master and the limiter are the room's, not the song's. |
+| **Only the open tab plays and renders.** Switching tabs stops playback; each tab remembers where its playhead was (not saved). | His choice. Two tabs sounding at once would be one mix again. |
+| **Each tab keeps its own undo history.** Ctrl+Z undoes the last thing done on the tab that is open, and says "Nothing to undo on Bites" when there is nothing there. | His objection, verbatim above. |
+| **A track sent to another tab is undone from the tab it was sent from**: it comes back here and leaves there, and whatever was done on the other tab since stays. Renaming a tab, moving it along the row and removing it are undone from the tab he was looking at when he did it — a removed tab from the tab he landed on — and a tab brought back by Ctrl+Z is opened. | The row of names is in sight from every tab, so nothing about it is "unseen". A step that touched another tab puts back only what it moved there (`TabMerge.Restore`). |
+| **Adding a tab is not an undo step.** *Remove tab* on its menu takes it away with its tracks, and that is undone from the tab landed on. The only tab stays. | Undoing "add tab" after tracks were moved onto it would take them with it. |
+| **The tab row sits under the transport bar.** A click opens a tab, a double-click renames it, right-click offers Rename, Move left, Move right and Remove; **+** adds one, named "Tab 2", "Tab 3", …; Ctrl+Tab and Ctrl+Shift+Tab step along the row. **Move to tab ▸** on a track's strip menu sends it to the end of another tab. | Where a workbook puts them. The strip menu is where a track's own commands live. Ctrl+Tab is the browser's. |
+| **Copy and paste work across tabs.** The clipboard is the window's: a section or a marked stretch copied on one tab pastes on another, at that tab's playhead. | Chop on one tab, place on another: his use case. |
+| **Every tab's audio is decoded when the project opens**; only the open tab's tracks have voices in the engine. | A switch must not stall, and a tab that is not open must not sound. |
+| **Project files are version 5.** Every save writes 5, so an older Benchmix refuses the file. A version 4 file opens as one tab, "Mix", with its tracks, tempo and loop. | An older build would open one tab and save over the rest. |
+| **Not changed:** Match key compares with the topmost track of the open tab; New clears every tab; Open replaces them all; a render is the open tab. | Tabs are inside the project, not beside it. |

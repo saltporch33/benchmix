@@ -37,6 +37,15 @@ clip → stretch → 3-band EQ → clip envelope → gain/pan → sum → master
 Live playback pulls blocks from that chain in realtime. The renderer pulls blocks from *the same
 object* as fast as the CPU allows. There is no second implementation that could disagree.
 
+**Tabs** (2026-10-27) are separate arrangements in one file: `BenchmixProject.Tabs`, each a
+`TabModel` with its own tracks, project tempo and listening loop. `Project.Tracks`, `ProjectBpm`
+and the loop forward to the open tab, so the editor, the snapping and the engine wiring read "the
+project's tracks" as they always did and only ever see the open tab. Every tab's audio is decoded
+when the project opens; only the open tab's tracks have voices, and `SwitchTabAsync` swaps them.
+Undo is one `UndoStack` per tab, and a step restores only the tabs it touched (`TabMerge.Restore`):
+the open tab whole, another tab only its name and which tracks it holds. A version 4 file opens as
+one tab; every save writes version 5.
+
 A render holds what can be heard, and no more. A muted track — by its own M, or because another
 track is soloed — is silent in the file as it is in the speakers, and the file ends where the last
 track that can be heard ends (`MixGraph.AudibleLengthFrames`), not where the longest track does

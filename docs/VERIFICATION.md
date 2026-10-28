@@ -963,6 +963,41 @@ longer song muted (T.R.O.Y., 13,007,151 frames) the file is 13,017,887 frames: t
 out and why, each time; with both muted the button refuses and says why. `--gesturetest` still
 276. Nobody has listened to a render.
 
+## 2026-10-27 — tabs
+
+**470 tests: 470 passed, 0 failed, 0 skipped** — the 457 below and the thirteen of `TabsTests`.
+
+**The file** (`TabsTests`): a new project has one tab, and its tracks, tempo and loop are that
+tab's; a version 4 file written out by hand opens as one tab, "Mix", with its track, tempo and
+loop, and saved again is a version 5 file with the tracks inside a tab and nothing at the top; two
+tabs with their names, tempos, loops, tracks and the open tab survive a save and reopen. **The mix**:
+with tab B open, A's song has no voice and the render is, byte for byte, a session holding only B's
+song; back on A, only A's; the audio stays decoded across the switch. A track sent to another tab is
+out of this tab's mix (the render equals the other song alone) and plays on the tab it went to.
+Removing the open tab opens its neighbour, and the only tab stays. **Undo**: an undo on tab A leaves
+tab B's later change; undoing a move brings the track back to A without undoing B's own later
+change; undoing a removed tab brings it back where it was, with its tracks, and opens it; undoing an
+added tab takes it away and opens where he was; undoing a moved tab puts the row back with the same
+tab open; renaming another tab is undone from the tab he was on; a step that changed nothing is
+skipped. **Broken on purpose**: with the tab left keeping its voices and undo putting the whole
+project back, 7 of the 13 failed — the three mix tests and the four undo-per-tab tests; the six
+that passed are the file and the row mechanics neither break touches.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **317 checks** (297 before): through the real + above the tracks (its automation
+peer; the click is dispatched, so the probe waits for the tab), the tab chips, the strip menu's Move
+to tab filled as the menu opens, the tab's rename box and its menu's Remove tab. The new tab opens
+empty with no voice in the engine; the first tab's tracks come back with their voices on a click; a
+track sent to the other tab leaves the screen and the engine and plays there; Ctrl+Z on the other
+tab says there is nothing to undo there; Ctrl+Z on the first tab brings the track back; a tab
+renamed from the first tab has its name put back by Ctrl+Z there; the open tab removed lands on the
+first, and Ctrl+Z there brings it back and opens it; Ctrl+Tab and Ctrl+Shift+Tab are bound and go
+round the row. `--buttontest` still 71. Nobody has used tabs by hand.
+
+The probe's first run crashed the hidden window: after an undo rebuilt the tab row, the chips did
+not exist until the next layout, and the probe indexed one that was not there. The probe lays out
+before reading the row; the app was not at fault.
+
 ## 2026-10-27 — snapping to the playhead
 
 **452 tests: 452 passed, 0 failed, 0 skipped** — the 444 above and the eight of `PlayheadSnapTests`.
