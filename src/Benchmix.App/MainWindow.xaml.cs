@@ -3630,6 +3630,7 @@ public partial class MainWindow : Window
         await CheckWarpButtonsAsync(Check, Click, Buttons, Labels);
         await CheckSoloButtonsAsync(Check);
         await CheckRenderHeardAsync(Check);
+        await CheckDuplicateThroughMenuAsync(Check);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
 
         foreach (var p in pass) App.Log("buttontest: PASS - " + p);
@@ -4082,6 +4083,71 @@ public partial class MainWindow : Window
         {
             try { if (File.Exists(wav)) File.Delete(wav); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Duplicate track (Daniel, 2026-10-27) through the real strip menu item: the copy sits right
+    /// below the topper with the same sections at the same places, the same knobs, its own name,
+    /// selected and in the mix; one Ctrl+Z takes it away.
+    /// </summary>
+    private async Task CheckDuplicateThroughMenuAsync(Action<string, bool> check)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        await Settle();
+        if (_vm.Tracks.Count != 2) { check($"two tracks to duplicate one of (found {_vm.Tracks.Count})", false); return; }
+        var topper = _vm.Tracks[1];
+        var item = StripOf(topper)?.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == "Duplicate track");
+        check("the track strip's right-click menu offers 'Duplicate track'", item is not null);
+        if (item is null) return;
+
+        _vm.SelectedTrack = _vm.Tracks[0];
+        if (StripOf(topper) is { } strip)
+            OnTrackHeaderRightClicked(strip, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)
+                                             { RoutedEvent = PreviewMouseRightButtonDownEvent });
+        var topperId = topper.Id;
+        int count = _vm.Tracks.Count;
+        topper.EqLow = 0.5;
+        _vm.EndGesture();                                          // a knob to carry over
+        var places = topper.Clips.Select(c => (c.TimelineStartSeconds, c.TimelineEndSeconds)).ToList();
+        try
+        {
+            var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer(item);
+            ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        }
+        catch (Exception ex)
+        {
+            check($"the menu item can be clicked ({ex.GetType().Name}: {ex.Message})", false);
+            return;
+        }
+        await Settle();
+
+        var copy = _vm.Tracks.Count == count + 1 ? _vm.Tracks[2] : null;
+        check($"the copy appears right below the topper ({_vm.Tracks.Count} tracks; third is '{copy?.Name}')",
+              copy is not null && copy.Id != topperId && _vm.Tracks[1].Id == topperId);
+        if (copy is null) return;
+        check($"it is named after the topper ('{copy.Name}', want '{topper.Name} copy')", copy.Name == topper.Name + " copy");
+        var copied = copy.Clips.Select(c => (c.TimelineStartSeconds, c.TimelineEndSeconds)).ToList();
+        check($"it has the same {places.Count} section(s) at the same places", copied.SequenceEqual(places));
+        check($"it has the same knobs and tempo (LOW {copy.EqLow}, TEMPO {copy.Speed})",
+              copy.EqLow == 0.5 && copy.Speed == topper.Speed && copy.Semitones == topper.Semitones);
+        check("it is the selected track", ReferenceEquals(_vm.SelectedTrack, copy));
+        check("it is in the mix: it has a voice, not muted", _vm.Session.VoiceFor(copy.Model) is { Muted: false });
+        check($"the status bar says what happened (\"{_vm.Status}\")", _vm.Status.Contains("Duplicated") && _vm.Status.Contains(copy.Name));
+
+        var copyId = copy.Id;
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        check($"one Ctrl+Z takes the copy away ({_vm.Tracks.Count} tracks, want {count})",
+              _vm.Tracks.Count == count && _vm.Tracks.All(t => t.Id != copyId));
+        _vm.UndoCommand.Execute(null);                             // and the next, the knob
+        await Settle();
+        check("the Ctrl+Z after it puts the knob back", _vm.Tracks.First(t => t.Id == topperId).EqLow == 1);
     }
 
     private async Task CheckUndoResetAndNewAsync(Action<string, bool> check, Func<Button, Task> click,
@@ -4765,6 +4831,12 @@ public partial class MainWindow : Window
     private void OnRenameTrackMenu(object sender, RoutedEventArgs e)
     {
         if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _vm.BeginRename(t);
+    }
+
+    /// <summary>The strip menu's Duplicate track (Daniel, 2026-10-27): a copy right below it.</summary>
+    private void OnDuplicateTrackMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _vm.DuplicateTrack(t);
     }
 
     /// <summary>

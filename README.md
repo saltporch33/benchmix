@@ -75,6 +75,7 @@ control on screen is one you asked for.
 | click the ruler | move the playhead |
 | <kbd>Shift</kbd>+drag the ruler | set a listening loop |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
+| right-click a track's controls → *Duplicate track* | a copy right below it: the same sections, knobs, tempo ramps and warp markers |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
 | <kbd>Ctrl</kbd>+<kbd>J</kbd>, or right-click → *Join sections* | join pieces of a song back into one: the selected ones, or the one you clicked and the piece next to it. Any gap between them — where you took a piece out — is the song again |
 | <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section — or, in mark mode, the marked stretch |

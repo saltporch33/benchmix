@@ -210,6 +210,8 @@
                                         <Border.ContextMenu>
                                             <ContextMenu>
                                                 <MenuItem Header="Rename track" Click="OnRenameTrackMenu"/>
+                                                <MenuItem Header="Duplicate track" Click="OnDuplicateTrackMenu"
+                                                          ToolTip="A copy right below it: the same sections, knobs, tempo ramps and warp markers."/>
                                             </ContextMenu>
                                         </Border.ContextMenu>
                                         <Border.Style>

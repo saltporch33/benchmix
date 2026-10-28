@@ -183,6 +183,48 @@ public sealed class ProjectSession : IDisposable
         return model;
     }
 
+    /// <summary>
+    /// A copy of a track, right below it (Daniel, 2026-10-27: "duplicate a track with the existing
+    /// clips on it"): the same sections at the same places, the same knobs, mute, solo and LINK,
+    /// the same tempo ramps and warp markers and the same origin, under its own name and colour.
+    /// Its sections are its own — editing one side never touches the other — and it plays at once,
+    /// since the song is already decoded.
+    /// </summary>
+    public (TrackModel? Copy, EditResult Result) DuplicateTrack(TrackModel source)
+    {
+        int at = Project.Tracks.IndexOf(source);
+        if (at < 0) return (null, EditResult.No("That track is no longer in the project."));
+
+        var copy = source.Clone();
+        copy.Id = Guid.NewGuid();
+        foreach (var c in copy.Clips) c.Id = Guid.NewGuid();
+        copy.Name = CopyNameFor(source.Name);
+        copy.ColorHex = NextColour();
+        Project.Tracks.Insert(at + 1, copy);
+        EnsureVoice(copy);
+        ApplyAll();
+
+        var with = new List<string> { copy.Clips.Count == 1 ? "its section" : $"its {copy.Clips.Count} sections", "knobs" };
+        if (copy.Ramps.Count > 0) with.Add("tempo ramps");
+        if (copy.Warps.Count > 0) with.Add("warp markers");
+        string list = with.Count == 2 ? $"{with[0]} and {with[1]}" : string.Join(", ", with.Take(with.Count - 1)) + " and " + with[^1];
+        string soloed = copy.Soloed ? " Both are soloed, so both play." : "";
+        return (copy, new EditResult(true, $"Duplicated {source.Name} as \"{copy.Name}\", right below it, with {list}.{soloed} Ctrl+Z takes it away."));
+    }
+
+    /// <summary>"Bed copy", or "Bed copy 2" and on when that name is taken.</summary>
+    private string CopyNameFor(string name)
+    {
+        var taken = Project.Tracks.Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string first = CleanTrackName($"{name} copy") ?? "copy";
+        if (!taken.Contains(first)) return first;
+        for (int n = 2; ; n++)
+        {
+            string next = CleanTrackName($"{name} copy {n}") ?? $"copy {n}";
+            if (!taken.Contains(next)) return next;
+        }
+    }
+
     /// <summary>The longest name a track keeps; a longer one is cut there.</summary>
     public const int MaximumTrackNameLength = 80;
 

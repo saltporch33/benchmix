@@ -738,3 +738,17 @@ which to click and drag"*.
 | **PageUp and PageDown scroll a screen of tracks; Ctrl+Home and Ctrl+End go to the top and the bottom.** Not from a text box; bare Home stays the focused knob's "back to normal". | His suggestion. Handled with the other bare keys, never as KeyBindings (DECISIONS 2026-10-03). |
 | **The scroll bars are restyled**: a dark track, a clearly lighter thumb that brightens under the pointer and turns blue while dragged, 14 px wide, arrows kept. | The thumb is the part to drag, and now looks like it. The arrows stay because the one under the lanes moves a second a click (the manual says so). |
 | **The plain wheel scrolls the tracks wherever it is over the track area — the waveforms, the room under the tracks, the ruler, the scrollbar and the track controls away from a knob — and Alt+wheel moves the playhead.** This supersedes 2026-10-12, when a plain turn over the ruler and the waveforms moved the playhead. | His words, 2026-10-27: *"for vertical scroll, just make the mouse wheel do that. If i want to usew mouse wheel to scrub, i can hold alt. that work?"* and then *"vertical scroll when mouse is in the main area. hold alt, and it scrubs."* Alt already means the playhead: Alt+click puts it somewhere. Ctrl+wheel still zooms and Shift+wheel still scrolls sideways. |
+
+
+## 2026-10-27 — duplicate a track
+
+Daniel, 2026-10-27, verbatim: *"duplicate a track with the existing
+clips on it"*. Nothing beyond that was discussed; the rest is defaults he can change.
+
+| Decision | Why |
+| --- | --- |
+| **Right-click a track's strip → *Duplicate track*: a copy right below it**, with the same sections at the same frames, the same knobs, LINK, M and S, the same tempo ramps, warp markers and origin, under its own name — "Bed copy", then "Bed copy 2" — and the next colour. Selected, and playing at once. | His request. Right below is where he will look for it, and the next colour keeps the two apart on screen. |
+| **The copy's sections are copies**, with ids of their own, as are its ramps and markers. | Editing one side must never touch the other, and a saved project must not hold one section twice. |
+| **A soloed track's copy is soloed too**, and the status bar says both play. | The copy plays as the original does; two soloed tracks is what Ctrl+click on S makes anyway. |
+| **One undo step.** | As for every edit. |
+| **No shortcut key**, only the menu item. | Nobody asked for one, and the strip menu is where *Rename track* lives. |

@@ -219,6 +219,29 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// The strip menu's Duplicate track (Daniel, 2026-10-27): see <see cref="ProjectSession.DuplicateTrack"/>.
+    /// The copy appears right below the original, selected, as one undo step.
+    /// </summary>
+    public void DuplicateTrack(TrackViewModel track)
+    {
+        if (_session is null || !Tracks.Contains(track)) return;
+        if (HeldUnderTheMouse()) return;
+        if (IsBusy) { Status = "Wait for that to finish, then duplicate the track."; return; }
+        PushUndo($"duplicate {track.Name}");
+        var (copy, result) = Session.DuplicateTrack(track.Model);
+        if (copy is null) { Status = result.Message; return; }
+        var vm = NewTrackViewModel(copy);
+        if (Session.HasAllAudio(copy)) vm.NotifyAudioLoaded();
+        else vm.LoadError = $"Missing: {MissingFileOf(copy)}";
+        Tracks.Insert(Tracks.IndexOf(track) + 1, vm);
+        SelectedTrack = vm;
+        SelectClip(null);
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
+    }
+
+    /// <summary>
     /// The S button: see <see cref="ProjectSession.Solo"/>. One undo step, however many tracks'
     /// solo it changes.
     /// </summary>

@@ -1012,6 +1012,26 @@ and was taken out within the hour on his instruction.
 test reaches it; `scripts/verify-exe.ps1` on the build from that commit, all nine runs passed
 (297, 61) and stayed out of the way.
 
+## 2026-10-27 — duplicate a track
+
+**457 tests: 457 passed, 0 failed, 0 skipped** — the 452 above and the five of `DuplicateTrackTests`.
+
+**The copy** (`DuplicateTrackTests`: a 60 s ramp cut in three with one piece moved, LOW, VOL, PAN
+and PITCH turned, a tempo ramp and a warp marker): it sits right below the original with the same
+sections at the same frames reading the same part of the song, under ids of its own, with the same
+knobs, ramps and markers in lists of its own. **The mix with the copy is exactly twice the mix
+without it, sample for sample**, over 50 s. Moving a section on the copy and turning its knob leave
+the original's frames alone and its render byte for byte as it was (the copy muted). The names run
+"Bed copy", "Bed copy 2", "Bed copy copy". Saved and reopened, the copy is its own track. **Broken
+on purpose**: with the copy put at the end and given no voice, 3 of the 5 failed — the position, the
+name run and the 2× render; the two that passed depend on neither.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--buttontest` **71 checks** (61 before): through the real strip menu item on the topper — the copy
+right below it, named "… copy", the same section at the same place, the same LOW and TEMPO,
+selected, with a voice in the mix, the status line; one Ctrl+Z takes it away and the next puts the
+knob back. `--gesturetest` still 297.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
