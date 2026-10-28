@@ -67,7 +67,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<TrackViewModel> Tracks { get; }
 
-    public ProjectSession Session => _session ??= _useAudioDevice ? ProjectSession.CreateEmpty() : ProjectSession.CreateOffline();
+    public ProjectSession Session
+    {
+        get
+        {
+            if (_session is null)
+            {
+                _session = _useAudioDevice ? ProjectSession.CreateEmpty() : ProjectSession.CreateOffline();
+                RebuildTabs();          // the tab row shows the one tab from the start, not from the first undo (2026-10-27)
+            }
+            return _session;
+        }
+    }
 
     [ObservableProperty] private TrackViewModel? _selectedTrack;
     [ObservableProperty] private double _positionSeconds;

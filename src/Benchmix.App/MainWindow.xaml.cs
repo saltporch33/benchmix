@@ -536,6 +536,12 @@ public partial class MainWindow : Window
         var notes = new List<string>();          // what could not be tested — never counted as a pass
         void Check(string what, bool ok) => (ok ? pass : fail).Add(what);
 
+        // Before anything is undone (an undo rebuilds the row): the tab row shows the one tab from
+        // the start. In v2026.10.27.7 it showed only the + until the first undo or Open.
+        UpdateLayout();
+        Check($"the tab row shows the one tab from the start ({_vm.Tabs.Count} in the row, {Descendants<Border>(TabRow).Count(b => b.Name == "TabChip")} chip(s) drawn)",
+              _vm.Tabs.Count == 1 && _vm.Tabs[0].IsCurrent && Descendants<Border>(TabRow).Count(b => b.Name == "TabChip") == 1);
+
         // Handled cannot even be read on args with no RoutedEvent, so each one is stamped with the
         // event its handler is actually wired to in XAML.
         var down = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right)

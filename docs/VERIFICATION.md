@@ -1067,6 +1067,25 @@ right below it, named "… copy", the same section at the same place, the same L
 selected, with a voice in the mix, the status line; one Ctrl+Z takes it away and the next puts the
 knob back. `--gesturetest` still 297.
 
+## 2026-10-27 — the tab row at startup
+
+v2026.10.27.7 opened with an empty tab row: only the **+**, no "Mix" chip, until the first Ctrl+Z
+or Open rebuilt the row. The tab itself was there (`Project.Tabs` had it; the window's list of
+chips had nothing), so Ctrl+Tab, Move to tab, the mix and the project file were right; only the
+row was behind. It was seen in `--demoediting`'s screenshot after the release, not by any check —
+nothing read the row before the first undo. The row is now built when the session is first
+created (`MainViewModel.Session`), so it shows the one tab from the start.
+
+**470 tests: 470 passed, 0 failed, 0 skipped** — unchanged; the row belongs to the window.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **318 checks** (317 before): its first check now reads the row the moment the
+window is up, before anything is undone or opened — one tab in the row, one chip drawn, and it the
+open one. **Broken on purpose**: with the row-building call taken out of `Session` again, the
+verdict is "FAIL - 1 of 318" — that check, "0 in the row, 0 chip(s) drawn" — and the run exits 1;
+the other 317 pass, which is how the bug got through before. `--buttontest` still 71.
+`--demoediting`'s screenshot shows the "Mix" chip beside the +.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:
