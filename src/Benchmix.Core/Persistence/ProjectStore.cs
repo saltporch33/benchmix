@@ -211,6 +211,9 @@ public static class ProjectStore
             {
                 if (c.Id == Guid.Empty) c.Id = Guid.NewGuid();
                 if (string.IsNullOrEmpty(c.SourcePath)) c.SourcePath = t.SourcePath;
+                // Version 5 and earlier have no crossfade lengths: missing reads as 0, the standard
+                // 5 ms every splice already had, so a version 6 file needs nothing converted.
+                if (c.CrossfadeSeconds < 0) c.CrossfadeSeconds = 0;
             }
         }
         p.SchemaVersion = BenchmixProject.CurrentSchemaVersion;

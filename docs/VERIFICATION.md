@@ -1086,6 +1086,41 @@ verdict is "FAIL - 1 of 318" — that check, "0 in the row, 0 chip(s) drawn" —
 the other 317 pass, which is how the bug got through before. `--buttontest` still 71.
 `--demoediting`'s screenshot shows the "Mix" chip beside the +.
 
+## 2026-10-28 — the crossfade X
+
+**482 tests: 482 passed, 0 failed, 0 skipped** — the 470 before and the twelve of `CrossfadeTests`.
+
+**The fade** (`CrossfadeTests`, on a ramp whose every sample is its own position, cut so the two
+sides of the join do not meet): with nothing picked, with 50 ms picked and with 200 ms picked, the
+output over the join follows the equal-power law written out in the test — the incoming section
+rising under the outgoing one's continuation past its cut — to within 9.3e-10 at every frame of the
+240, 2400 and 9600, and after the fade is the incoming section's own samples exactly. 200 ms picked
+into a section 1000 frames long follows the 1000-frame law (1.0e-2 off the 9600-frame one): the
+fade ends with the section. On the 431 Hz loop of `JoinTests`, a 50 ms crossfade leaves the worst
+step across the whole fade at the signal's own — 0.0282 against 0.0282 untouched and linked, 0.0284
+against 0.0283 pitched, 0.0386 against 0.0283 stretched (under the 1.5× bar) — and not one sample
+after the fade differs from the repeat played alone, on all four paths. A section differing only in
+its crossfade length is not the same section to the engine (`Equivalent` null, `Matches` false), so
+a changed length re-primes the join. **The rule for the X** (`TimelineEditor.CrossfadeAt`, on a
+ramp WAV in a session): 0 at a seam, at a gap, on a first section, and on either side of a fade of
+its own; the standard at a butt join the engine also calls one; the picked length once picked, in
+the X and in the engine's section both. **Repeats carry the length; a split's second half starts
+with the standard.** **The file**: 0.1 saved and reopened in a version 6 file; a version 5 file
+written out by hand opens with 0 and the current version. **Broken on purpose**: with
+`CaptureHandle` ignoring the picked length (5 ms for all), 3 of the 12 failed — the law at 50 ms, the
+law at 200 ms and the fade cut to its section; the nine others do not depend on the length.
+
+`scripts/verify-exe.ps1` on a staged build: all nine runs passed and stayed out of the way.
+`--gesturetest` **329 checks** (318 before): on the four repeats of the loop, the first (nothing
+before it) is drawn with no X and each later one with the standard 5 ms X; the lane menu offers
+*Crossfade from the section before* with the standard ticked; 50 ms through the real menu item (its
+automation peer, the menu shut) sets the second repeat's length, the engine's section carries it,
+the lane draws that X 50 ms wide and the next still 5 ms, the status says so, and the menu ticks
+50 ms; one Ctrl+Z puts the standard back; 50 ms picked on the first repeat is kept, draws no X, and
+the status says it takes effect once something ends where it starts. `--buttontest` still 71.
+`--demoediting`'s screenshot shows the three X's at the loop's joins (one of them 200 ms — the same
+6 px at that zoom). Nobody has listened to a crossfade longer than 5 ms.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

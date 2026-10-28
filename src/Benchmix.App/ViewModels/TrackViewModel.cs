@@ -116,7 +116,8 @@ public sealed partial class TrackViewModel : ObservableObject
             Tempo: tempo,
             TimelineEndSeconds: c.TimelineEndSeconds,
             OriginSeconds: Model.TimelineOffsetSeconds,
-            TrackStartSeconds: c.TrackStartSeconds)).ToArray();
+            TrackStartSeconds: c.TrackStartSeconds,
+            CrossfadeSeconds: TimelineEditor.CrossfadeAt(Model, c.Model, _session))).ToArray();
 
         OnPropertyChanged(nameof(ClipVisuals));
         NotifyMarkChanged();                                    // a turn of TEMPO moves the audio a mark covers

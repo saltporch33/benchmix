@@ -26,6 +26,13 @@ public sealed class VoiceClip
     public double FadeInSeconds { get; init; }
     public double FadeOutSeconds { get; init; }
 
+    /// <summary>
+    /// The crossfade into this section where it butts against the one before (2026-10-28): the
+    /// length chosen for that splice, or 0 for the standard <see cref="TrackVoice.DeclickSeconds"/>.
+    /// Nothing at a seam, a gap, or a join with a fade of its own on either side.
+    /// </summary>
+    public double CrossfadeSeconds { get; init; }
+
     /// <summary>Resolved end, with -1 and any over-long value pulled back to the file's length.</summary>
     public long SourceEnd
     {
@@ -138,6 +145,7 @@ public sealed class ClipTimeline
         SourceEndFrame = c.SourceStartFrame + lengthFrames,
         FadeInSeconds = c.FadeInSeconds,
         FadeOutSeconds = c.FadeOutSeconds,
+        CrossfadeSeconds = c.CrossfadeSeconds,
     };
 
     public int Count => _clips.Length;
@@ -203,6 +211,7 @@ public sealed class ClipTimeline
             && c.SourceEndFrame == clip.SourceEndFrame
             && c.FadeInSeconds == clip.FadeInSeconds
             && c.FadeOutSeconds == clip.FadeOutSeconds
+            && c.CrossfadeSeconds == clip.CrossfadeSeconds
             ? c
             : null;
     }
@@ -221,7 +230,8 @@ public sealed class ClipTimeline
                 || a.SourceStartFrame != b.SourceStartFrame
                 || a.SourceEndFrame != b.SourceEndFrame
                 || a.FadeInSeconds != b.FadeInSeconds
-                || a.FadeOutSeconds != b.FadeOutSeconds) return false;
+                || a.FadeOutSeconds != b.FadeOutSeconds
+                || a.CrossfadeSeconds != b.CrossfadeSeconds) return false;
         }
         return true;
     }

@@ -635,9 +635,17 @@ public sealed class TrackVoice : IDisposable
     private long FirstFrameOf(VoiceClip clip) => FirstRelAt(clip.TrackStartFrame);
 
     /// <summary>
-    /// Renders <see cref="DeclickSeconds"/> of what <paramref name="outgoing"/> would have played
-    /// had it carried on past the join — its handle — through the real stretcher and EQ, which are
-    /// still in exactly the state it left them in.
+    /// How long the crossfade across a butt join into <paramref name="incoming"/> is: the length
+    /// chosen for that splice (2026-10-28), or the standard <see cref="DeclickSeconds"/>.
+    /// </summary>
+    public static double CrossfadeSecondsInto(VoiceClip incoming)
+        => incoming.CrossfadeSeconds > 0 ? incoming.CrossfadeSeconds : DeclickSeconds;
+
+    /// <summary>
+    /// Renders the crossfade's length — <see cref="CrossfadeSecondsInto"/>, five milliseconds unless
+    /// a longer one was picked for this splice — of what <paramref name="outgoing"/> would have
+    /// played had it carried on past the join — its handle — through the real stretcher and EQ,
+    /// which are still in exactly the state it left them in.
     ///
     /// <para>
     /// A butt join cannot be declicked on both sides: two 5 ms ramps back to back are a hole, and
@@ -652,7 +660,12 @@ public sealed class TrackVoice : IDisposable
     /// </summary>
     private void CaptureHandle(VoiceClip outgoing, VoiceClip incoming, long rel)
     {
-        int n = (int)(DeclickSeconds * _sampleRate);
+        // Never past the incoming section's own end: a fade still running when the next join
+        // arrived would be cut dead there, which is the click this exists to remove. (The length
+        // is in output frames, as the fade is applied, so the clamp is too.)
+        int n = (int)(CrossfadeSecondsInto(incoming) * _sampleRate);
+        long room = FirstRelAt(incoming.TrackEndFrame) - rel;
+        if (room < n) n = (int)Math.Max(0, room);
         if (n <= 0 || outgoing.Audio is null) return;
 
         int need = n * _channels;

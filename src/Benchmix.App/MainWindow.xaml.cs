@@ -173,9 +173,12 @@ public partial class MainWindow : Window
                 _vm.AddEmptyTrackCommand.Execute(null);                 // and one still empty
                 _vm.SelectedTrack = empty;
                 _vm.SelectClip(empty.Clips.OrderBy(c => c.TimelineStartSeconds).First());
-                if (empty.Clips.Count != 4 || _vm.SelectedClip is null)
+                // A 200 ms crossfade picked for the third repeat's splice (2026-10-28), so the lane
+                // draws the X at the three joins: two standard ones and that one.
+                if (empty.Clips.Count == 4) empty.Clips.OrderBy(c => c.TimelineStartSeconds).ElementAt(2).CrossfadeSeconds = 0.2;
+                if (empty.Clips.Count != 4 || _vm.SelectedClip is null || empty.ClipVisuals.Count(v => v.CrossfadeSeconds > 0) != 3)
                 {
-                    App.Log($"ui probe failed: the editing demo left {empty.Clips.Count} sections on the empty track, not 4, or selected none");
+                    App.Log($"ui probe failed: the editing demo left {empty.Clips.Count} sections on the empty track, not 4, or selected none, or draws {empty.ClipVisuals.Count(v => v.CrossfadeSeconds > 0)} crossfade X's, not 3");
                     EndVerificationRun(false);
                     return;
                 }
@@ -522,6 +525,18 @@ public partial class MainWindow : Window
         while (!done() && Environment.TickCount64 < until)
             System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(
                 () => { }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Clicks a menu item the way UI Automation does: the real item, its real Click handler, with
+    /// the menu shut (opening a popup could put it on his screen). The click may be dispatched, so
+    /// the caller pumps until its effect shows.
+    /// </summary>
+    private static void ClickMenuItem(MenuItem item)
+    {
+        var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer(item);
+        ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+            System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
     }
 
     /// <summary>
@@ -3669,6 +3684,57 @@ public partial class MainWindow : Window
         Check("each repeat butts exactly against the last, so the engine crossfades every join",
               timeline is { Count: 4 } && timeline.ButtJoinAfter(0) && timeline.ButtJoinAfter(1) && timeline.ButtJoinAfter(2));
 
+        // --- the crossfade X (Daniel, 2026-10-28): drawn at every crossfaded join, its length picked from the lane menu ---
+        UpdateLayout();
+        var loopLane = LaneOf(empty);
+        var xfadeMenu = loopLane?.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "xfade");
+        var fifty = xfadeMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "0.05");
+        var standard = xfadeMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "0");
+        Check("the lane menu offers 'Crossfade from the section before', with the 5 ms standard and 50 ms in it", fifty is not null && standard is not null);
+        if (repeats.Count == 4 && loopLane is not null && fifty is not null && standard is not null)
+        {
+            static double XAt(TrackViewModel t, ClipViewModel c)
+                => t.ClipVisuals.FirstOrDefault(v => Math.Abs(v.TimelineStartSeconds - c.TimelineStartSeconds) < 1e-9)?.CrossfadeSeconds ?? -1;
+            Check($"the first repeat, with nothing before it, is drawn with no X ({XAt(empty, repeats[0]) * 1000:0.#} ms)", XAt(empty, repeats[0]) == 0);
+            Check($"each later repeat's start is drawn with the standard 5 ms X ({XAt(empty, repeats[1]) * 1000:0.#} / {XAt(empty, repeats[2]) * 1000:0.#} / {XAt(empty, repeats[3]) * 1000:0.#} ms)",
+                  Math.Abs(XAt(empty, repeats[1]) - 0.005) < 1e-9 && Math.Abs(XAt(empty, repeats[2]) - 0.005) < 1e-9 && Math.Abs(XAt(empty, repeats[3]) - 0.005) < 1e-9);
+
+            _vm.SelectClip(repeats[1]);
+            PrepareLaneMenu(loopLane);
+            Check("with nothing picked, the menu ticks the 5 ms standard", standard.IsChecked && !fifty.IsChecked);
+
+            ClickMenuItem(fifty);
+            PumpUntil(() => repeats[1].Model.CrossfadeSeconds == 0.05);
+            Check($"50 ms through the real menu item sets the second repeat's crossfade ({repeats[1].Model.CrossfadeSeconds * 1000:0.#} ms)", repeats[1].Model.CrossfadeSeconds == 0.05);
+            var voiced = _vm.Session.VoiceFor(empty.Model)?.Timeline;
+            Check($"the engine's section carries it ({(voiced is { Count: 4 } ? voiced[1].CrossfadeSeconds * 1000 : -1):0.#} ms)", voiced is { Count: 4 } && voiced[1].CrossfadeSeconds == 0.05);
+            Check($"the lane draws that X 50 ms wide and the next one still 5 ms ({XAt(empty, repeats[1]) * 1000:0.#} / {XAt(empty, repeats[2]) * 1000:0.#} ms)",
+                  Math.Abs(XAt(empty, repeats[1]) - 0.05) < 1e-9 && Math.Abs(XAt(empty, repeats[2]) - 0.005) < 1e-9);
+            Check($"the status says so (\"{_vm.Status}\")", _vm.Status.Contains("50 ms") && _vm.Status.Contains("from the section before"));
+            PrepareLaneMenu(loopLane);
+            Check("the menu now ticks 50 ms", fifty.IsChecked && !standard.IsChecked);
+
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == emptyId)?.Clips.All(c => c.Model.CrossfadeSeconds == 0) == true);
+            var emptyAgain = _vm.Tracks.First(t => t.Id == emptyId);
+            var again = emptyAgain.Clips.OrderBy(c => c.TimelineStartSeconds).ToList();
+            Check($"one Ctrl+Z puts the standard back ({(again.Count == 4 ? again[1].Model.CrossfadeSeconds * 1000 : -1):0.#} ms; {again.Count} sections)",
+                  again.Count == 4 && again[1].Model.CrossfadeSeconds == 0 && Math.Abs(XAt(emptyAgain, again[1]) - 0.005) < 1e-9);
+
+            // A section with nothing butted against it keeps the length for later, and the status says so.
+            if (again.Count == 4)
+            {
+                _vm.SelectClip(again[0]);
+                ClickMenuItem(fifty);
+                PumpUntil(() => again[0].Model.CrossfadeSeconds == 0.05);
+                Check($"on the first repeat, with nothing before it, 50 ms is kept but draws no X ({XAt(emptyAgain, again[0]) * 1000:0.#} ms; \"{_vm.Status}\")",
+                      again[0].Model.CrossfadeSeconds == 0.05 && XAt(emptyAgain, again[0]) == 0 && _vm.Status.Contains("takes effect"));
+                _vm.UndoCommand.Execute(null);
+                PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == emptyId)?.Clips.All(c => c.Model.CrossfadeSeconds == 0) == true);
+            }
+            empty = _vm.Tracks.First(t => t.Id == emptyId);
+        }
+
         // --- and one undo takes the whole loop back ---
         _vm.UndoCommand.Execute(null);
         PumpUntil(() => _vm.Tracks.FirstOrDefault(t => t.Id == emptyId)?.Clips.Count == 1);
@@ -5856,9 +5922,13 @@ public partial class MainWindow : Window
         bool overRamp = _rampUnderMenu is { } r && ReferenceEquals(r.Track, lane.DataContext);
         bool overWarp = _warpUnderMenu is { } w && ReferenceEquals(w.Track, lane.DataContext);
         bool marked = _vm.MarkedTrack is not null;
+        var section = ClipOf(lane);                 // for the crossfade length in force, ticked
         foreach (var item in menu.Items.OfType<FrameworkElement>())
         {
             if (item is MenuItem { Tag: "loopmode" } loop) loop.IsChecked = _vm.LoopMode;
+            if (item is MenuItem { Tag: "xfade" } xfade)
+                foreach (var choice in xfade.Items.OfType<MenuItem>())
+                    choice.IsChecked = section is not null && TagSeconds(choice) == section.CrossfadeSeconds;
             if (item.Tag as string == "removeRamp") item.Visibility = overRamp ? Visibility.Visible : Visibility.Collapsed;
             // Over a ramp and a marker both, the two Remove items sit together under the ramp's separator.
             if (item is MenuItem { Tag: "removeWarp" }) item.Visibility = overWarp ? Visibility.Visible : Visibility.Collapsed;
@@ -6126,6 +6196,20 @@ public partial class MainWindow : Window
         _vm.PushUndo("fade out", null);
         c.FadeOutSeconds = TagSeconds(sender);
         _vm.Status = $"{c.Track.Name}: {c.FadeText}.";
+    }
+
+    /// <summary>
+    /// The crossfade at this section's start (Daniel, 2026-10-28): the length he picked for the
+    /// splice, or 0 for the standard 5 ms. The item carries its track while the menu is open; the
+    /// probes click the real item with the menu shut, and then it is the selected section.
+    /// </summary>
+    private void OnCrossfade(object sender, RoutedEventArgs e)
+    {
+        var c = ClipOf(sender) ?? (_vm.SelectedClip is { IsSelected: true } selected ? selected : null);
+        if (c is null) { _vm.Status = "Click a section first."; return; }
+        _vm.PushUndo("crossfade", null);
+        c.CrossfadeSeconds = TagSeconds(sender);
+        _vm.Status = $"{c.Track.Name}: {c.CrossfadeText}.";
     }
 
     private void OnTrimStartToPlayhead(object sender, RoutedEventArgs e)

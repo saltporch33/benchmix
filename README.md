@@ -83,6 +83,7 @@ control on screen is one you asked for.
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | the next tab / the one before |
 | <kbd>Ctrl</kbd>+<kbd>I</kbd> | split the selected track at the playhead |
 | <kbd>Ctrl</kbd>+<kbd>J</kbd>, or right-click → *Join sections* | join pieces of a song back into one: the selected ones, or the one you clicked and the piece next to it. Any gap between them — where you took a piece out — is the song again |
+| right-click a section → *Crossfade from the section before* ▸ | how long the fade is where that section starts on the very frame the one before ends: 5 ms unless you pick longer, up to 200 ms. The lane draws it as a narrow X just after the join |
 | <kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> | cut / copy the selected section — or, in mark mode, the marked stretch |
 | <kbd>Ctrl</kbd>+<kbd>V</kbd> | paste onto the **selected track** at the **playhead** — a section, or song files copied in Explorer |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | repeat the selected section — or, in mark mode, the marked stretch — straight after itself |

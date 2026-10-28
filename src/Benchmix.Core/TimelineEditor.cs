@@ -69,6 +69,37 @@ public static class TimelineEditor
     /// <summary>Shorter than this and a section is not worth keeping; it is a slip of the mouse.</summary>
     public const double MinimumSectionSeconds = 0.02;
 
+    /// <summary>The crossfade every butt join has had since 2026-09-24, and what a section's 0 means.</summary>
+    public const double StandardCrossfadeSeconds = TrackVoice.DeclickSeconds;
+
+    /// <summary>
+    /// The crossfade at a section's start, in timeline seconds — its own length, or the standard —
+    /// when that start is a join the engine crossfades: the section before ends on the very frame
+    /// this one starts, does not continue into it (a seam gets nothing: not one sample changes), and
+    /// neither side has a fade of its own. 0 everywhere else — a gap, a seam, a faded edge, a first
+    /// section. This is what the lane draws as the X (Daniel, 2026-10-28), from the same rule the
+    /// engine fades by (<see cref="ClipTimeline.ButtJoinAfter"/>), and never longer than the section:
+    /// the engine ends the fade with the section too.
+    /// </summary>
+    public static double CrossfadeAt(TrackModel track, ClipModel clip, ProjectSession s)
+    {
+        if (clip.FadeInSeconds > 0) return 0;
+        long length = LengthFramesOf(clip, s);
+        if (length <= 0) return 0;
+        long start = StartFrameOf(clip, s);
+        foreach (var before in track.Clips)
+        {
+            if (ReferenceEquals(before, clip) || LengthFramesOf(before, s) <= 0 || EndFrameOf(before, s) != start) continue;
+            if (before.FadeOutSeconds > 0) return 0;
+            bool seam = ReferenceEquals(s.AudioFor(before), s.AudioFor(clip))
+                     && SourceEndFrameOf(before, s) == SourceStartFrameOf(clip, s);
+            if (seam) return 0;
+            double chosen = clip.CrossfadeSeconds > 0 ? clip.CrossfadeSeconds : StandardCrossfadeSeconds;
+            return Math.Min(chosen, TimelineLength(track, clip.TrackStartSeconds, SecondsOf(length, s)));
+        }
+        return 0;
+    }
+
     // ---------------------------------------------------------------- frames
 
     /// <summary>Where a section starts, in the track's own frames, exactly as the engine will place it.</summary>
@@ -232,6 +263,7 @@ public static class TimelineEditor
         second.TrackStartSeconds = SecondsOf(start + into, session);
         second.SourceStartSeconds = boundary;
         second.FadeInSeconds = 0;                 // a fade belongs to the outer edges, not the join
+        second.CrossfadeSeconds = 0;              // and a crossfade length to the start it was picked for; this start is new
 
         clip.SourceEndSeconds = boundary;
         clip.FadeOutSeconds = 0;
@@ -480,6 +512,7 @@ public static class TimelineEditor
             {
                 copy.SourceStartSeconds = SecondsOf(source + (from - cStart), session);
                 copy.FadeInSeconds = 0;
+                copy.CrossfadeSeconds = 0;                      // a new start: the standard, as a cut always leaves
             }
             if (to < cEnd)
             {
@@ -783,6 +816,7 @@ public static class TimelineEditor
                 tail.TrackStartSeconds = SecondsOf(end, session);
                 tail.SourceStartSeconds = SecondsOf(source + (end - cStart), session);
                 tail.FadeInSeconds = 0;
+                tail.CrossfadeSeconds = 0;                                 // a new start: the standard
                 track.Clips.Add(tail);
                 cut.Add(tail);
 
@@ -802,6 +836,7 @@ public static class TimelineEditor
                 c.SourceStartSeconds = SecondsOf(source + (end - cStart), session);
                 c.TrackStartSeconds = SecondsOf(end, session);
                 c.FadeInSeconds = 0;
+                c.CrossfadeSeconds = 0;                                    // a new start: the standard
             }
             cut.Add(c);
         }

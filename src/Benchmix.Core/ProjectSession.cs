@@ -104,6 +104,7 @@ public sealed class ProjectSession : IDisposable
                 SourceEndFrame = c.SourceEndSeconds < 0 ? -1 : SecondsToFrames(c.SourceEndSeconds),
                 FadeInSeconds = Math.Max(0, c.FadeInSeconds),
                 FadeOutSeconds = Math.Max(0, c.FadeOutSeconds),
+                CrossfadeSeconds = Math.Max(0, c.CrossfadeSeconds),
             });
         }
         return new ClipTimeline(clips);

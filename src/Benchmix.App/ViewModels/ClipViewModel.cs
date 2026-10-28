@@ -39,6 +39,7 @@ public sealed partial class ClipViewModel : ObservableObject
     [ObservableProperty] private double _sourceEndSeconds = -1;
     [ObservableProperty] private double _fadeInSeconds;
     [ObservableProperty] private double _fadeOutSeconds;
+    [ObservableProperty] private double _crossfadeSeconds;
 
     public PeakData? Peaks => _session.AudioFor(Model)?.EnsurePeaks();
     public int SampleRate => _session.SampleRate;
@@ -68,6 +69,7 @@ public sealed partial class ClipViewModel : ObservableObject
         _sourceEndSeconds = Model.SourceEndSeconds;
         _fadeInSeconds = Model.FadeInSeconds;
         _fadeOutSeconds = Model.FadeOutSeconds;
+        _crossfadeSeconds = Model.CrossfadeSeconds;
         OnPropertyChanged(string.Empty);
     }
 #pragma warning restore MVVMTK0034
@@ -102,6 +104,12 @@ public sealed partial class ClipViewModel : ObservableObject
         Push();
     }
 
+    partial void OnCrossfadeSecondsChanged(double value)
+    {
+        Model.CrossfadeSeconds = Math.Max(0, value);
+        Push();
+    }
+
     private void Push()
     {
         TimelineEditor.Normalise(_track.Model);
@@ -117,6 +125,24 @@ public sealed partial class ClipViewModel : ObservableObject
     public string FadeText => FadeInSeconds <= 0 && FadeOutSeconds <= 0
         ? "no fades"
         : $"fade {FadeInSeconds:0.#}s / {FadeOutSeconds:0.#}s";
+
+    /// <summary>
+    /// The crossfade the lane draws as an X at this section's start (2026-10-28): its length where
+    /// the start is a join the engine crossfades, else 0.
+    /// </summary>
+    public double CrossfadeAtStart => TimelineEditor.CrossfadeAt(_track.Model, Model, _session);
+
+    /// <summary>What the status bar says after a length is picked from the lane's menu.</summary>
+    public string CrossfadeText
+    {
+        get
+        {
+            string length = CrossfadeSeconds <= 0 ? "5 ms, the standard" : $"{CrossfadeSeconds * 1000:0} ms";
+            return CrossfadeAtStart > 0
+                ? $"crossfade {length} from the section before"
+                : $"crossfade {length} — it takes effect where this section starts on the very frame another ends";
+        }
+    }
 
     public string TrimText =>
         $"{LengthSeconds:0.0}s of {SourceDurationSeconds:0.0}s";

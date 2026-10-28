@@ -776,3 +776,24 @@ he can change.
 | **Every tab's audio is decoded when the project opens**; only the open tab's tracks have voices in the engine. | A switch must not stall, and a tab that is not open must not sound. |
 | **Project files are version 5.** Every save writes 5, so an older Benchmix refuses the file. A version 4 file opens as one tab, "Mix", with its tracks, tempo and loop. | An older build would open one tab and save over the rest. |
 | **Not changed:** Match key compares with the topmost track of the open tab; New clears every tab; Open replaces them all; a render is the open tab. | Tabs are inside the project, not beside it. |
+
+## 2026-10-28 — the crossfade X
+
+Daniel, 2026-10-27, verbatim: *"the crossfade thingy when im splicing a clip
+into another one….on other daw's it looked like a very narrow tall X….basically i think it just did
+a small fraction of a second volume decrease/fade out and fade into the next clip (very very small,
+fraction of second)"*. On 2026-10-28 he picked it as the next item, without saying whether he hears
+a click at a splice or only misses the picture — so this does both: the X is drawn, and the length
+can be chosen. Every butt join had already been crossfaded over 5 ms since 2026-09-24. Everything
+below is a default he can change.
+
+| Decision | Why |
+| --- | --- |
+| **The X is drawn at every join the engine crossfades** — a section starting on the very frame the one before ends, not continuing it, with no fade of its own on either side — and nowhere else. It covers the fade's real stretch, from the join forward, the full height of the lane, and never less than 6 px. | The 5 ms standard is a fraction of a pixel at any zoom: drawn to scale it would vanish, and he asked for "a very narrow tall X". At a seam the X would say audio is being faded where not one sample changes; at a gap, where each side is declicked on its own, it would lie the same way. |
+| **The length is picked from the lane's right-click menu, *Crossfade from the section before*: 5 ms (the standard), 10, 20, 50, 100 or 200 ms.** The one in force is ticked. It lives on the section whose start it is, is undone with Ctrl+Z, and is saved. | "A small fraction of a second": the menu covers that and no more. A menu, as *Fade in* and *Fade out* are, rather than dragging the X: there is nothing to grab at 5 ms. It belongs to the incoming section because the fade is applied over that section's first frames. |
+| **The fade stays where it was: from the join forward, into the incoming section, equal power.** A longer length renders a longer handle of the outgoing section past its cut and fades it out under more of the incoming one. | The join does not move, so nothing after it is a sample late (`CrossfadeTests`, as `JoinTests` prove at 5 ms). Other DAWs draw the X astride the splice; here the engine fades only after it, and the X is drawn where the fade is. |
+| **Never longer than the incoming section.** A fade longer than its section ends with the section. | The next join would otherwise cut it dead mid-fade — the click a crossfade exists to remove. Measured: 200 ms into a 1000-frame section follows the 1000-frame law. |
+| **Repeats carry the length; a split's second half, and any new start a cut makes, go back to the standard.** Ctrl+D and loop mode copy it to every repeat. | A loop should splice alike at every repeat. A split's second half starts at a seam, and the start a cut makes is a new splice: the length was picked for the old one. The same as a fade-in, which a cut always clears. |
+| **With a fade of its own on either side there is no crossfade, and no X.** | Unchanged since 2026-09-24: the fade is the ramp there, and a crossfade under it would double up. |
+| **Project files are version 6.** A version 5 file opens with every splice at the standard. | An older build would open a version 6 file with the lengths gone and save over them. The rule since version 3. |
+| **Not changed: the law.** Equal power at every length. For a loop of one steady note the 2026-10-21 measurement stands: a longer crossfade makes the bump at each repeat longer, not smaller (same height, 6–14× longer; `SustainedLoopTests`, kept uncommitted). This is for splicing one passage into another, which is what he asked for. | He has not answered the held-note question; the join law stays until he does. |

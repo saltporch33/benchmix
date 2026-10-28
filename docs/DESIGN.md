@@ -97,11 +97,14 @@ A track holds sections, and where two meet there are three cases:
   file, so the engine plays straight through: no fade, no re-prime, not one sample changed.
 - **A butt join** — the next section starts on the very frame the last one ends but does not
   continue it: every repeat of a loop. Neither side is declicked (two ramps back to back are a
-  hole). Instead, at the join the voice renders five milliseconds of what the outgoing section
-  *would have played next* — its handle, read past its cut, through the real stretcher and EQ —
-  and crossfades it, equal power, into the incoming section. The fade survives a render-block
-  boundary, so preview and export agree. Measured: the largest step at a phase-mismatched loop join
-  equals the signal's own largest step, on the untouched, linked and phase-vocoder paths alike.
+  hole). Instead, at the join the voice renders five milliseconds — or the length picked for that
+  splice from the lane menu, up to 200 ms (2026-10-28), never longer than the incoming section — of
+  what the outgoing section *would have played next* — its handle, read past its cut, through the
+  real stretcher and EQ — and crossfades it, equal power, into the incoming section, from the join
+  forward. The lane draws that stretch as an X. The fade survives a render-block boundary, so
+  preview and export agree. Measured: the largest step at a phase-mismatched loop join equals the
+  signal's own largest step, on the untouched, linked and phase-vocoder paths alike, at 5 ms and
+  at 50 ms (`JoinTests`, `CrossfadeTests`).
 - **A gap** — each side gets its 5 ms declick where it was cut.
 
 **Every placement is in whole frames.** The seam test and the butt-join test both compare two

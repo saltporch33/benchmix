@@ -18,6 +18,11 @@ namespace Benchmix.App.Controls;
 /// The track's tempo map in seconds from its origin when it has tempo ramps or a moved warp marker,
 /// else null — and then every position is worked out with the one speed exactly as before.
 /// </param>
+/// <param name="CrossfadeSeconds">
+/// The crossfade at this section's start, in timeline seconds, where it starts on the very frame
+/// the section before ends and the engine fades that one out under it — drawn as the X (Daniel,
+/// 2026-10-28). 0 where there is none: a gap, a seam, a faded edge, a first section.
+/// </param>
 public sealed record ClipVisual(
     PeakData? Peaks,
     int SampleRate,
@@ -32,7 +37,8 @@ public sealed record ClipVisual(
     TempoMap? Tempo = null,
     double TimelineEndSeconds = 0,
     double OriginSeconds = 0,
-    double TrackStartSeconds = 0);
+    double TrackStartSeconds = 0,
+    double CrossfadeSeconds = 0);
 
 /// <summary>A stretch marked in MARK MODE (2026-10-12), as the lane draws it: its two ends on the timeline.</summary>
 public sealed record MarkVisual(double StartSeconds, double EndSeconds);
@@ -290,6 +296,23 @@ public sealed class WaveformView : FrameworkElement
             var divider = new Pen(new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)), 1);
             divider.Freeze();
             dc.DrawLine(divider, new Point(Math.Round(startX) + 0.5, 0), new Point(Math.Round(startX) + 0.5, h));
+        }
+
+        // The crossfade X (Daniel, 2026-10-28: "a very narrow tall X"). Where this section starts on
+        // the very frame the one before ends, the engine fades that one out under this one, from the
+        // join forward for the crossfade's length; the X covers exactly that stretch, the full height
+        // of the lane — and never less than 6 px, so the standard 5 ms, a fraction of a pixel at any
+        // zoom, still shows as an X. It sits after the join line, where the fade really is.
+        if (clip.CrossfadeSeconds > 0)
+        {
+            double x1 = Math.Min(xTo, startX + Math.Max(6, clip.CrossfadeSeconds * pps));
+            if (x1 > startX && x1 >= 0 && startX <= w)
+            {
+                var cross = new Pen(new SolidColorBrush(Color.FromArgb(210, 255, 255, 255)), 1.25);
+                cross.Freeze();
+                dc.DrawLine(cross, new Point(startX, 0), new Point(x1, h));
+                dc.DrawLine(cross, new Point(startX, h), new Point(x1, 0));
+            }
         }
 
         if (clip.IsSelected)

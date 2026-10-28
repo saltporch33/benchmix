@@ -123,9 +123,9 @@ public class TabsTests : IDisposable
         ProjectStore.Save(p, again);
         using var doc = JsonDocument.Parse(File.ReadAllText(again));
         var root = doc.RootElement;
-        Assert.True(root.GetProperty("schemaVersion").GetInt32() == 5 && root.TryGetProperty("tabs", out var tabs) && tabs.GetArrayLength() == 1
+        Assert.True(root.GetProperty("schemaVersion").GetInt32() == BenchmixProject.CurrentSchemaVersion && root.TryGetProperty("tabs", out var tabs) && tabs.GetArrayLength() == 1
                     && !root.TryGetProperty("tracks", out _) && !root.TryGetProperty("projectBpm", out _),
-            "the resaved file is not a version 5 file with its tracks inside a tab");
+            "the resaved file is not a current-version file with its tracks inside a tab");
         Assert.True(ProjectStore.TryRead(again, out var p2) && p2!.Tracks.Count == 1 && p2.ProjectBpm == 93, "the resaved file does not open as it was");
     }
 

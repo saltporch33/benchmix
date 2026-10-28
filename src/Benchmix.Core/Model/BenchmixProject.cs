@@ -22,8 +22,12 @@ public sealed class BenchmixProject
     /// 5 added <see cref="Tabs"/> (2026-10-27, Daniel: tabs "like an excel workbook", each its own
     /// arrangement): the tracks, the project tempo and the listening loop moved into a tab. An older
     /// build refuses a version 5 file rather than opening only one of its tabs and saving over the rest.
+    /// 6 added <see cref="ClipModel.CrossfadeSeconds"/> (2026-10-28, Daniel: "the crossfade thingy
+    /// when im splicing a clip into another one… a very narrow tall X"): a chosen crossfade length
+    /// at a splice. An older build refuses a version 6 file rather than opening it with every splice
+    /// back at 5 ms and saving over the lengths.
     /// </summary>
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -174,6 +178,16 @@ public sealed class ClipModel
 
     /// <summary>Fade out at this section's end. Zero still declicks a cut edge.</summary>
     public double FadeOutSeconds { get; set; }
+
+    /// <summary>
+    /// How long the crossfade is where this section starts on the very frame the one before it ends
+    /// (2026-10-28, Daniel: "the crossfade thingy… a very narrow tall X"). 0 is the standard 5 ms
+    /// every such join has had since 2026-09-24; anything else is the length he picked from the
+    /// lane's menu. It belongs to this section's start, and does nothing where that start is a seam,
+    /// a gap, or has a fade of its own — the engine's rule (<c>ClipTimeline.ButtJoinAfter</c>), which
+    /// <c>TimelineEditor.CrossfadeAt</c> repeats for the lane's X.
+    /// </summary>
+    public double CrossfadeSeconds { get; set; }
 
     public ClipModel Clone() => (ClipModel)MemberwiseClone();
 }

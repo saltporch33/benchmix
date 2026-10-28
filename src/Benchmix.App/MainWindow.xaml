@@ -471,6 +471,17 @@
                                                     <MenuItem Header="2 s"    Click="OnFadeOut" Tag="2"/>
                                                     <MenuItem Header="4 s"    Click="OnFadeOut" Tag="4"/>
                                                 </MenuItem>
+                                                <!-- The crossfade at this section's start (Daniel, 2026-10-28: "the crossfade
+                                                     thingy… a very narrow tall X"). Every splice has had 5 ms since 2026-09-24;
+                                                     this picks a longer one for this splice. PrepareLaneMenu ticks the one in force. -->
+                                                <MenuItem Header="Crossfade from the section before" Tag="xfade">
+                                                    <MenuItem Header="5 ms — standard" Click="OnCrossfade" Tag="0"/>
+                                                    <MenuItem Header="10 ms"  Click="OnCrossfade" Tag="0.01"/>
+                                                    <MenuItem Header="20 ms"  Click="OnCrossfade" Tag="0.02"/>
+                                                    <MenuItem Header="50 ms"  Click="OnCrossfade" Tag="0.05"/>
+                                                    <MenuItem Header="100 ms" Click="OnCrossfade" Tag="0.1"/>
+                                                    <MenuItem Header="200 ms" Click="OnCrossfade" Tag="0.2"/>
+                                                </MenuItem>
                                                 <Separator/>
                                                 <MenuItem Header="Trim start to playhead" Click="OnTrimStartToPlayhead"/>
                                                 <MenuItem Header="Trim end to playhead"   Click="OnTrimEndToPlayhead"/>

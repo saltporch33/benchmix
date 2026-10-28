@@ -30,6 +30,14 @@ mistakes, not by describing the project.
   every path. Before 2026-09-24 it was not covered on any path and every loop repeat clicked
   (`JoinTests`). Do not "simplify" it back to reading the handle raw from the file: that is what
   landed the old fade 65 frames late.
+- **The crossfade X sits after the join, not astride it** (2026-10-28, his *"very narrow tall X"*).
+  The engine fades from the join forward, over the incoming section's first frames; the X covers
+  exactly that stretch, never less than 6 px (5 ms is a fraction of a pixel). A section's
+  `CrossfadeSeconds` of 0 means the standard 5 ms, not none: a butt join is always crossfaded. The
+  length is picked from the lane menu (5–200 ms), lives on the incoming section, is copied to
+  repeats and cleared by a split or a cut, like a fade-in. Do not "centre" the X on the join, and do
+  not offer a longer crossfade as the fix for a steady-note loop: measured 2026-10-21, a longer fade
+  makes that bump longer, not smaller.
 - **Positions are worked out in whole frames, then turned into seconds.** `TimelineEditor` and
   the drag gestures never add seconds together to place a section: the engine rounds each position
   separately, and a sum of seconds can land a frame off — which silently turns a seam or a butt join
@@ -164,10 +172,10 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | Switch | Proves |
 | --- | --- |
 | `--latencycheck` | a pitched track lands with an untouched one, and so do a track through a tempo ramp and a track through moved warp markers (no file needed) |
-| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, Alt+wheel over the ruler and over the waveforms, the plain wheel scrolling the tracks (over a waveform, the ruler and the strip; a knob under the pointer still turns), renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo), snapping to the playhead (a section's start and its end, the guide line, Ctrl, not while playing), scrolling the tracks (a right-drag up and down, PageUp/PageDown, Ctrl+Home/Ctrl+End, PageDown left to a text box), tabs (the + button, the chips, Move to tab, undo per tab, rename, remove and bring back, Ctrl+Tab, the row showing its tab from the start) — 318 checks (2026-10-27) |
+| `--gesturetest <song>` | pan, double-click-to-play on the ruler, lanes and the room under the tracks, every section command, empty tracks, paste target, drag between tracks, snapping, loop mode, Ctrl/Shift+click selection, the Delete key, tooltips, no bar snapping, the scroll-wheel click and double-click, Alt+wheel over the ruler and over the waveforms, the plain wheel scrolling the tracks (over a waveform, the ruler and the strip; a knob under the pointer still turns), renaming a track, Space, dragging a track up or down, the selection box, dragging a group, tempo ramps (RAMP MODE, placing, typing, moving, retyping, removing, undo), joining sections, typing a knob's value, marking a stretch (MARK MODE, marking, snapping, moving an end, click, Shift+click, copy, paste, cut, Delete, repeat, undo), warp markers (WARP MODE, placing, dragging, snapping, the spread limit, removing, undo), snapping to the playhead (a section's start and its end, the guide line, Ctrl, not while playing), scrolling the tracks (a right-drag up and down, PageUp/PageDown, Ctrl+Home/Ctrl+End, PageDown left to a text box), tabs (the + button, the chips, Move to tab, undo per tab, rename, remove and bring back, Ctrl+Tab, the row showing its tab from the start), the crossfade X (the standard X at every repeat join and none on a first section, the lane menu's lengths through the real item, the tick, the engine carrying it, undo, a length kept where nothing butts) — 329 checks (2026-10-28) |
 | `--buttontest <bed> <topper>` | Match BPM, Reset and Match key through the real buttons, Split into vocals + instrumental through the real right-click menu item, Rename track through the real strip menu item, Match BPM and Reset on a tempo-ramped track, then undo, Match BPM and Reset on a warped track, then undo, the S buttons (solo alone, Ctrl+click to add, undo), a render with the longer song muted and with the shorter one soloed, read back from the file, and the Render button refusing with nothing audible, Duplicate track through the real strip menu item (the copy below, its sections, knobs, selection and voice, undo), Reset-as-one-step and New, from inside (an outside UI Automation client made Windows activate the hidden window) — 71 checks (2026-10-27) |
 | `--demosections --uiprobe <png> <song>` | the lane really draws sections and selection, and a tempo ramp placed and one being typed |
-| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, and warp markers |
+| `--demoediting --uiprobe <png> <song>` | the lane draws a moved, looped section, loop handles, the snap guide, an empty track, tempo ramps up and down, the box for typing a knob's value, a marked stretch, warp markers, and the crossfade X at a loop's joins |
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), and a scroll-wheel click lands back on the frame play started from |
@@ -237,6 +245,9 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - **Tabs have never been used by hand** (2026-10-27): every claim about them is `TabsTests` and
   `--gesturetest`. Project files have been version 5 since; v2026.10.27.7 is the first release that
   opens one, and an older one refuses it.
+- **No chosen crossfade length has been heard** (2026-10-28): the law and the lengths are
+  `CrossfadeTests`, on a ramp and on a sine; the X and the menu are `--gesturetest`. Project files
+  have been version 6 since; v2026.10.28 is the first release that opens one.
 - **His copy of Benchmix is one shortcut on his OneDrive Desktop, named for the release**
   (`Benchmix-v2026.10.27.2.lnk`), pointing at that release's exe in the project's `releases\`
   folder (gitignored), where every older release stays. After each verified release, without
