@@ -21,6 +21,8 @@ public partial class MainWindow : Window
     private bool _scrubbing;
     private double _loopAnchorSeconds;
     private bool _settingLoop;
+    private bool _loopDragged;                  // a Shift+press that moved paints the loop; one that did not is a click (2026-10-29)
+    private Point _loopPressPoint;
 
     public MainWindow()
     {
@@ -787,6 +789,40 @@ public partial class MainWindow : Window
               && engine.State != Benchmix.Engine.Audio.TransportState.Playing);
         _vm.ClearLoopCommand.Execute(null);
 
+        // --- the listening loop by clicks (Daniel, 2026-10-28; built 2026-10-29): a Shift+click sets
+        // where it will start, the next sets its end; Shift+drag still paints one at once; Clear loop
+        // forgets a start that is waiting. ---
+        _scriptedModifiers = ModifierKeys.Shift;
+        _scriptedWindowPoint = Ruler(30);
+        RulerDown(RulerHost, Ruler(30), 1); RulerUp(RulerHost);
+        Check($"a Shift+click on the ruler sets where the loop will start, and no loop yet ({_vm.LoopPendingStart:0.00}s; \"{_vm.Status}\")",
+              _vm.LoopPendingStart is { } p1 && Math.Abs(p1 - 30) < 0.01 && _vm.LoopStart is null && _vm.Status.StartsWith("Loop start at 30.00s"));
+        _scriptedWindowPoint = Ruler(38);
+        RulerDown(RulerHost, Ruler(38), 1); RulerUp(RulerHost);
+        Check($"the next Shift+click sets the end and the loop lights ({_vm.LoopStart:0.00}s to {_vm.LoopEnd:0.00}s)",
+              _vm.LoopStart is { } s1 && _vm.LoopEnd is { } e1 && Math.Abs(s1 - 30) < 0.01 && Math.Abs(e1 - 38) < 0.01 && _vm.LoopPendingStart is null);
+        _scriptedWindowPoint = Ruler(26);
+        RulerDown(RulerHost, Ruler(26), 1); RulerUp(RulerHost);
+        _scriptedWindowPoint = Ruler(24);
+        RulerDown(RulerHost, Ruler(24), 1); RulerUp(RulerHost);
+        Check($"two clicks the other way round make the same loop ({_vm.LoopStart:0.00}s to {_vm.LoopEnd:0.00}s)",
+              _vm.LoopStart is { } s2 && _vm.LoopEnd is { } e2 && Math.Abs(s2 - 24) < 0.01 && Math.Abs(e2 - 26) < 0.01);
+        _vm.ClearLoopCommand.Execute(null);
+        _scriptedWindowPoint = Ruler(40);
+        RulerDown(RulerHost, Ruler(40), 1); RulerUp(RulerHost);
+        _vm.ClearLoopCommand.Execute(null);
+        Check("Clear loop forgets a start that was waiting for its end", _vm.LoopPendingStart is null && _vm.LoopStart is null);
+        _scriptedWindowPoint = Ruler(40);
+        RulerDown(RulerHost, Ruler(40), 1);
+        _scriptedWindowPoint = Ruler(44);
+        RulerMove(RulerHost, Ruler(44));
+        RulerUp(RulerHost);
+        Check($"a Shift+drag still paints the whole loop at once ({_vm.LoopStart:0.00}s to {_vm.LoopEnd:0.00}s)",
+              _vm.LoopStart is { } s3 && _vm.LoopEnd is { } e3 && Math.Abs(s3 - 40) < 0.01 && Math.Abs(e3 - 44) < 0.01 && _vm.LoopPendingStart is null);
+        _scriptedWindowPoint = null;
+        _scriptedModifiers = null;
+        _vm.ClearLoopCommand.Execute(null);
+
         // --- a click of the scroll wheel stops and goes back to where play started ---
         try { RunWheelClickGestures(Check, notes); }
         finally
@@ -897,6 +933,14 @@ public partial class MainWindow : Window
             // --- several sections at once (Daniel, 2026-10-27: "MUST be able to select multiple clips
             // to copy/paste them"; built 2026-10-29) ---
             try { RunGroupClipboardGestures(Check, notes, t1); }
+            finally
+            {
+                _scriptedModifiers = null;
+                _scriptedWindowPoint = null;
+            }
+
+            // --- Mute section (Daniel, 2026-10-28), the Save as… button and the Ctrl+Z hint (2026-10-29) ---
+            try { RunMuteGestures(Check, _vm.Tracks.First()); }
             finally
             {
                 _scriptedModifiers = null;
@@ -1047,6 +1091,61 @@ public partial class MainWindow : Window
         string untested = notes.Count == 0 ? "" : $", {notes.Count} areas untested";
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks{untested}" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}{untested}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// Mute section (Daniel, 2026-10-28: "gray them out to temporarily deactivate them"; built
+    /// 2026-10-29), through the real command and the lane menu's wording: a muted section stays on
+    /// the lane, marked muted and drawn faded, and is gone from the engine's timeline; the menu then
+    /// reads Unmute; with a muted and an unmuted section selected it reads Mute 2 sections and
+    /// mutes both; two Ctrl+Z put both back. Also the Save as… button, and the status bar's hint
+    /// naming what Ctrl+Z would take back.
+    /// </summary>
+    private void RunMuteGestures(Action<string, bool> Check, TrackViewModel t1)
+    {
+        Check("the toolbar has a Save as… button", Descendants<Button>(this).Any(b => b.Content as string == "Save as…"));
+        Check($"the status bar's hint names what Ctrl+Z would take back (\"{_vm.UndoHint}\")", _vm.UndoHint.StartsWith("Ctrl+Z: "));
+
+        var session = _vm.Session;
+        var ordered = t1.Clips.OrderBy(c => c.TimelineStartSeconds).ToList();
+        if (ordered.Count < 2) return;
+        Guid id0 = ordered[0].Id, id1 = ordered[1].Id;
+        ClipViewModel C0() => t1.Clips.First(x => x.Id == id0);
+        ClipViewModel C1() => t1.Clips.First(x => x.Id == id1);
+        int voiced = session.VoiceFor(t1.Model)!.Timeline.Count;
+
+        _vm.SelectClip(C0());
+        if (LaneOf(t1) is { ContextMenu: { } menu } lane)
+        {
+            PrepareLaneMenu(lane);
+            var mute = menu.Items.OfType<MenuItem>().FirstOrDefault(i => i.Tag as string == "mute");
+            Check($"the lane menu offers Mute section ('{mute?.Header}')", mute is not null && mute.Header as string == "Mute section" && mute.Visibility == Visibility.Visible);
+        }
+        _vm.ToggleMuteSectionsCommand.Execute(null);
+        Check($"Mute section silences it in place: still there, marked muted, gone from the engine's timeline ({session.VoiceFor(t1.Model)!.Timeline.Count} of {voiced} voiced; \"{_vm.Status}\")",
+              C0().Model.Muted && C0().IsMuted && t1.Clips.Count == ordered.Count && session.VoiceFor(t1.Model)!.Timeline.Count == voiced - 1 && _vm.Status.StartsWith("Muted"));
+        Check("the lane draws it faded", t1.ClipVisuals.Any(v => v.IsMuted));
+        Check($"the hint says what Ctrl+Z would take back (\"{_vm.UndoHint}\")", _vm.UndoHint.Contains("mute section"));
+        if (LaneOf(t1) is { ContextMenu: { } menu2 } lane2)
+        {
+            PrepareLaneMenu(lane2);
+            var mute = menu2.Items.OfType<MenuItem>().FirstOrDefault(i => i.Tag as string == "mute");
+            Check($"the menu now says Unmute section ('{mute?.Header}')", mute?.Header as string == "Unmute section");
+            _vm.ToggleClipSelection(C1());
+            PrepareLaneMenu(lane2);
+            Check($"with a muted and an unmuted section selected it says Mute 2 sections ('{mute?.Header}')", mute?.Header as string == "Mute 2 sections");
+        }
+        _vm.ToggleMuteSectionsCommand.Execute(null);
+        Check($"Mute 2 sections mutes both ({session.VoiceFor(t1.Model)!.Timeline.Count} voiced, want {voiced - 2})",
+              C0().Model.Muted && C1().Model.Muted && session.VoiceFor(t1.Model)!.Timeline.Count == voiced - 2);
+
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => !_vm.IsBusy);
+        _vm.UndoCommand.Execute(null);
+        PumpUntil(() => !_vm.IsBusy);
+        PumpUntil(() => session.VoiceFor(_vm.Tracks.First().Model)!.Timeline.Count == voiced);
+        Check($"two Ctrl+Z put both back ({session.VoiceFor(_vm.Tracks.First().Model)!.Timeline.Count} voiced, want {voiced})",
+              _vm.Tracks.First().Model.Clips.All(c => !c.Muted) && session.VoiceFor(_vm.Tracks.First().Model)!.Timeline.Count == voiced);
     }
 
     /// <summary>
@@ -5202,9 +5301,14 @@ public partial class MainWindow : Window
 
         if (Modifiers.HasFlag(ModifierKeys.Shift))
         {
+            // Shift+drag paints the loop from here; a Shift+click sets its start, and the next one
+            // its end (Daniel, 2026-10-28: "click to set start and end points of loop…. click and
+            // hold allows setting and micro adjusting, and sets it at release of click"). With a
+            // start waiting, a drag paints from it, so the end can be nudged before letting go.
             _settingLoop = true;
-            _loopAnchorSeconds = seconds;
-            _vm.SetLoop(seconds, seconds);
+            _loopDragged = false;
+            _loopPressPoint = window;
+            _loopAnchorSeconds = _vm.LoopPendingStart ?? seconds;
         }
         else if (clickCount >= 2)
         {
@@ -5231,7 +5335,12 @@ public partial class MainWindow : Window
         if (!_scrubbing && !_settingLoop) return;
         double seconds = SecondsAtRulerX(LaneX(host, window));
 
-        if (_settingLoop) _vm.SetLoop(_loopAnchorSeconds, seconds);
+        if (_settingLoop)
+        {
+            if (!_loopDragged && Math.Abs(window.X - _loopPressPoint.X) < 4) return;    // still a click
+            _loopDragged = true;
+            _vm.SetLoop(_loopAnchorSeconds, seconds);
+        }
         else _vm.SeekTo(seconds);
     }
 
@@ -5240,6 +5349,13 @@ public partial class MainWindow : Window
     private void RulerUp(FrameworkElement host)
     {
         if (host.IsMouseCaptured) host.ReleaseMouseCapture();
+        if (_settingLoop && !_loopDragged)
+        {
+            // A Shift+click: the loop's start, or — with one waiting — its end.
+            double seconds = SecondsAtRulerX(LaneX(host, _loopPressPoint));
+            if (_vm.LoopPendingStart is { } from) _vm.SetLoop(from, seconds);
+            else _vm.SetLoopStartPending(seconds);
+        }
         _vm.EndGesture();
         _scrubbing = false;
         _settingLoop = false;
@@ -6506,6 +6622,13 @@ public partial class MainWindow : Window
             if (item is MenuItem { Tag: "copy" } copy) copy.Header = Named("Copy section", "Copy");
             if (item is MenuItem { Tag: "repeat" } repeat) repeat.Header = Named("Repeat this section", "Repeat");
             if (item is MenuItem { Tag: "delete" } delete) delete.Header = Named("Delete section", "Delete");
+            if (item is MenuItem { Tag: "mute" } mute)
+            {
+                // Mute is about sections, not a marked stretch; it reads Unmute when every target is muted already.
+                var (count, allMuted) = _vm.MuteTargets();
+                mute.Visibility = marked ? Visibility.Collapsed : Visibility.Visible;
+                mute.Header = (allMuted ? "Unmute" : "Mute") + (count >= 2 ? $" {count} sections" : " section");
+            }
         }
     }
 
@@ -6836,6 +6959,7 @@ public partial class MainWindow : Window
     private void OnPasteSection(object sender, RoutedEventArgs e) => _vm.PasteClipCommand.Execute(null);
     private void OnDuplicateSection(object sender, RoutedEventArgs e) => _vm.DuplicateClipCommand.Execute(null);
     private void OnDeleteSection(object sender, RoutedEventArgs e) => _vm.DeleteClipCommand.Execute(null);
+    private void OnMuteSection(object sender, RoutedEventArgs e) => _vm.ToggleMuteSectionsCommand.Execute(null);
     private void OnSplitStems(object sender, RoutedEventArgs e) => _vm.SplitStemsCommand.Execute(TrackOf(sender));
 
     // ---------------- right-drag: pan the timeline, sideways and up and down ----------------

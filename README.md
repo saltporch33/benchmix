@@ -30,6 +30,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   the keys you already use act on exactly that part, wherever its ends fall.
 - **Tabs.** Several arrangements in one file, like sheets in a workbook: each tab has its own
   tracks, tempo and listening loop, only the open one plays and renders, and Ctrl+Z works per tab.
+- **Mute a section in place.** Right-click it, *Mute section*: it stays where it is, faded and
+  silent, until you unmute it. The status bar's right-hand end always says what Ctrl+Z would take back.
 - **A project follows its songs.** Move a project and its songs to another folder together and it
   opens; a renamed song is recognised by its fingerprint; for anything else, *Find missing file…* on
   the track's menu points at it and every section cut from that song follows.
@@ -56,7 +58,8 @@ control on screen is one you asked for.
    edges of other sections, and to the playhead while you're stopped, when it gets close, and
    otherwise lands exactly where you let go; hold <kbd>Ctrl</kbd> to stop it snapping at all.
 5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
-6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak.
+6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak, or
+   Shift+click where the loop should start and again where it should end.
 7. **Render to file.** The file holds what you can hear: mute a track, or solo the ones you want,
    and the rest is left out. The status bar names anything it left out.
 
@@ -79,7 +82,7 @@ control on screen is one you asked for.
 | hold the right mouse button and drag — on the ruler, the lanes or the track controls | pan the view sideways, and up and down through the tracks |
 | <kbd>PageUp</kbd> / <kbd>PageDown</kbd>, <kbd>Ctrl</kbd>+<kbd>Home</kbd> / <kbd>Ctrl</kbd>+<kbd>End</kbd> | scroll the tracks a screen at a time, to the top, to the bottom (not while typing in a box) |
 | click the ruler | move the playhead |
-| <kbd>Shift</kbd>+drag the ruler | set a listening loop |
+| <kbd>Shift</kbd>+drag the ruler, or <kbd>Shift</kbd>+click twice | set a listening loop |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | add an empty track |
 | right-click a track's controls → *Duplicate track* | a copy right below it: the same sections, knobs, tempo ramps and warp markers |
 | right-click a track's controls → *Move to tab* ▸ | send it to another tab; <kbd>Ctrl</kbd>+<kbd>Z</kbd> here brings it back |

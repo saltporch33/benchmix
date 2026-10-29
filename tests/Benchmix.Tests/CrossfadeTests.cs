@@ -308,7 +308,7 @@ public class CrossfadeTests : IDisposable
         });
         ProjectStore.Save(p, path);
         var loaded = ProjectStore.Load(path).Project;
-        Assert.True(loaded.SchemaVersion == 6 && loaded.Tracks[0].Clips[1].CrossfadeSeconds == 0.1 && loaded.Tracks[0].Clips[0].CrossfadeSeconds == 0,
+        Assert.True(loaded.SchemaVersion == BenchmixProject.CurrentSchemaVersion && loaded.Tracks[0].Clips[1].CrossfadeSeconds == 0.1 && loaded.Tracks[0].Clips[0].CrossfadeSeconds == 0,
             "a saved project lost a splice's crossfade length, or is not a version 6 file");
 
         // A version 5 file, as v2026.10.27.7 wrote it: no crossfade lengths anywhere.

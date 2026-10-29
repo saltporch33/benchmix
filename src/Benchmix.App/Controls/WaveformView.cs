@@ -38,6 +38,7 @@ public sealed record ClipVisual(
     double TimelineEndSeconds = 0,
     double OriginSeconds = 0,
     double TrackStartSeconds = 0,
+    bool IsMuted = false,
     double CrossfadeSeconds = 0);
 
 /// <summary>A stretch marked in MARK MODE (2026-10-12), as the lane draws it: its two ends on the timeline.</summary>
@@ -217,7 +218,7 @@ public sealed class WaveformView : FrameworkElement
             dc.DrawRoundedRectangle(ClipBackground, null, new Rect(xFrom, 0, Math.Max(1, xTo - xFrom), h), 3, 3);
 
         var brush = WaveBrush;
-        if (IsMuted && brush is SolidColorBrush scb)
+        if ((IsMuted || clip.IsMuted) && brush is SolidColorBrush scb)     // the track muted, or this section (2026-10-29)
         {
             var c = scb.Color;
             brush = new SolidColorBrush(Color.FromArgb(70, c.R, c.G, c.B));
@@ -286,6 +287,17 @@ public sealed class WaveformView : FrameworkElement
             };
             foreign.Freeze();
             dc.DrawRoundedRectangle(null, foreign, new Rect(xFrom, 1, Math.Max(1, xTo - xFrom), h - 2), 3, 3);
+        }
+
+        // A muted section (2026-10-29): faded above, and a dotted grey outline so it reads as switched off.
+        if (clip.IsMuted)
+        {
+            var muted = new Pen(new SolidColorBrush(Color.FromArgb(150, 170, 170, 170)), 1)
+            {
+                DashStyle = DashStyles.Dot,
+            };
+            muted.Freeze();
+            dc.DrawRoundedRectangle(null, muted, new Rect(xFrom, 1, Math.Max(1, xTo - xFrom), h - 2), 3, 3);
         }
 
         // A faint line where each section begins, so two butted together — every repeat of a

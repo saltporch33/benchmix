@@ -153,6 +153,12 @@ public sealed class PlayheadOverlay : FrameworkElement
     public double ScrollSeconds { get => (double)GetValue(ScrollSecondsProperty); set => SetValue(ScrollSecondsProperty, value); }
     public double? LoopStart { get => (double?)GetValue(LoopStartProperty); set => SetValue(LoopStartProperty, value); }
     public double? LoopEnd { get => (double?)GetValue(LoopEndProperty); set => SetValue(LoopEndProperty, value); }
+
+    /// <summary>The first of two Shift+clicks (2026-10-29): where the loop will start, drawn as a dashed line until the second sets its end.</summary>
+    public static readonly DependencyProperty LoopPendingProperty = DependencyProperty.Register(
+        nameof(LoopPending), typeof(double?), typeof(PlayheadOverlay),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+    public double? LoopPending { get => (double?)GetValue(LoopPendingProperty); set => SetValue(LoopPendingProperty, value); }
     public Brush LineBrush { get => (Brush)GetValue(LineBrushProperty); set => SetValue(LineBrushProperty, value); }
 
     public PlayheadOverlay() => IsHitTestVisible = false;
@@ -163,6 +169,17 @@ public sealed class PlayheadOverlay : FrameworkElement
         if (double.IsNaN(w) || double.IsNaN(h) || w < 1 || h < 1) return;
 
         double pps = Math.Max(0.01, PixelsPerSecond);
+
+        if (LoopPending is { } lp)
+        {
+            double xp = (lp - ScrollSeconds) * pps;
+            if (xp >= 0 && xp <= w)
+            {
+                var pending = new Pen(new SolidColorBrush(Color.FromArgb(200, 255, 210, 80)), 1) { DashStyle = DashStyles.Dash };
+                pending.Freeze();
+                dc.DrawLine(pending, new Point(Math.Floor(xp) + 0.5, 0), new Point(Math.Floor(xp) + 0.5, h));
+            }
+        }
 
         if (LoopStart is { } ls && LoopEnd is { } le && le > ls)
         {

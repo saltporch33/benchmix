@@ -96,7 +96,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double _busyProgress;
     [ObservableProperty] private double? _loopStart;
     [ObservableProperty] private double? _loopEnd;
+
+    /// <summary>The first of two Shift+clicks on the ruler (2026-10-29): where the listening loop will start, until the second sets its end.</summary>
+    [ObservableProperty] private double? _loopPendingStart;
     [ObservableProperty] private string _windowTitle = "Benchmix";
+
+    /// <summary>The status bar's right-hand end: what Ctrl+Z would take back (Daniel, 2026-10-28: "so I know what i'm about to take back"), or nothing.</summary>
+    [ObservableProperty] private string _undoHint = "";
 
     /// <summary>
     /// Width of the lane area in pixels, pushed in by the window on layout. Zoom-to-fit and the
@@ -400,11 +406,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (!IsPlaying) Status = "Nothing to play yet.";          // playing says nothing (2026-10-28, see WheelClick)
     }
 
+    /// <summary>
+    /// Shift+click on the ruler, the first of two (Daniel, 2026-10-28: "click to set start and end
+    /// points of loop"): where the listening loop will start. The next Shift+click sets the end.
+    /// Nothing loops until then; Clear loop forgets it.
+    /// </summary>
+    public void SetLoopStartPending(double seconds)
+    {
+        LoopPendingStart = Math.Max(0, seconds);
+        Status = $"Loop start at {LoopPendingStart:0.00}s. Shift+click the ruler where it should end (Clear loop forgets it).";
+    }
+
     [RelayCommand]
     private void ClearLoop()
     {
         LoopStart = null;
         LoopEnd = null;
+        LoopPendingStart = null;
         if (_session is null) return;
         Session.Project.LoopStartSeconds = null;
         Session.Project.LoopEndSeconds = null;
@@ -419,6 +437,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         LoopStart = s;
         LoopEnd = e;
+        LoopPendingStart = null;
         if (_session is null) return;
         Session.Project.LoopStartSeconds = s;
         Session.Project.LoopEndSeconds = e;
@@ -1741,6 +1760,56 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         AfterClipEdit(track, result, result.Clip);
     }
 
+    // ---------------- muting a section in place (Daniel, 2026-10-28: "gray them out to temporarily deactivate them") ----------------
+
+    /// <summary>What Mute section on the lane menu would act on: the selected sections, or the one under the playhead; and whether every one of them is muted already, so the item reads Unmute.</summary>
+    public (int Count, bool AllMuted) MuteTargets()
+    {
+        var picked = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
+        if (picked.Count == 0 && TargetClip() is { } one) picked.Add(one);
+        return (picked.Count, picked.Count > 0 && picked.All(c => c.Model.Muted));
+    }
+
+    /// <summary>
+    /// Mute section: the selected sections — or the one under the playhead — are silenced where
+    /// they are, drawn faded, until unmuted the same way; every one of them already muted, they are
+    /// unmuted. The engine plays a gap there (<see cref="ProjectSession"/> leaves a muted section out
+    /// of the voice's timeline), so the sections either side are declicked as at any gap. One undo
+    /// step, and the selection stays on them.
+    /// </summary>
+    [RelayCommand]
+    private void ToggleMuteSections()
+    {
+        if (_session is null || HeldUnderTheMouse()) return;
+        var picked = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
+        if (picked.Count == 0 && TargetClip() is { } one) picked.Add(one);
+        if (picked.Count == 0) { Status = "Click a section to mute it."; return; }
+
+        bool mute = picked.Any(c => !c.Model.Muted);
+        int n = picked.Count;
+        string what = n == 1 ? "section" : $"{n} sections";
+        PushUndo(n == 1 ? $"{picked[0].Track.Name}: {(mute ? "mute" : "unmute")} section" : $"{(mute ? "mute" : "unmute")} {n} sections");
+        var ids = picked.Select(c => c.Id).ToHashSet();
+        foreach (var c in picked) c.Model.Muted = mute;
+        foreach (var t in picked.Select(c => c.Track).Distinct().ToList())
+        {
+            Session.Apply(t.Model);
+            t.RefreshFromModel();
+            t.RebuildClips();
+        }
+        foreach (var t in Tracks)
+            foreach (var c in t.Clips)
+                if (ids.Contains(c.Id)) c.IsSelected = true;
+        SelectedClip = Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => ids.Contains(c.Id));
+        _rangeAnchorId = SelectedClip?.Id;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+        RecomputeLength();
+        MarkDirty();
+        Status = mute
+            ? $"Muted {(n == 1 ? "the" : n.ToString())} {(n == 1 ? "section" : "sections")}: silent, in place, until you unmute {(n == 1 ? "it" : "them")} from the right-click menu."
+            : $"Unmuted {(n == 1 ? "the" : n.ToString())} {(n == 1 ? "section" : "sections")}.";
+    }
+
     // ---------------- empty tracks and loop mode ----------------
 
     /// <summary>Adds a track with nothing on it, selects it, and says what to do with it.</summary>
@@ -2822,6 +2891,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty] private TabViewModel? _currentTab;
 
+    /// <summary>Each tab has its own history, so the Ctrl+Z hint follows the tab (2026-10-29).</summary>
+    partial void OnCurrentTabChanged(TabViewModel? value)
+    {
+        if (_session is not null) UpdateTitle();
+    }
+
     /// <summary>Where the playhead was on each tab, so switching back lands where he left (not saved).</summary>
     private readonly Dictionary<Guid, double> _tabPositions = new();
 
@@ -3199,6 +3274,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         string name = _projectPath is null ? "Untitled" : Path.GetFileNameWithoutExtension(_projectPath);
         WindowTitle = $"Benchmix — {name}{(_dirty ? " *" : "")}";
+        // Every edit ends here (MarkDirty), as does an undo, a redo, New, Open and Save: the hint is always current.
+        UndoHint = _session is not null && _undo.NextUndoLabel is { } next ? $"Ctrl+Z: {next}" : "";
     }
 
     private bool ConfirmDiscard()

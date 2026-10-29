@@ -896,3 +896,19 @@ and for gaps."*
 | **Ctrl+X with several selected copies them as they lie and removes them, each gap left as it is.** | Cut never ripples, one section or ten. |
 | **What was pasted or repeated is selected afterwards, the first of it the one commands act on; in MARK MODE a group paste sets no mark.** | So a pasted group can be dragged as one at once. A mark is one track's span; a group may be several tracks'. |
 | **A track multi-selection (Round 1) and a section multi-selection are separate things**, and mute, solo and the knobs still act on one track. | One round at a time. |
+
+## 2026-10-29 — four small things: Save as…, the Ctrl+Z hint, the loop by clicks, Mute section
+
+Daniel, 2026-10-29, after two rounds in a day: *"please go ahead and work through everything as far
+as you can go, but stop working once you've hit 60% of my fable token cap"*. These four are his
+comments of 2026-10-28, each answered then with a question or an offer he never needed
+to answer; the defaults are mine.
+
+| Decision | Why |
+| --- | --- |
+| **A Save as… button in the toolbar, next to Save.** Ctrl+Shift+S still works. | His comment on Part 1 step 9: *"need option to 'save as' as well, so i can make alternate copies"*. It existed as a shortcut only, and nothing on screen said so. |
+| **The status bar's right-hand end names what Ctrl+Z would take back** (*Ctrl+Z: paste 3 sections*), kept current after every edit, undo, redo, tab switch, New and Open (`MainViewModel.UpdateTitle`). The messages themselves are unchanged. | His words: *"especially helpful for reference when I'm about to hit ctrl z to undo, so I know what i'm about to take back"*. A hint that stays beats a message the next one replaces. |
+| **The listening loop by clicks: a Shift+click on the ruler sets where it will start (a dashed line, and the status says so); the next Shift+click sets its end and the band lights.** Shift+drag still paints the whole loop at once, and with a start waiting a drag paints from it, so the end can be nudged before letting go. Clear loop forgets a waiting start. **A Shift+click no longer clears the loop.** | His words: *"click to set start and end points of loop…. click and hold allows setting and micro adjusting, and sets it at release of click. next click does same thing, then section highlights to indicate looping."* On the ruler only: on a lane a click selects, Alt+click moves the playhead, Ctrl and Shift+click select sections. Clearing by Shift+click was the one thing he could do by accident. |
+| **Mute section on the lane menu silences the selected sections where they are** — drawn faded with a dotted outline, a gap to the engine (`ProjectSession.BuildTimeline` leaves them out), declicked either side as any gap is — **until unmuted the same way**: the item reads *Unmute section* when every target is muted, *Mute 3 sections* with several selected. One undo step; the selection stays. | His words: *"retain looped sections on timeline but gray them out to temporarily deactivate them"*. Leaving the section out of the voice's timeline is exactly a gap, so nothing new is rendered and the join rules stay what they were. |
+| **Project files are version 7.** A file with a muted section opened by an older Benchmix would play it; the older one refuses the file instead, as for tabs (5) and crossfade lengths (6). | The rule since 2026-10-27: a file that would sound different in an older release is a new version. |
+| **No X at a join with a muted section, and no crossfade there.** | To the engine it is a gap. |

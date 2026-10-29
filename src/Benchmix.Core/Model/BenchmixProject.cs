@@ -27,7 +27,7 @@ public sealed class BenchmixProject
     /// at a splice. An older build refuses a version 6 file rather than opening it with every splice
     /// back at 5 ms and saving over the lengths.
     /// </summary>
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 7;
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
     public string Name { get; set; } = "Untitled";
@@ -198,6 +198,14 @@ public sealed class ClipModel
     /// <c>TimelineEditor.CrossfadeAt</c> repeats for the lane's X.
     /// </summary>
     public double CrossfadeSeconds { get; set; }
+
+    /// <summary>
+    /// Silenced in place (Daniel, 2026-10-28: "retain looped sections on timeline but gray them out
+    /// to temporarily deactivate them"). The section keeps its place and its audio; the engine plays
+    /// a gap where it is, and the lane draws it faded. Version 7 of the file: an older Benchmix
+    /// would play it, so it refuses the file instead.
+    /// </summary>
+    public bool Muted { get; set; }
 
     public ClipModel Clone() => (ClipModel)MemberwiseClone();
 }

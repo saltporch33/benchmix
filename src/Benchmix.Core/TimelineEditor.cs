@@ -83,13 +83,14 @@ public static class TimelineEditor
     /// </summary>
     public static double CrossfadeAt(TrackModel track, ClipModel clip, ProjectSession s)
     {
-        if (clip.FadeInSeconds > 0) return 0;
+        if (clip.FadeInSeconds > 0 || clip.Muted) return 0;
         long length = LengthFramesOf(clip, s);
         if (length <= 0) return 0;
         long start = StartFrameOf(clip, s);
         foreach (var before in track.Clips)
         {
-            if (ReferenceEquals(before, clip) || LengthFramesOf(before, s) <= 0 || EndFrameOf(before, s) != start) continue;
+            // A muted section is a gap to the engine, so there is no join to crossfade (2026-10-29).
+            if (ReferenceEquals(before, clip) || before.Muted || LengthFramesOf(before, s) <= 0 || EndFrameOf(before, s) != start) continue;
             if (before.FadeOutSeconds > 0) return 0;
             bool seam = ReferenceEquals(s.AudioFor(before), s.AudioFor(clip))
                      && SourceEndFrameOf(before, s) == SourceStartFrameOf(clip, s);

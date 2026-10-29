@@ -117,6 +117,7 @@ public sealed partial class TrackViewModel : ObservableObject
             TimelineEndSeconds: c.TimelineEndSeconds,
             OriginSeconds: Model.TimelineOffsetSeconds,
             TrackStartSeconds: c.TrackStartSeconds,
+            IsMuted: c.IsMuted,
             CrossfadeSeconds: TimelineEditor.CrossfadeAt(Model, c.Model, _session))).ToArray();
 
         OnPropertyChanged(nameof(ClipVisuals));

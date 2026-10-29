@@ -71,6 +71,8 @@
                         ToolTip="Open a saved .benchmix project (Ctrl+O)."/>
                 <Button Content="Save" Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}"
                         ToolTip="Save the project: your work in progress, not the audio (Ctrl+S; Ctrl+Shift+S saves a copy)."/>
+                <Button Content="Save as…" Style="{StaticResource ToolButton}" Command="{Binding SaveAsCommand}"
+                        ToolTip="Save a copy of the project under a new name; Save then goes to the new file (Ctrl+Shift+S)."/>
                 <Separator Width="10" Background="Transparent"/>
                 <Button Content="+ Add tracks" Style="{StaticResource PrimaryButton}" Command="{Binding AddTracksCommand}"
                         ToolTip="Add songs, one track each, starting at 0:00. Dropping files onto the window adds them where you drop them."/>
@@ -515,6 +517,8 @@
                                                 <MenuItem Header="Copy section"           Click="OnCopySection"    InputGestureText="Ctrl+C" Tag="copy"/>
                                                 <MenuItem Header="Paste at playhead"      Click="OnPasteSection"   InputGestureText="Ctrl+V"/>
                                                 <MenuItem Header="Delete section"         Click="OnDeleteSection"  Tag="delete"/>
+                                                <MenuItem Header="Mute section"           Click="OnMuteSection"    Tag="mute"
+                                                          ToolTip="Silence this section where it is, drawn faded, until you unmute it the same way. With several selected, all of them."/>
                                                 <Separator/>
                                                 <MenuItem Header="Move section to playhead" Click="OnMoveToPlayhead"/>
                                                 <MenuItem Header="Loop mode — drag an end to repeat" Tag="loopmode" IsCheckable="True"
@@ -599,7 +603,7 @@
                                PositionSeconds="{Binding PositionSeconds}"
                                PixelsPerSecond="{Binding PixelsPerSecond}"
                                ScrollSeconds="{Binding ScrollSeconds}"
-                               LoopStart="{Binding LoopStart}" LoopEnd="{Binding LoopEnd}"
+                               LoopStart="{Binding LoopStart}" LoopEnd="{Binding LoopEnd}" LoopPending="{Binding LoopPendingStart}"
                                SnapLineSeconds="{Binding SnapLineSeconds}"
                                LineBrush="{StaticResource PlayheadBrush}"/>
 
@@ -627,6 +631,9 @@
                 <ProgressBar DockPanel.Dock="Right" Width="150" Height="4" Margin="12,0,0,0"
                              Minimum="0" Maximum="1" Value="{Binding BusyProgress}"
                              Visibility="{Binding IsBusy, Converter={StaticResource BoolVis}}"/>
+                <!-- What Ctrl+Z would take back (Daniel, 2026-10-28), at the right-hand end. -->
+                <TextBlock DockPanel.Dock="Right" Text="{Binding UndoHint}" Style="{StaticResource Body}" Opacity="0.65"
+                           Margin="16,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="360"/>
                 <TextBlock Text="{Binding Status}" Style="{StaticResource Body}" TextTrimming="CharacterEllipsis"/>
             </DockPanel>
         </Border>

@@ -83,6 +83,15 @@ mistakes, not by describing the project.
   (2026-10-28, his words: *"remove these minor notifications. dont need a
   reminder that i hit play or pause."*). It is for edits, saves, renders, errors and the sound
   output — what he reads before Ctrl+Z. Do not add a "Playing from" or "Stopped" message back.
+  The bar's right-hand end is the Ctrl+Z hint (2026-10-29), kept current from `UpdateTitle`; it is
+  not a message.
+- **A Shift+click on the ruler sets one end of the listening loop; the next sets the other**
+  (2026-10-29, his *"click to set start and end points of loop"*). Until then a Shift+click without
+  a drag cleared the loop; Clear loop does that now, and forgets a waiting start. Do not put the
+  clear back on the click.
+- **A muted section is left out of the voice's timeline** (`ProjectSession.BuildTimeline`), so the
+  engine sees a gap and no X is drawn at its joins. That is the design (2026-10-29), not a lost
+  section: the model still has it, faded on the lane, and project files are version 7 for it.
 - **A project follows its songs** (2026-10-28, his request after a move left eight lanes reading
   `Missing:`). At open, a song that is not where the project says is looked for next to the
   project file, then under its folder — by name first, then by fingerprint (`SourceRelinker`,

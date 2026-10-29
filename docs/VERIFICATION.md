@@ -1262,6 +1262,38 @@ ramps or warp markers, rests on the single-section rules and the unit tests' fra
 an end-to-end run; the "what lies under the gaps stays" rule is proven on a flat track and not
 listened to.
 
+## 2026-10-29 — four small things: Save as…, the Ctrl+Z hint, the loop by clicks, Mute section
+
+What was built (his comments of 2026-10-28; built 2026-10-29 in the longer round he
+asked for): a Save as… button in the toolbar; the status bar's right-hand end naming what Ctrl+Z
+would take back (`MainViewModel.UndoHint`, kept current from `UpdateTitle` and on a tab switch); the
+listening loop set by two Shift+clicks on the ruler (`SetLoopStartPending`, the dashed line in
+`PlayheadOverlay`, the click-or-drag decision in `RulerMove`/`RulerUp`); and Mute section on the
+lane menu (`ClipModel.Muted`, left out of the voice's timeline in `ProjectSession.BuildTimeline`,
+drawn faded with a dotted outline, no X at its joins; project files are version 7).
+
+**Unit tests** (`MutedSectionTests`, two new): a track split at 10 s with its second half muted
+renders sample for sample as the same track with that half deleted — the declick before it and the
+silence after are those of a gap — while the unmuted render is not silent there; Muted survives save
+and reopen, and the file says schema 7. Two older save-and-reopen tests pinned the version at 6 and
+now pin it at the current version. `dotnet test`: 496 passed, 0 skipped.
+
+**`--gesturetest`** (**387 checks**): a Shift+click on the ruler sets where the loop will start and
+no loop yet, with the status saying so; the next Shift+click sets the end and the loop lights; two
+clicks the other way round make the same loop; Clear loop forgets a start that was waiting; a
+Shift+drag still paints the whole loop at once; the earlier Shift+double-click check still passes
+(its first click is now the start, its drag the end). The toolbar has a Save as… button; the hint
+names what Ctrl+Z would take back; Mute section on the lane menu silences a section in place — still
+on the lane, marked muted, drawn faded, gone from the engine's timeline — the menu then reads
+Unmute section, with a muted and an unmuted section selected it reads Mute 2 sections and mutes
+both, and two Ctrl+Z put both back.
+
+**Not verified:** none of the four has been used by hand; the dashed line for a waiting loop start
+and the faded, dotted muted section are drawn by code nobody has looked at (`--demoediting` does not
+show them); a muted section at the very end of a track still counts towards the track's length for
+a render (the voice's timeline leaves it out, so the file ends at the last voiced section — read off
+the code, not measured).
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

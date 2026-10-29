@@ -181,7 +181,7 @@ public class RelinkTests : IDisposable
         var loaded = ProjectStore.Load(project).Project;
         Assert.True(loaded.SourceFingerprints.TryGetValue(bed, out var back) && back == print,
             "the fingerprint did not survive a save and reopen");
-        Assert.True(loaded.SchemaVersion == 6, "remembering fingerprints changed the file's version: an older Benchmix would refuse the file for a lookup table it could simply ignore");
+        Assert.True(loaded.SchemaVersion == BenchmixProject.CurrentSchemaVersion, "remembering fingerprints changed the file's version: an older Benchmix would refuse the file for a lookup table it could simply ignore");
     }
 
     [Fact]

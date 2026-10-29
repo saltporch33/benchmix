@@ -61,6 +61,9 @@ public sealed partial class ClipViewModel : ObservableObject
     /// <summary>True when this section came from a different song than the track it sits on.</summary>
     public bool IsForeign => !Model.SourcePath.Equals(_track.Model.SourcePath, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Silenced in place: drawn faded, and a gap to the engine (2026-10-29).</summary>
+    public bool IsMuted => Model.Muted;
+
 #pragma warning disable MVVMTK0034   // deliberate: assign backing fields, then raise once
     public void RefreshFromModel()
     {

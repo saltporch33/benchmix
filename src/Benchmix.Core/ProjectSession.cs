@@ -96,7 +96,7 @@ public sealed class ProjectSession : IDisposable
         foreach (var c in model.Clips)
         {
             var audio = AudioFor(c);
-            if (audio is null) continue;
+            if (audio is null || c.Muted) continue;             // a muted section plays as a gap (2026-10-29)
             clips.Add(new VoiceClip
             {
                 Audio = audio,
