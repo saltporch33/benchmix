@@ -857,3 +857,23 @@ please do it. i'm not worried about fixing it right this minute though"*.
 | **The strip menu offers *Find missing file…* only on a track that reads from a song that is not there.** A file box opens on the project's folder; the file picked replaces the missing one for every track and section that read from it, on every tab, and is loaded at once. One undo step. | His "anywhere else" case — a song moved to a folder the search does not see, or renamed with no fingerprint yet. Every section follows because a song pasted across tracks is still one song. The item hides when nothing is missing rather than saying so. |
 | **The search stops at five thousand files and leaves the project's own Backups folder out.** | A project saved at the root of a drive must not walk the drive; the backups are projects, not songs. |
 | **A scripted run never opens the file box**; the probe drives `RelinkAsync` and reads the item's visibility. | The standing rule: no dialog of any kind in a verification run. |
+
+## 2026-10-29 — select several tracks; Match BPM to their average; Match key between them
+
+Daniel, 2026-10-28, verbatim: *"need to clarify which song
+matches to which. Also need a way to remove bpm matching and switch which song matches to which.
+Also, add: ctrl/shift click to select multiple tracks. Then, right click on Match BPM for
+alternative option that matches all selected songs to the average bpm between them all."* And on
+Match key's "compares with the top track": *"i dont think this works. also, cant see how logically
+this would work with more than 2 tracks in a project. again, must be able to select multiple
+tracks"*. Picked on 2026-10-29 as the first round: *"Round 1: multi-select"*.
+
+| Decision | Why |
+| --- | --- |
+| **Ctrl+click on a track's strip flips it in or out of the selection; Shift+click takes every track from the anchor to it; a plain click selects that track alone.** The selected tracks share the highlight the one selected track had; the one clicked last is still where Ctrl+V pastes and what the lane menu acts on. | The three gestures sections already have (2026-10-03), on the strips, so there is nothing new to learn. |
+| **A press on one of a track's buttons or knobs keeps a selection the track is part of**, making that track the one commands act on; a press on the strip's background, or in a lane, selects one track alone. | Match key and Match BPM's right-click act on the selection, and the press that reaches them goes through the strip first: if it collapsed the selection there, they could never see more than one track. Ctrl and Shift are read on the background only, so Ctrl on the S button still means "solo alongside". |
+| **Match BPM's right-click offers one item: match the selected tracks — every track, when fewer than two are selected — to the average of their tempos, and make that PROJECT BPM.** The item says what it will do, with the average in it, or is greyed out and says why not. One Ctrl+Z puts every tempo and PROJECT BPM back. | His request, word for word. PROJECT BPM follows because it is the tempo every later Match BPM goes to: left where it was, the next track matched would land away from the rest. |
+| **The average is of the tracks' own tempos, each read in the octave of the track commands act on first** (half/double-time folded, as Match BPM does: `Analyzer.AverageBpm`). | A 172 BPM reading beside two at 85 is a double-time reading of 86, not a third tempo; and an average of the tracks' *current* speeds would change with every click. |
+| **Match key with several tracks selected: the track whose button is pressed stays as it is, and the other selected tracks are shifted to sit with its key**, one undo step; a track without a key is left alone and named. With one track selected it is as before: that track is shifted to sit with the topmost other track. | The button pressed is the natural way to say which key the others should follow, and it works for any number of tracks; the old rule — the topmost other track — is what he could not see working past two. |
+| **Nothing else acts on the selection yet.** Mute, solo, ✕, Reset, Move to tab and the knobs act on their own track. | One round, as he asked; the rest can follow once the selection has been used by hand. |
+| **The selection is not saved and is not an undo step**, as a section selection is not; an undo keeps it, as it keeps a section selection. | A selection is where you are looking, not what the project is. |

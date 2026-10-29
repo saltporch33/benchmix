@@ -149,6 +149,25 @@ public static class Analyzer
         return best;
     }
 
+    /// <summary>
+    /// The mean of several tracks' tempos, each read in <paramref name="referenceBpm"/>'s octave
+    /// first (<see cref="FoldToNearestOctave"/>), so a 172 BPM reading beside two at 85 counts as
+    /// 86 and the average is one every track can be stretched to (Match BPM's right-click,
+    /// 2026-10-29). Tempos of zero (unknown) are left out; with none left it is 0.
+    /// </summary>
+    public static double AverageBpm(IReadOnlyList<double> bpms, double referenceBpm)
+    {
+        double sum = 0;
+        int n = 0;
+        foreach (var bpm in bpms)
+        {
+            if (bpm <= 0) continue;
+            sum += referenceBpm > 0 ? FoldToNearestOctave(bpm, referenceBpm) : bpm;
+            n++;
+        }
+        return n == 0 ? 0 : sum / n;
+    }
+
     internal static float[] DecodeMono(string path, int rate, double maxSeconds, CancellationToken cancel)
     {
         var clip = AudioClip.Load(path, rate, null, cancel);

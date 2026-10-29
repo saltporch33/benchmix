@@ -101,6 +101,20 @@ public class TempoMathTests
     }
 
     [Fact]
+    public void AveragesTemposInTheReferenceTracksOctave()
+    {
+        // Match BPM's right-click (2026-10-29): the bed at 93 and the topper at 102 meet at 97.5.
+        Assert.Equal(97.5, Analyzer.AverageBpm(new[] { 93.0, 102.0 }, 93.0), 9);
+        // A double-time reading beside two half-time ones counts as half-time, whichever is the
+        // reference — otherwise the average would be a tempo no track can be stretched to.
+        Assert.Equal(86.0, Analyzer.AverageBpm(new[] { 85.0, 87.0, 172.0 }, 85.0), 9);
+        Assert.Equal(172.0, Analyzer.AverageBpm(new[] { 172.0, 85.0, 87.0 }, 172.0), 9);
+        // A track without a tempo is left out; none at all is 0, so the caller offers nothing.
+        Assert.Equal(97.5, Analyzer.AverageBpm(new[] { 93.0, 0.0, 102.0 }, 93.0), 9);
+        Assert.Equal(0.0, Analyzer.AverageBpm(new[] { 0.0 }, 0.0), 9);
+    }
+
+    [Fact]
     public void FoldingStaysInsideAMusicalRange()
     {
         // Nothing should fold to 15 BPM or 500 BPM even when the reference is extreme.

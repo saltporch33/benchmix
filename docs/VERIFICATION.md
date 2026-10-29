@@ -1177,6 +1177,57 @@ box feeds) loads the chosen file into the missing lane and says so; Save keeps t
 and both fingerprints, read back from the file. `--gesturetest` still 333. Never tried on the
 project he actually moved.
 
+## 2026-10-29 — select several tracks; Match BPM to their average; Match key between them
+
+What was built (his comments of 2026-10-28, picked 2026-10-29 as *"Round 1: multi-select"*):
+Ctrl+click and Shift+click on the track strips select several tracks (`MainViewModel.ToggleTrackSelection`,
+`SelectTrackRange`, `MakeTrackPrimary`; `MainWindow.SelectTrackByPress` reads the keys and keeps a
+selection when the press is on a button or knob); Match BPM's right-click menu matches the selected
+tracks — every track, with fewer than two selected — to the average of their tempos and makes it
+PROJECT BPM (`MatchTempoToAverage`, `Analyzer.AverageBpm`); Match key with several tracks selected
+keeps the track whose button was pressed and shifts the other selected tracks to its key (`MatchKeysTo`).
+
+**Unit test** (`ProjectTests.AveragesTemposInTheReferenceTracksOctave`): 93 and 102 average to 97.5;
+85, 87 and a double-time 172 average to 86 with 85 as the reference and to 172 with 172 as the
+reference; a track without a tempo is left out; none at all is 0. `dotnet test`: 491 passed, 0 skipped
+(2026-10-29).
+
+**`--gesturetest`** (**355 checks**, one song and two empty tracks added for the purpose, through the
+strip's real press handler with scripted keys): a plain press selects one track; Ctrl+press adds
+another and makes it the one commands act on, and the status says what the selection is for;
+Ctrl+press on a selected track takes it out and commands fall back to one still selected;
+Shift+press selects every track between, and a further Shift+press measures from the same anchor; a
+press on a selected track's Match key button — raised as `Mouse.PreviewMouseDown`, so it tunnels
+through the strip — keeps the selection and makes that track the one commands act on, and Ctrl on
+the button is not read as a toggle; a right-click on a selected strip keeps the selection and one on
+an unselected strip selects it alone; Match BPM's right-click item offers every track with a tempo
+and their average with one track selected, and the two selected ones and their average with two; a
+plain press on another strip lets the rest go; the two empty tracks are undone.
+
+**`--buttontest`** (**93 checks**, the bed at 93 BPM and the topper at 102, both G#m): Ctrl+click on
+the topper's strip selects both; the bed's Match BPM menu item reads "Match the 2 selected tracks to
+their average, 97.5 BPM" and is enabled; invoked through its automation peer, the bed reads 97.5
+(was 93.0) and the topper 97.5 (was 102.0), PROJECT BPM is 97.5 and the status says +4.8%, −4.4%
+and "PROJECT BPM is now 97.5"; one Ctrl+Z puts both tempos and PROJECT BPM back and keeps the
+selection; with the topper's key read as Bm for the check, Match key on the bed through the real
+button shifts the topper −3 and leaves the bed at 0, the status says so, and one Ctrl+Z puts it
+back; a plain selection lets the topper go.
+
+**Three runs to green.** First run, two gesture checks failed and the checks were wrong, not the
+app: the simulated press on the button was raised as `PreviewMouseLeftButtonDown`, which WPF
+delivers only to the element it is raised on (a direct event, re-raised along the route of
+`Mouse.PreviewMouseDown` for real input), so the strip never saw it; and the menu check assumed one
+tempo among the tracks while two empty tracks given sections earlier in the run carried the song's
+tempo. Second run, one failed and it was the app: a plain press on the strip of the track already
+acting as primary left the rest of the selection in place, because setting `SelectedTrack` to what
+it already is does nothing. `MainViewModel.SelectTrackAlone` now clears the rest explicitly, the
+lane press uses it too (with Ctrl or Shift it keeps the selection and moves the primary, as a strip
+press does), and two checks cover both. Third run: all green.
+
+**Not verified:** nobody has used the selection by hand; the highlight on several strips is the
+one-strip brush and has not been looked at; the average with three or more songs, and on ramped or
+warped tracks, rests on the unit test and the single-track Match BPM checks, not on an end-to-end run.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

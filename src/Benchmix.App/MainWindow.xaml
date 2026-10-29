@@ -277,7 +277,8 @@
                                     <!-- ────────── channel strip ────────── -->
                                     <!-- Preview, so a press on a knob or a button selects the track too:
                                          those controls handle the press themselves, and the selected
-                                         track is where Ctrl+V pastes. -->
+                                         track is where Ctrl+V pastes. Ctrl and Shift on the strip's
+                                         background select several tracks (SelectTrackByPress). -->
                                     <Border x:Name="Strip" Grid.Column="0"
                                             BorderBrush="{StaticResource LineBrush}" BorderThickness="0,0,1,1"
                                             PreviewMouseLeftButtonDown="OnTrackHeaderClicked"
@@ -416,11 +417,21 @@
                                                 <Button Content="Match BPM" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         Command="{Binding DataContext.MatchTempoCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
-                                                        ToolTip="Stretch this track to the project tempo, pitch untouched. A half- or double-time reading is folded first."/>
+                                                        ContextMenuOpening="OnMatchBpmMenuOpening"
+                                                        ToolTip="Stretch this track to the project tempo, pitch untouched. A half- or double-time reading is folded first. Right-click: match the selected tracks to their average tempo instead.">
+                                                    <!-- Match BPM's right-click (Daniel, 2026-10-28). Click handler only (MenuWiringTests);
+                                                         the header is written as the menu opens (OnMatchBpmMenuOpening), with the average in it. -->
+                                                    <Button.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Match the selected tracks to their average tempo" Click="OnMatchAverageMenu" Tag="average"
+                                                                      ToolTip="Every selected track is stretched to the average of their tempos, and PROJECT BPM becomes that average, so a track matched later lands with them. Ctrl+click or Shift+click the tracks' strips to choose which; with fewer than two selected, every track counts. One Ctrl+Z undoes it."/>
+                                                        </ContextMenu>
+                                                    </Button.ContextMenu>
+                                                </Button>
                                                 <Button Content="Match key" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
-                                                        ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
+                                                        ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). With several tracks selected, this track stays and the other selected ones are shifted to its key. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
                                                 <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         ToolTip="Put tempo, pitch, EQ and volume back to normal, and remove tempo ramps and warp markers. Sections, fades, LINK, mute and solo stay as they are."
                                                         Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"

@@ -93,6 +93,12 @@ mistakes, not by describing the project.
 - **The order on screen is the project's order.** Moving a track moves both (`ProjectSession.MoveTrack`
   and the rows' `Move`) and leaves the engine alone; Shift+click ranges index by it. Moving only the
   rows would make a range sweep up the wrong tracks.
+- **A press on a track's button or knob keeps a multi-selection of tracks; a press on the strip's
+  background, or in a lane, collapses it to that track** (2026-10-29). Match key and Match BPM's
+  right-click read the selection, and the press reaches them through the strip's handler first
+  (`SelectTrackByPress`): collapse it there and they could never see more than one track. Ctrl
+  and Shift are read on the background only, so Ctrl on the S button still means "solo alongside".
+  Do not "fix" the strip to select one track on every press.
 - **A press on one of several selected sections keeps them all until release.** It collapses to
   that one only when let go without moving (`_pendingCollapse`), and the second press of a
   double-click puts the group back. Do not "fix" it to select on press: that is what breaks a group drag.
@@ -288,7 +294,11 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
   here again, and do not trust a read of it from here either: the view is merged with the private
   hive. Instead, at each release also copy the exe to `releases\Benchmix-latest.exe` (a fixed name,
   overwritten each time); the association is his to set once, *Open with → Always* on that file
-  (asked 2026-10-29, not yet done). The same virtualisation hides his runs: the `benchmix.log` seen
+  (asked 2026-10-29, not yet done). Until then, publish to the normal
+  `%LOCALAPPDATA%\Benchmix.build\publish\…` path, never only to the stage folder: seen from here that
+  path *is* the package-cache file his real association launches, so each release refreshes the
+  very exe a double-click runs (inferred from the paths, not watched). The same virtualisation
+  hides his runs: the `benchmix.log` seen
   from here holds only the scripted runs, and what his copy logs — the real
   `%LOCALAPPDATA%\Benchmix\benchmix.log` — cannot be read from here (an outside process is refused
   by the sandbox). Read the shortcut's target and its version (`0.1.0+<commit>`) before saying what

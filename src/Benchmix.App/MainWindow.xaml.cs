@@ -916,6 +916,13 @@ public partial class MainWindow : Window
             _scriptedFocus = null;
         }
 
+        // --- selecting several tracks: Ctrl+press, Shift+press, a press on a button; Match BPM's right-click menu ---
+        try { RunTrackSelectionGestures(Check, notes); }
+        finally
+        {
+            _scriptedModifiers = null;
+        }
+
         // --- renaming a track, and Space as a bare key that leaves text boxes alone ---
         try { RunRenameGestures(Check, notes); }
         finally
@@ -1030,6 +1037,149 @@ public partial class MainWindow : Window
         string untested = notes.Count == 0 ? "" : $", {notes.Count} areas untested";
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks{untested}" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}{untested}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// Selecting several tracks (Daniel, 2026-10-28: "must be able to select multiple tracks"),
+    /// through the strip's real press handler with scripted keys: a plain press selects one,
+    /// Ctrl+press flips one in or out, Shift+press takes the range, a press on a button keeps the
+    /// selection, a right-click keeps or replaces it, a plain press on another strip lets it go;
+    /// and Match BPM's right-click menu says what it would do. Two empty tracks are added for
+    /// company and undone after.
+    /// </summary>
+    private void RunTrackSelectionGestures(Action<string, bool> Check, List<string> notes)
+    {
+        if (_vm.Tracks.Count == 0) { notes.Add("no track, so selecting several tracks is untested - pass a file to cover it"); return; }
+        int before = _vm.Tracks.Count;
+        _vm.AddEmptyTrackCommand.Execute(null);
+        _vm.AddEmptyTrackCommand.Execute(null);
+        UpdateLayout();
+        var rows = _vm.Tracks.ToList();
+        Check($"three tracks to choose between (got {rows.Count})", rows.Count >= 3);
+        if (rows.Count < 3) return;
+        var (a, b, c) = (rows[0], rows[1], rows[2]);
+        var leftDown = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = PreviewMouseLeftButtonDownEvent };
+        var rightDown = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Right) { RoutedEvent = PreviewMouseRightButtonDownEvent };
+
+        string Picked() => string.Join("+", _vm.SelectedTracks.Select(t => rows.IndexOf(t)));
+        void Press(TrackViewModel t, ModifierKeys keys)
+        {
+            if (StripOf(t) is not { } strip) { Check($"the strip of track {rows.IndexOf(t)} is on screen", false); return; }
+            _scriptedModifiers = keys;
+            OnTrackHeaderClicked(strip, leftDown);
+            _scriptedModifiers = ModifierKeys.None;         // the keys go up with the button
+        }
+
+        Press(b, ModifierKeys.None);
+        Check($"a plain press on a strip selects that track alone (got {Picked()})", Picked() == "1" && ReferenceEquals(_vm.SelectedTrack, b));
+
+        Press(c, ModifierKeys.Control);
+        Check($"Ctrl+press on another strip adds its track (got {Picked()})", Picked() == "1+2");
+        Check("the track Ctrl+press added is the one commands act on", ReferenceEquals(_vm.SelectedTrack, c));
+        Check($"the status says what the selection is for (\"{_vm.Status}\")", _vm.Status.Contains("2 tracks selected") && _vm.Status.Contains("Match BPM"));
+
+        Press(c, ModifierKeys.Control);
+        Check($"Ctrl+press on a selected track takes it out again (got {Picked()})", Picked() == "1");
+        Check("commands fall back to a track still selected", ReferenceEquals(_vm.SelectedTrack, b));
+
+        Press(a, ModifierKeys.None);
+        Press(c, ModifierKeys.Shift);
+        Check($"Shift+press selects every track between (got {Picked()})", Picked() == "0+1+2");
+        Check("after Shift+press the track pressed last is the one commands act on", ReferenceEquals(_vm.SelectedTrack, c));
+        Press(b, ModifierKeys.Shift);
+        Check($"a further Shift+press measures from the same anchor (got {Picked()})", Picked() == "0+1" && ReferenceEquals(_vm.SelectedTrack, b));
+
+        // A press on one of a selected track's buttons keeps the selection: that is how Match key
+        // and Match BPM's menu get to act on the lot. Raised for real as Mouse.PreviewMouseDown,
+        // which tunnels from the window down to the button and is cracked into
+        // PreviewMouseLeftButtonDown at each element on the way, the strip's handler included.
+        // (PreviewMouseLeftButtonDown itself is a direct event: raised on the button, it reaches
+        // the button alone, and the strip never hears of it.)
+        var button = StripOf(a) is { } stripA ? Descendants<Button>(stripA).FirstOrDefault(x => x.Content as string == "Match key") : null;
+        Check("the first track's strip has a Match key button", button is not null);
+        if (button is not null)
+        {
+            _scriptedModifiers = ModifierKeys.None;
+            button.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            Check($"a press on a selected track's button keeps the selection and makes that track the one commands act on (got {Picked()}, acting on {rows.IndexOf(_vm.SelectedTrack!)})",
+                  Picked() == "0+1" && ReferenceEquals(_vm.SelectedTrack, a));
+            _scriptedModifiers = ModifierKeys.Control;
+            button.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = Mouse.PreviewMouseDownEvent });
+            _scriptedModifiers = ModifierKeys.None;
+            Check($"Ctrl on a button is left to the button, not read as a toggle (got {Picked()})", Picked() == "0+1");
+        }
+
+        // A right-click on a strip keeps a selection its track is part of (the menu then acts on
+        // that track) and selects alone a track outside it.
+        if (StripOf(b) is { } stripB) OnTrackHeaderRightClicked(stripB, rightDown);
+        Check($"a right-click on a selected strip keeps the selection (got {Picked()})", Picked() == "0+1" && ReferenceEquals(_vm.SelectedTrack, b));
+        if (StripOf(c) is { } stripC) OnTrackHeaderRightClicked(stripC, rightDown);
+        Check($"a right-click on a strip outside the selection selects that track alone (got {Picked()})", Picked() == "2");
+
+        // Match BPM's right-click menu: one item that says what it would do, with the average in it
+        // — every track with a tempo while fewer than two are selected, the selected ones otherwise
+        // — or greyed out, saying why, with fewer than two tempos. (An empty track that has been
+        // given a section earlier in this run carries that song's tempo, so there may be several.)
+        // The --buttontest run, with two songs, drives the item itself.
+        Press(a, ModifierKeys.None);
+        var matchBpm = StripOf(a) is { } stripA2 ? Descendants<Button>(stripA2).FirstOrDefault(x => x.Content as string == "Match BPM") : null;
+        var menu = matchBpm?.ContextMenu;
+        var item = menu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "average");
+        Check("Match BPM has a right-click menu with the average item", item is not null);
+        if (menu is not null && item is not null)
+        {
+            var withTempo = _vm.Tracks.Where(t => t.OriginalBpm > 0).ToList();
+            FillMatchAverageMenu(menu);
+            if (withTempo.Count >= 2)
+            {
+                var reference = withTempo.Contains(a) ? a : withTempo[0];
+                double all = Benchmix.Engine.Analysis.Analyzer.AverageBpm(withTempo.Select(t => t.OriginalBpm).ToList(), reference.OriginalBpm);
+                Check($"with one track selected the item offers every track with a tempo and their average ('{item.Header}'; want all {withTempo.Count} at {all:0.0})",
+                      item.IsEnabled && item.Header is string h && h.Contains($"all {withTempo.Count} tracks") && h.Contains($"{all:0.0} BPM"));
+                if (withTempo.FirstOrDefault(t => !ReferenceEquals(t, a)) is { } other && withTempo.Contains(a))
+                {
+                    Press(other, ModifierKeys.Control);
+                    FillMatchAverageMenu(menu);
+                    double two = Benchmix.Engine.Analysis.Analyzer.AverageBpm(new[] { a.OriginalBpm, other.OriginalBpm }, other.OriginalBpm);
+                    Check($"with two selected it offers those two and their average ('{item.Header}'; want {two:0.0})",
+                          item.IsEnabled && item.Header is string h2 && h2.Contains("the 2 selected tracks") && h2.Contains($"{two:0.0} BPM"));
+                }
+            }
+            else
+                Check($"with one track that has a tempo the item is greyed out and says why ('{item.Header}')",
+                      !item.IsEnabled && item.Header is string h && h.Contains("add another track"));
+        }
+
+        // b is now the one commands act on within a selection of two: a plain press on its own strip,
+        // and one in its own lane, must still let the rest go. (Setting SelectedTrack to what it
+        // already is does nothing, which is what left the rest selected in the first run.)
+        Press(b, ModifierKeys.None);
+        Check($"a plain press on the strip of the track commands act on lets the rest go (got {Picked()})", Picked() == "1" && ReferenceEquals(_vm.SelectedTrack, b));
+        Press(a, ModifierKeys.None);
+        Press(b, ModifierKeys.Control);
+        Check($"two tracks again, with the second the one commands act on (got {Picked()})", Picked() == "0+1" && ReferenceEquals(_vm.SelectedTrack, b));
+        UpdateLayout();
+        if (LaneOf(b) is { ActualHeight: > 0 } laneB)
+        {
+            var origin = laneB.TranslatePoint(new Point(0, 0), this);
+            var inLane = new Point(origin.X + 6, origin.Y + laneB.ActualHeight / 2);
+            _scriptedModifiers = ModifierKeys.None;
+            _scriptedWindowPoint = inLane;
+            LaneDown(laneB, inLane);
+            LaneUp(laneB);
+            _scriptedWindowPoint = null;
+            Check($"a plain press in the lane of the track commands act on lets the rest go too (got {Picked()})", Picked() == "1" && ReferenceEquals(_vm.SelectedTrack, b));
+        }
+        else notes.Add("the second track's lane was not laid out, so the lane press letting a track selection go is untested");
+
+        _vm.SelectedTrack = a;
+        for (int n = _vm.Tracks.Count; n > before; n--)
+        {
+            int was = _vm.Tracks.Count;
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => _vm.Tracks.Count < was);
+        }
+        Check($"the two empty tracks are undone (got {_vm.Tracks.Count}, want {before})", _vm.Tracks.Count == before);
     }
 
     /// <summary>
@@ -3862,6 +4012,7 @@ public partial class MainWindow : Window
             Check("same key recognised", Labels().Contains("same key"));
         }
 
+        await CheckMatchAverageAsync(Check, Click, Buttons, Labels);
         await CheckSplitThroughMenuAsync(Check, Labels);
         await CheckRenameThroughMenuAsync(Check, Labels);
         await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
@@ -3947,6 +4098,94 @@ public partial class MainWindow : Window
         await Settle();
         string? back = _vm.Tracks.FirstOrDefault(t => t.Id == id)?.Name;
         check($"one Ctrl+Z puts the old name back ('{back}')", back == old);
+    }
+
+    /// <summary>
+    /// Match BPM's right-click (Daniel, 2026-10-28: "matches all selected songs to the average bpm
+    /// between them all") and Match key with several tracks selected, through the real strip press,
+    /// the real menu item and the real button: the bed at 93 and the topper at 102 both land on
+    /// 97.5, PROJECT BPM follows, one Ctrl+Z puts all three back; then, the topper's key read as Bm
+    /// for the test, Match key on the bed shifts the topper −3 and leaves the bed alone.
+    /// </summary>
+    private async Task CheckMatchAverageAsync(Action<string, bool> check, Func<Button, Task> click,
+                                              Func<string, List<Button>> buttons, Func<string> labels)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        if (_vm.Tracks.Count != 2) { check("two tracks to average", false); return; }
+        var bedId = _vm.Tracks[0].Id;
+        var topperId = _vm.Tracks[1].Id;
+        TrackViewModel Bed() => _vm.Tracks.First(t => t.Id == bedId);
+        TrackViewModel Topper() => _vm.Tracks.First(t => t.Id == topperId);
+        double projectBefore = _vm.ProjectBpm;
+
+        _vm.SelectedTrack = Bed();
+        if (StripOf(Topper()) is not { } strip) { check("the topper's strip is on screen", false); return; }
+        _scriptedModifiers = ModifierKeys.Control;
+        OnTrackHeaderClicked(strip, new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = PreviewMouseLeftButtonDownEvent });
+        _scriptedModifiers = null;
+        check($"Ctrl+click on the topper's strip selects both tracks ({_vm.SelectedTracks.Count})", _vm.SelectedTracks.Count == 2);
+
+        var match = buttons("Match BPM");
+        var menu = match.Count == 2 ? match[0].ContextMenu : null;
+        var item = menu?.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "average");
+        check("the bed's Match BPM has the right-click item", item is not null);
+        if (menu is null || item is null) return;
+        FillMatchAverageMenu(menu);
+        check($"the item names the two tracks and their average ('{item.Header}')",
+              item.IsEnabled && item.Header is string h && h.Contains("the 2 selected tracks") && h.Contains("97.5 BPM"));
+
+        try
+        {
+            var peer = new System.Windows.Automation.Peers.MenuItemAutomationPeer(item);
+            ((System.Windows.Automation.Provider.IInvokeProvider)peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke();
+        }
+        catch (Exception ex) { check($"the item can be clicked ({ex.GetType().Name}: {ex.Message})", false); return; }
+        await Settle();
+
+        var after = labels();
+        check("the bed is stretched up to 97.5", System.Text.RegularExpressions.Regex.IsMatch(after, @"97\.5 BPM\s+\(was 93\.0\)"));
+        check("the topper is stretched down to 97.5", System.Text.RegularExpressions.Regex.IsMatch(after, @"97\.5 BPM\s+\(was 102\.0\)"));
+        check($"PROJECT BPM is now the average ({_vm.ProjectBpm})", Math.Abs(_vm.ProjectBpm - 97.5) < 1e-9);
+        check($"the status says what it did (\"{_vm.Status}\")",
+              _vm.Status.Contains("97.5 BPM") && _vm.Status.Contains("+4.8%") && _vm.Status.Contains("-4.4%") && _vm.Status.Contains("PROJECT BPM is now 97.5"));
+
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        after = labels();
+        check("one Ctrl+Z puts both tempos back",
+              System.Text.RegularExpressions.Regex.IsMatch(after, @"93\.0 BPM") && System.Text.RegularExpressions.Regex.IsMatch(after, @"102\.0 BPM") && !after.Contains("(was"));
+        check($"and PROJECT BPM back ({_vm.ProjectBpm}, was {projectBefore})", Math.Abs(_vm.ProjectBpm - projectBefore) < 1e-9);
+        check($"the selection survives the undo ({_vm.SelectedTracks.Count})", _vm.SelectedTracks.Count == 2);
+
+        // Match key between the two: the bed's button is pressed, so the bed stays and the topper
+        // shifts. Both songs are tagged G#m, so the topper's key is read as Bm for this — three
+        // semitones up — and put back after.
+        string? wasKey = Topper().Model.Key;
+        Topper().Model.Key = "Bm";
+        if (_vm.SelectedTracks.Count != 2) { _vm.SelectedTrack = Bed(); _vm.ToggleTrackSelection(Topper()); }
+        var key = buttons("Match key");
+        if (key.Count == 2)
+        {
+            await click(key[0]);
+            await Settle();
+            check($"Match key on the bed with both selected shifts the topper, not the bed (topper {Topper().Semitones:+0;-0;0}, bed {Bed().Semitones:+0;-0;0})",
+                  Math.Abs(Topper().Semitones - (-3)) < 1e-9 && Math.Abs(Bed().Semitones) < 1e-9);
+            check($"the status says so (\"{_vm.Status}\")", _vm.Status.Contains("sit with") && _vm.Status.Contains("-3"));
+            _vm.UndoCommand.Execute(null);
+            await Settle();
+            check($"one Ctrl+Z puts the topper back ({Topper().Semitones:+0;-0;0})", Math.Abs(Topper().Semitones) < 1e-9);
+        }
+        else check("two Match key buttons", false);
+        Topper().Model.Key = wasKey;
+
+        _vm.SelectedTrack = Bed();
+        check($"a plain selection lets the topper go ({_vm.SelectedTracks.Count})", _vm.SelectedTracks.Count == 1);
     }
 
     private async Task CheckSplitThroughMenuAsync(Action<string, bool> check, Func<string> labels)
@@ -5027,13 +5266,45 @@ public partial class MainWindow : Window
         // A press inside the name being typed is for the text: taking the keyboard away from it
         // would end the renaming before the click could place the caret.
         if (!IsInRenameBox(e.OriginalSource as DependencyObject)) TakeKeyboardFromText();
-        if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+        if (((FrameworkElement)sender).DataContext is TrackViewModel vm)
+            SelectTrackByPress(vm, e.OriginalSource as DependencyObject, Modifiers);
     }
 
-    /// <summary>A right-click on a strip selects its track first, so the menu acts on the one under the pointer.</summary>
+    /// <summary>
+    /// What a press on a strip does to the selection (Daniel, 2026-10-28: "must be able to select
+    /// multiple tracks"). On one of the track's buttons or knobs — Match key, Match BPM's
+    /// right-click — the track becomes the one commands act on and a selection it is part of is
+    /// kept, so those commands can act on the lot. Elsewhere on the strip a plain press selects
+    /// the track alone, Ctrl flips it in or out, and Shift takes every track between the anchor
+    /// and it. The keys are read here and not passed on: Ctrl on the S button still means "solo
+    /// alongside".
+    /// </summary>
+    internal void SelectTrackByPress(TrackViewModel vm, DependencyObject? pressedOn, ModifierKeys keys)
+    {
+        if (IsOnStripControl(pressedOn)) { _vm.MakeTrackPrimary(vm); return; }
+        if ((keys & ModifierKeys.Shift) != 0) _vm.SelectTrackRange(vm);
+        else if ((keys & ModifierKeys.Control) != 0) _vm.ToggleTrackSelection(vm);
+        else _vm.SelectTrackAlone(vm);
+    }
+
+    /// <summary>True for a press on a strip's button, knob, slider or text box — its controls, as against its background.</summary>
+    private static bool IsOnStripControl(DependencyObject? d)
+    {
+        for (; d is not null; d = d is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(d) : LogicalTreeHelper.GetParent(d))
+        {
+            if (d is Border { Name: "Strip" }) return false;
+            if (d is System.Windows.Controls.Primitives.ButtonBase or Controls.Knob or TextBox or Slider) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// A right-click on a strip makes its track the one the menu acts on. A selection it is part
+    /// of is kept (2026-10-29), so Match BPM's right-click can offer the average of the lot.
+    /// </summary>
     private void OnTrackHeaderRightClicked(object sender, MouseButtonEventArgs e)
     {
-        if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.SelectedTrack = vm;
+        if (((FrameworkElement)sender).DataContext is TrackViewModel vm) _vm.MakeTrackPrimary(vm);
     }
 
     // ---------------- renaming a track ----------------
@@ -5210,6 +5481,28 @@ public partial class MainWindow : Window
         if (move is null) return;
         FillMoveToTab(move);
     }
+
+    /// <summary>
+    /// Match BPM's right-click menu (Daniel, 2026-10-28): its one item says what it will do, with the
+    /// average in it, as the menu opens — or is greyed out and says why not.
+    /// </summary>
+    private void OnMatchBpmMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (sender is Button { ContextMenu: { } menu }) FillMatchAverageMenu(menu);
+    }
+
+    internal void FillMatchAverageMenu(ContextMenu menu)
+    {
+        if (menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "average") is not { } item) return;
+        var (picked, average, fromSelection) = _vm.AverageTempoTarget();
+        item.IsEnabled = average is not null;
+        item.Header = average is { } bpm
+            ? $"Match {(fromSelection ? $"the {picked.Count} selected tracks" : $"all {picked.Count} tracks")} to their average, {bpm:0.0} BPM"
+            : picked.Count == 1 ? "Match tracks to their average tempo — add another track with a tempo first"
+                                : "Match tracks to their average tempo — no track has a tempo yet";
+    }
+
+    private void OnMatchAverageMenu(object sender, RoutedEventArgs e) => _vm.MatchTempoToAverage();
 
     /// <summary>The strip menu's Find missing file (Daniel, 2026-10-28): a box to point at the song, then every section from it follows.</summary>
     private void OnFindMissingFileMenu(object sender, RoutedEventArgs e)
@@ -5696,7 +5989,11 @@ public partial class MainWindow : Window
     {
         if (lane.DataContext is not TrackViewModel vm) return false;
 
-        _vm.SelectedTrack = vm;
+        // A plain press in a lane selects that track alone; with Ctrl or Shift — a section being
+        // added to the selection — the track becomes the one commands act on and a track selection
+        // it is part of is kept (2026-10-29).
+        if (Modifiers.HasFlag(ModifierKeys.Control) || Modifiers.HasFlag(ModifierKeys.Shift)) _vm.MakeTrackPrimary(vm);
+        else _vm.SelectTrackAlone(vm);
         // In ramp mode a double-click's second press does nothing: its first press already put a
         // point down, and may have opened the box it would otherwise close straight away.
         if (_vm.RampMode) { _clickMemo = null; return clickCount >= 2 || RampDown(lane, vm, window); }

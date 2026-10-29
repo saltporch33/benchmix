@@ -19,7 +19,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 - **Tempo and key detection** that reads the file's own tags first and only analyses when it has
   to, so a tagged library loads instantly.
 - **Match BPM** stretches a track onto the project tempo in one click, folding half-time and
-  double-time readings first.
+  double-time readings first. Its right-click matches the selected tracks to the average of
+  their tempos instead, and makes that the project tempo.
 - **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
   110 to 115 BPM while it mixes into the next.
 - **Warp markers.** Pull a song that drifts back into time with another — pin a beat that is still
@@ -121,6 +122,10 @@ reconnect.
 
 The selected track has a blue bar down its left edge. Clicking anywhere on a track — its lane, its
 name, a knob — selects it, and that is where <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes.
+<kbd>Ctrl</kbd>+click other tracks' strips to select several, or <kbd>Shift</kbd>+click for a run
+of them: *Match key* on one then shifts the others to its key, and a right-click on *Match BPM*
+matches them to their average tempo. A press on a selected track's button or knob keeps the
+selection; a click on a strip's background or in a lane goes back to one track.
 
 **Several sections at once.** Click one section, then <kbd>Ctrl</kbd>+click others to add them, or
 <kbd>Shift</kbd>+click to take every section between the two — on every track from the one to the

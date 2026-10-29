@@ -522,7 +522,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         PushUndo($"remove {track.Name}");
         Session.RemoveTrack(track.Model);
         Tracks.Remove(track);
-        if (SelectedTrack == track) SelectedTrack = Tracks.FirstOrDefault();
+        if (SelectedTrack == track)
+        {
+            if (SelectedTracks.FirstOrDefault() is { } still) MakeTrackPrimary(still);     // the rest of a multi-selection stays
+            else SelectedTrack = Tracks.FirstOrDefault();
+        }
         RecomputeLength();
         MarkDirty();
         Status = $"Removed {track.Name}.";
@@ -563,12 +567,81 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         Status = $"{track.Name}: {(speed - 1) * 100:+0.0;-0.0}% to hit {target:F1} BPM{folded}.{ramps}{warps}";
     }
 
+    /// <summary>
+    /// What a right-click on Match BPM offers (Daniel, 2026-10-28: "matches all selected songs to
+    /// the average bpm between them all"): the selected tracks that have a tempo — every track
+    /// with one, when fewer than two are selected — and the average they would be matched to,
+    /// each read in the octave of the track commands act on first (half/double-time folded, as
+    /// Match BPM does). The average is null when there are not two tracks with a tempo.
+    /// </summary>
+    public (IReadOnlyList<TrackViewModel> Tracks, double? AverageBpm, bool FromSelection) AverageTempoTarget()
+    {
+        var selected = SelectedTracks;
+        bool fromSelection = selected.Count >= 2;
+        var picked = (fromSelection ? selected : Tracks.ToList()).Where(t => t.OriginalBpm > 0).ToList();
+        if (picked.Count < 2) return (picked, null, fromSelection);
+        var reference = SelectedTrack is { } s && picked.Contains(s) ? s : picked[0];
+        return (picked, Analyzer.AverageBpm(picked.Select(t => t.OriginalBpm).ToList(), reference.OriginalBpm), fromSelection);
+    }
+
+    /// <summary>
+    /// Match BPM's right-click (Daniel, 2026-10-28): stretches every track in
+    /// <see cref="AverageTempoTarget"/> to their average tempo and makes that PROJECT BPM, so a
+    /// track matched later lands with them. One undo step for the lot.
+    /// </summary>
+    public void MatchTempoToAverage()
+    {
+        if (_session is null || HeldUnderTheMouse()) return;
+        var (picked, average, fromSelection) = AverageTempoTarget();
+        if (average is not { } target)
+        {
+            Status = picked.Count == 1 ? "Only one track has a tempo — add another to average with."
+                                       : "No track has a tempo to average.";
+            return;
+        }
+
+        var parts = new List<string>();
+        int ramps = 0, warps = 0;
+        AsOneUndoStep($"match {picked.Count} tracks to their average tempo", () =>
+        {
+            foreach (var t in picked)
+            {
+                var (speed, from) = Session.MatchTempo(t.Model, target);
+                t.Speed = speed;
+                parts.Add($"{t.Name} {(speed - 1) * 100:+0.0;-0.0}%{(Math.Abs(from - t.OriginalBpm) > 0.01 ? " (read as half/double-time)" : "")}");
+                ramps += t.Model.Ramps.Count;
+                warps += t.Model.Warps.Count;
+            }
+            ProjectBpm = target;
+        });
+        RecomputeLength();
+        MarkDirty();
+        string kept = (ramps > 0, warps > 0) switch
+        {
+            (true, true) => " Tempo ramps keep where they go; warp markers moved with their beats.",
+            (true, false) => " Tempo ramps keep where they go.",
+            (false, true) => " Warp markers moved with their beats.",
+            _ => "",
+        };
+        Status = $"Matched {(fromSelection ? "the selected" : "all")} {picked.Count} tracks to their average, {target:F1} BPM: "
+               + $"{string.Join(", ", parts)}. PROJECT BPM is now {target:F1}.{kept}";
+    }
+
     /// <summary>Suggests and applies a pitch shift so a track sits with the project's key reference.</summary>
     [RelayCommand]
     private void MatchKey(TrackViewModel? track)
     {
         track ??= SelectedTrack;
         if (track is null || _session is null) return;
+
+        // Several tracks selected (Daniel, 2026-10-28): the one whose button was pressed stays as
+        // it is, and the other selected tracks are shifted to sit with its key.
+        var selected = SelectedTracks;
+        if (selected.Count >= 2 && selected.Contains(track))
+        {
+            MatchKeysTo(track, selected.Where(t => !ReferenceEquals(t, track)).ToList());
+            return;
+        }
 
         var reference = Tracks.FirstOrDefault(t => t != track);
         if (reference is null) { Status = "Add a second track to match against."; return; }
@@ -591,6 +664,44 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ? "  Both keys aren't confirmed, so trust your ears over this number."
             : "";
         Status = $"{track.Name}: {Keys.Describe(track.Model.Key, reference.Model.Key)} — shifted {semis.Value:+0;-0;0}.{caveat}";
+    }
+
+    /// <summary>
+    /// Match key with several tracks selected: every track in <paramref name="others"/> is shifted
+    /// to sit with <paramref name="reference"/>'s key, as one undo step. A track without a key is
+    /// left alone and named.
+    /// </summary>
+    private void MatchKeysTo(TrackViewModel reference, IReadOnlyList<TrackViewModel> others)
+    {
+        if (reference.Model.Key is null) { Status = $"{reference.Name} has no key for the others to sit with."; return; }
+        var shifts = new List<(TrackViewModel Track, int Semitones)>();
+        var noKey = new List<string>();
+        foreach (var other in others)
+        {
+            var semis = Session.SuggestSemitones(other.Model, reference.Model);
+            if (semis is null) noKey.Add(other.Name);
+            else shifts.Add((other, semis.Value));
+        }
+        if (shifts.Count == 0) { Status = $"No key on {string.Join(", ", noKey)} — nothing to shift."; return; }
+
+        AsOneUndoStep($"match {shifts.Count} track{(shifts.Count == 1 ? "" : "s")} to {reference.Name}'s key", () =>
+        {
+            foreach (var (t, semis) in shifts)
+            {
+                t.LinkPitchToTempo = false;
+                t.Semitones = semis;
+            }
+        });
+        MarkDirty();
+
+        string list = string.Join("; ", shifts.Select(x => x.Semitones == 0
+            ? $"{x.Track.Name} 0 ({Keys.Describe(x.Track.Model.Key, reference.Model.Key)})"
+            : $"{x.Track.Name} {x.Semitones:+0;-0}"));
+        string skipped = noKey.Count == 0 ? "" : $" No key on {string.Join(", ", noKey)}, left alone.";
+        string caveat = reference.KeyIsEstimate || shifts.Any(x => x.Track.KeyIsEstimate)
+            ? "  A key in this is an estimate, so trust your ears over these numbers."
+            : "";
+        Status = $"Shifted to sit with {reference.Name}'s key ({reference.Model.Key}): {list}.{skipped}{caveat}";
     }
 
     /// <summary>
@@ -975,6 +1086,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         EndWarpPress();                 // and a warp marker held, which could only be stale by now
 
         var keepTrack = SelectedTrack?.Id;
+        var keepTracks = SelectedTracks.Select(t => t.Id).ToHashSet();
+        var keepAnchor = _trackAnchorId;
         var keepClip = SelectedClip?.Id;
         var keepSelected = SelectedClips.Select(c => c.Id).ToHashSet();
         // The mark is not part of the project, so an undo leaves it where it is — on the same audio,
@@ -1012,6 +1125,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 Tracks.Add(vm);
             }
             SelectedTrack = Tracks.FirstOrDefault(t => t.Id == keepTrack) ?? Tracks.FirstOrDefault();
+            foreach (var t in Tracks)
+                if (keepTracks.Contains(t.Id)) t.IsSelected = true;         // the rest of a track multi-selection (2026-10-29)
+            _trackAnchorId = keepAnchor;
             SelectClip(Tracks.SelectMany(t => t.Clips).FirstOrDefault(c => c.Id == keepClip));
             foreach (var c in Tracks.SelectMany(t => t.Clips))
                 if (keepSelected.Contains(c.Id)) c.IsSelected = true;      // the rest of a multi-selection
@@ -2818,10 +2934,126 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (ScrollSeconds > MaxScrollSeconds) ScrollSeconds = MaxScrollSeconds;
     }
 
+    // ---------------- which tracks are selected (Daniel, 2026-10-28: "must be able to select multiple tracks") ----------------
+
+    /// <summary>
+    /// Where a Shift+click on a strip measures from: the track last selected by a plain click, a
+    /// Ctrl+click or a press on one of its buttons. Kept by id, because the rows are rebuilt after
+    /// every edit. <see cref="SelectedTrack"/> is a different thing — the track commands act on
+    /// and Ctrl+V pastes to — which a Shift+click moves to the track just clicked while the anchor
+    /// stays put.
+    /// </summary>
+    private Guid? _trackAnchorId;
+
+    /// <summary>True while <see cref="SelectedTrack"/> moves within a selection rather than replacing it.</summary>
+    private bool _keepingTrackSelection;
+
+    /// <summary>
+    /// Setting <see cref="SelectedTrack"/> is a plain click: that track alone is selected and the
+    /// rest are let go — every lane press, undo and tab switch goes through here. The other ways in
+    /// (<see cref="ToggleTrackSelection"/>, <see cref="SelectTrackRange"/>, <see cref="MakeTrackPrimary"/>)
+    /// keep the rest and only move which track commands act on.
+    /// </summary>
     partial void OnSelectedTrackChanged(TrackViewModel? oldValue, TrackViewModel? newValue)
     {
-        if (oldValue is not null) oldValue.IsSelected = false;
+        if (!_keepingTrackSelection)
+        {
+            foreach (var t in Tracks)
+                if (t.IsSelected && !ReferenceEquals(t, newValue)) t.IsSelected = false;
+            if (oldValue is not null) oldValue.IsSelected = false;        // a track already gone from the rows
+            _trackAnchorId = newValue?.Id;
+        }
         if (newValue is not null) newValue.IsSelected = true;
+    }
+
+    /// <summary>
+    /// A plain press on a strip's background or in a lane: that track alone, whatever was selected.
+    /// Setting <see cref="SelectedTrack"/> would do it — except when the track pressed is already
+    /// the one commands act on, where the set is a no-op and the rest of a multi-selection stayed
+    /// (caught by `--gesturetest`, 2026-10-29).
+    /// </summary>
+    public void SelectTrackAlone(TrackViewModel track)
+    {
+        if (!ReferenceEquals(SelectedTrack, track)) { SelectedTrack = track; return; }
+        foreach (var t in Tracks)
+            if (t.IsSelected && !ReferenceEquals(t, track)) t.IsSelected = false;
+        _trackAnchorId = track.Id;
+    }
+
+    /// <summary>Every selected track, in the order on screen. Usually one; Ctrl+click and Shift+click on the strips make more.</summary>
+    public IReadOnlyList<TrackViewModel> SelectedTracks => Tracks.Where(t => t.IsSelected).ToList();
+
+    private void SetPrimaryKeepingSelection(TrackViewModel? track)
+    {
+        _keepingTrackSelection = true;
+        try { SelectedTrack = track; }
+        finally { _keepingTrackSelection = false; }
+    }
+
+    /// <summary>
+    /// A press on one of a track's buttons or knobs, or a right-click on its strip: the track
+    /// becomes the one commands act on. A selection it is part of is kept, so Match key and Match
+    /// BPM's menu can act on the lot; a track outside the selection is selected alone.
+    /// </summary>
+    public void MakeTrackPrimary(TrackViewModel track)
+    {
+        if (!track.IsSelected) { SelectedTrack = track; return; }
+        SetPrimaryKeepingSelection(track);
+        _trackAnchorId = track.Id;
+    }
+
+    /// <summary>
+    /// Ctrl+click on a strip: flips that track in or out of the selection, leaving the rest as they
+    /// are. The track just added becomes the one commands act on and the anchor; taking that one
+    /// out hands both to another selected track, or to none.
+    /// </summary>
+    public void ToggleTrackSelection(TrackViewModel track)
+    {
+        if (track.IsSelected)
+        {
+            track.IsSelected = false;
+            if (ReferenceEquals(SelectedTrack, track))
+            {
+                var next = SelectedTracks.LastOrDefault();
+                SetPrimaryKeepingSelection(next);
+                _trackAnchorId = next?.Id;
+            }
+        }
+        else
+        {
+            track.IsSelected = true;
+            SetPrimaryKeepingSelection(track);
+            _trackAnchorId = track.Id;
+        }
+        ReportTrackSelection();
+    }
+
+    /// <summary>
+    /// Shift+click on a strip: selects every track from the anchor to this one, in the order on
+    /// screen. The anchor stays where it was, so a further Shift+click measures from the same
+    /// place; the track just clicked becomes the one commands act on. With nothing to measure from
+    /// it is a plain click.
+    /// </summary>
+    public void SelectTrackRange(TrackViewModel target)
+    {
+        var anchor = Tracks.FirstOrDefault(t => t.Id == _trackAnchorId)
+                     ?? (SelectedTrack is { } s && Tracks.Contains(s) ? s : null);
+        if (anchor is null || !Tracks.Contains(target)) { SelectedTrack = target; return; }
+
+        int a = Tracks.IndexOf(anchor), b = Tracks.IndexOf(target);
+        int first = Math.Min(a, b), last = Math.Max(a, b);
+        for (int i = 0; i < Tracks.Count; i++) Tracks[i].IsSelected = i >= first && i <= last;
+        SetPrimaryKeepingSelection(target);
+        ReportTrackSelection();
+    }
+
+    /// <summary>Two or more tracks selected: say which, and what the selection is for.</summary>
+    private void ReportTrackSelection()
+    {
+        var selected = SelectedTracks;
+        if (selected.Count < 2) return;
+        Status = $"{selected.Count} tracks selected: {string.Join(", ", selected.Select(t => t.Name))}. "
+               + "Right-click Match BPM to match them to their average tempo; Match key on one shifts the others to its key.";
     }
 
     public void RecomputeLength()
