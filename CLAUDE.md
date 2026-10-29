@@ -199,7 +199,9 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), a scroll-wheel click pauses where the playhead is, and a double-click lands back on the frame play started from |
 
 These **exit 1 on failure** and also log a `verdict=` line to
-`%LOCALAPPDATA%\Benchmix\benchmix.log`. Close any running Benchmix first — it locks the exe.
+`%LOCALAPPDATA%\Benchmix\benchmix.log`. Close any running Benchmix first — it locks the exe. (That
+log, seen from here, is the Claude app's private copy and holds only scripted runs; his own runs
+are in the real one, which this sandbox cannot read — see "His copy" below.)
 
 ### Test house style — copy it or the test will lie
 
@@ -276,11 +278,21 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
   the Desktop shortcut with one named for it — *"Just keep one shortcut to benchmix on my desktop.
   have it point to the latest release, and have it named as usual with release number etc. old
   releases should just stay in a project folder once you make a new release."* (2026-10-27). Never
-  delete an older exe. **Double-clicking a `.benchmix` opens the newest release too**: at each
-  release, point `HKCU\Software\Classes\benchmix_auto_file` and `...\Applications\Benchmix.exe`
-  (`shell\open\command` and `DefaultIcon`) at the new exe — his yes, 2026-10-27: *"change it so
-  clicking a .benchmix file always opens using the latest release."* Read the shortcut's target
-  and its version (`0.1.0+<commit>`) before saying what his copy has.
+  delete an older exe. **Double-clicking a `.benchmix` has never followed the release** (found
+  2026-10-29): this sandbox runs inside the Claude app's MSIX package, so every registry write made
+  from here lands in the package's private hive (`…\Packages\Claude_pzs8sxrjxfjjc\SystemAppData\
+  Helium\`), and Explorer never saw one of them. It kept launching whatever his real registry
+  names — on the evidence, the 12 Oct build under `…\LocalCache\Local\Benchmix.build\publish\`,
+  schema 3, which refuses today's project files: that is the bug he reported on 2026-10-28
+  (*"opens the app but doesnt load the project"*). Do not write `HKCU\Software\Classes\…` from
+  here again, and do not trust a read of it from here either: the view is merged with the private
+  hive. Instead, at each release also copy the exe to `releases\Benchmix-latest.exe` (a fixed name,
+  overwritten each time); the association is his to set once, *Open with → Always* on that file
+  (asked 2026-10-29, not yet done). The same virtualisation hides his runs: the `benchmix.log` seen
+  from here holds only the scripted runs, and what his copy logs — the real
+  `%LOCALAPPDATA%\Benchmix\benchmix.log` — cannot be read from here (an outside process is refused
+  by the sandbox). Read the shortcut's target and its version (`0.1.0+<commit>`) before saying what
+  his copy has.
 
 ## Working with Daniel
 
@@ -291,4 +303,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-28.*
+*Revised 2026-10-29.*
