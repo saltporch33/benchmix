@@ -5,6 +5,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Benchmix.App.ViewModels;
+using Benchmix.Core;
 
 namespace Benchmix.App;
 
@@ -892,6 +893,15 @@ public partial class MainWindow : Window
                 if (ordered[i + 1].TrackStartSeconds < ordered[i].TrackStartSeconds + ordered[i].LengthSeconds - 1e-6)
                     overlap = true;
             Check("no two sections overlap after a paste", !overlap);
+
+            // --- several sections at once (Daniel, 2026-10-27: "MUST be able to select multiple clips
+            // to copy/paste them"; built 2026-10-29) ---
+            try { RunGroupClipboardGestures(Check, notes, t1); }
+            finally
+            {
+                _scriptedModifiers = null;
+                _scriptedWindowPoint = null;
+            }
         }
         else
         {
@@ -1037,6 +1047,139 @@ public partial class MainWindow : Window
         string untested = notes.Count == 0 ? "" : $", {notes.Count} areas untested";
         App.Log($"gesturetest: verdict={(fail.Count == 0 ? $"PASS - {pass.Count} checks{untested}" : $"FAIL - {fail.Count} of {pass.Count + fail.Count}{untested}")}");
         return fail.Count == 0;
+    }
+
+    /// <summary>
+    /// Copy, paste, repeat and cut with several sections selected (Daniel, 2026-10-27: "MUST be
+    /// able to select multiple clips to copy/paste them"; built 2026-10-29), through the real
+    /// commands: Ctrl+C with two selected copies both; Ctrl+V puts both down at the playhead on the
+    /// track chosen, the same distance apart to the frame; Ctrl+D repeats the pair on the very frame
+    /// it ends and the copies become the selection; Ctrl+X cuts both; pasted over a long section,
+    /// what lay under the gap between the two is still there; a group off two tracks keeps its rows,
+    /// and chosen on the last track gets an empty track added for its lower row; the lane menu names
+    /// the count. Everything is undone after.
+    /// </summary>
+    private void RunGroupClipboardGestures(Action<string, bool> Check, List<string> notes, TrackViewModel t1)
+    {
+        var session = _vm.Session;
+        int tracksBefore = _vm.Tracks.Count, clipsBefore = t1.Clips.Count, steps = 0;
+        var ordered = t1.Clips.OrderBy(c => c.TimelineStartSeconds).ToList();
+        if (ordered.Count < 3) { notes.Add("fewer than three sections, so copying several at once is untested"); return; }
+        Guid aId = ordered[0].Id, cId = ordered[2].Id;
+        ClipViewModel A() => t1.Clips.First(x => x.Id == aId);     // the rows are rebuilt after every edit
+        ClipViewModel C() => t1.Clips.First(x => x.Id == cId);
+        long span = TimelineEditor.StartFrameOf(C().Model, session) - TimelineEditor.StartFrameOf(A().Model, session);
+        long need = span + TimelineEditor.LengthFramesOf(C().Model, session);
+
+        _vm.SelectClip(A());
+        _vm.ToggleClipSelection(C());
+        _vm.CopyClipCommand.Execute(null);
+        Check($"Ctrl+C with two sections selected copies both (\"{_vm.Status}\")", _vm.HasClipboard && _vm.Status.StartsWith("Copied 2 sections"));
+
+        _vm.AddEmptyTrackCommand.Execute(null);
+        steps++;
+        var empty = _vm.SelectedTrack;
+        Check("an empty track for the paste is there and selected", empty is not null && empty.IsEmpty && _vm.Tracks.Count == tracksBefore + 1);
+        if (empty is null) return;
+        _vm.SeekTo(200);
+        _vm.PasteClipCommand.Execute(null);
+        steps++;
+        var put = empty.Clips.OrderBy(x => x.TimelineStartSeconds).ToList();
+        Check($"Ctrl+V puts both down on the chosen track (got {put.Count}; \"{_vm.Status}\")", put.Count == 2 && _vm.Status.StartsWith("Pasted 2 sections"));
+        if (put.Count == 2)
+        {
+            long apart = TimelineEditor.StartFrameOf(put[1].Model, session) - TimelineEditor.StartFrameOf(put[0].Model, session);
+            Check($"the first lands at the playhead (at {put[0].TimelineStartSeconds:0.00}s)", Math.Abs(put[0].TimelineStartSeconds - 200) < 0.05);
+            Check($"the second keeps its distance from the first, to the frame ({apart} frames, want {span})", apart == span);
+            Check("both pasted sections are selected, the first the one commands act on", put.All(x => x.IsSelected) && ReferenceEquals(_vm.SelectedClip, put[0]));
+
+            _vm.DuplicateClipCommand.Execute(null);
+            steps++;
+            var after = empty.Clips.OrderBy(x => x.TimelineStartSeconds).ToList();
+            Check($"Ctrl+D with both selected repeats the pair (got {after.Count}; \"{_vm.Status}\")", after.Count == 4 && _vm.Status.StartsWith("Repeated 2 sections"));
+            if (after.Count == 4)
+            {
+                Check($"the repeat starts on the very frame the pair ends ({TimelineEditor.StartFrameOf(after[2].Model, session)} vs {TimelineEditor.EndFrameOf(after[1].Model, session)})",
+                      TimelineEditor.StartFrameOf(after[2].Model, session) == TimelineEditor.EndFrameOf(after[1].Model, session));
+                Check("the copies are now the selection, so Ctrl+D again walks on", after[2].IsSelected && after[3].IsSelected && !after[0].IsSelected);
+                _vm.CutClipCommand.Execute(null);
+                steps++;
+                Check($"Ctrl+X with both selected cuts both, leaving the gaps (got {empty.Clips.Count}; \"{_vm.Status}\")", empty.Clips.Count == 2 && _vm.Status.StartsWith("Cut 2 sections"));
+            }
+        }
+
+        // What lies under the gap between the two stays: pasted into the middle of a long section,
+        // the piece of it between them is still there.
+        var longest = t1.Clips.OrderByDescending(x => x.TimelineLengthSeconds).First();
+        if (TimelineEditor.LengthFramesOf(longest.Model, session) > need + session.SampleRate * 2)
+        {
+            _vm.SelectClip(A());
+            _vm.ToggleClipSelection(C());
+            _vm.CopyClipCommand.Execute(null);
+            _vm.SelectedTrack = t1;
+            _vm.SeekTo(longest.TimelineStartSeconds + 1);
+            int before = t1.Clips.Count;
+            _vm.PasteClipCommand.Execute(null);
+            steps++;
+            var landed = t1.Clips.Where(x => x.IsSelected).OrderBy(x => x.TimelineStartSeconds).ToList();
+            bool between = landed.Count == 2 && t1.Clips.Any(x => !x.IsSelected
+                && TimelineEditor.LengthFramesOf(x.Model, session) > 0
+                && TimelineEditor.StartFrameOf(x.Model, session) >= TimelineEditor.EndFrameOf(landed[0].Model, session)
+                && TimelineEditor.EndFrameOf(x.Model, session) <= TimelineEditor.StartFrameOf(landed[1].Model, session));
+            Check($"pasted over a long section, what lay under the gap between the two is still there ({t1.Clips.Count} sections, was {before})", between);
+        }
+        else notes.Add("no section long enough to paste a pair into, so the gap rule is untested here");
+
+        // A group off two tracks: its rows land on the chosen track and the one below; chosen on the
+        // last track, an empty track is added for the lower row.
+        if (empty.Clips.Count >= 1)
+        {
+            var e0 = empty.Clips.OrderBy(x => x.TimelineStartSeconds).First();
+            _vm.SelectClip(A());
+            _vm.ToggleClipSelection(e0);
+            _vm.CopyClipCommand.Execute(null);
+            Check($"a copy off two tracks says so (\"{_vm.Status}\")", _vm.Status.Contains("2 sections on 2 tracks"));
+            _vm.SelectedTrack = empty;             // the last track: the lower row has nowhere to go yet
+            _vm.SeekTo(400);
+            int count = _vm.Tracks.Count;
+            _vm.PasteClipCommand.Execute(null);
+            steps++;
+            var below = _vm.Tracks.LastOrDefault();
+            Check($"pasted onto the last track, an empty track is added for the lower row ({_vm.Tracks.Count} tracks, was {count}; \"{_vm.Status}\")",
+                  _vm.Tracks.Count == count + 1 && _vm.Status.Contains("Added") && below is not null && !ReferenceEquals(below, empty));
+            if (below is not null && !ReferenceEquals(below, empty))
+            {
+                var top = empty.Clips.FirstOrDefault(x => x.IsSelected);
+                var low = below.Clips.FirstOrDefault(x => x.IsSelected);
+                Check($"the top row lands on the chosen track at the playhead and the lower row on the new track ({top?.TimelineStartSeconds:0.00}s / {low?.TimelineStartSeconds:0.00}s)",
+                      top is not null && low is not null && Math.Abs(top.TimelineStartSeconds - 400) < 0.05 && low.TimelineStartSeconds >= 400 - 0.05);
+            }
+        }
+
+        // The lane menu names the count while several are selected.
+        var two = t1.Clips.OrderBy(x => x.TimelineStartSeconds).ToList();
+        _vm.SelectClip(two[0]);
+        if (two.Count >= 2) _vm.ToggleClipSelection(two[1]);
+        if (LaneOf(t1) is { ContextMenu: { } menu } lane)
+        {
+            PrepareLaneMenu(lane);
+            var headers = menu.Items.OfType<MenuItem>().Select(i => i.Header as string ?? "").ToList();
+            Check($"with two sections selected the lane menu says Cut 2 sections, Copy 2 sections, Repeat 2 sections and Delete 2 sections ({string.Join(" | ", headers.Where(h => h.Contains("section")))})",
+                  headers.Contains("Cut 2 sections") && headers.Contains("Copy 2 sections") && headers.Contains("Repeat 2 sections") && headers.Contains("Delete 2 sections"));
+            _vm.SelectClip(two[0]);
+            PrepareLaneMenu(lane);
+            headers = menu.Items.OfType<MenuItem>().Select(i => i.Header as string ?? "").ToList();
+            Check("with one selected it says Cut section and Copy section again", headers.Contains("Cut section") && headers.Contains("Copy section"));
+        }
+
+        for (int i = 0; i < steps; i++)
+        {
+            _vm.UndoCommand.Execute(null);
+            PumpUntil(() => !_vm.IsBusy);
+        }
+        PumpUntil(() => _vm.Tracks.Count == tracksBefore && _vm.Tracks.First().Clips.Count == clipsBefore);
+        Check($"undoing it all puts the tracks and sections back ({_vm.Tracks.Count} tracks, {_vm.Tracks.First().Clips.Count} sections; want {tracksBefore}, {clipsBefore})",
+              _vm.Tracks.Count == tracksBefore && _vm.Tracks.First().Clips.Count == clipsBefore);
     }
 
     /// <summary>
@@ -6346,6 +6489,8 @@ public partial class MainWindow : Window
         bool overRamp = _rampUnderMenu is { } r && ReferenceEquals(r.Track, lane.DataContext);
         bool overWarp = _warpUnderMenu is { } w && ReferenceEquals(w.Track, lane.DataContext);
         bool marked = _vm.MarkedTrack is not null;
+        int several = _vm.SelectedClips.Count(c => _vm.Tracks.Contains(c.Track));     // two or more: the keys act on them all (2026-10-29)
+        string Named(string one, string verb) => marked ? $"{verb} marked stretch" : several >= 2 ? $"{verb} {several} sections" : one;
         var section = ClipOf(lane);                 // for the crossfade length in force, ticked
         foreach (var item in menu.Items.OfType<FrameworkElement>())
         {
@@ -6357,10 +6502,10 @@ public partial class MainWindow : Window
             // Over a ramp and a marker both, the two Remove items sit together under the ramp's separator.
             if (item is MenuItem { Tag: "removeWarp" }) item.Visibility = overWarp ? Visibility.Visible : Visibility.Collapsed;
             if (item is Separator { Tag: "removeWarp" }) item.Visibility = overWarp && !overRamp ? Visibility.Visible : Visibility.Collapsed;
-            if (item is MenuItem { Tag: "cut" } cut) cut.Header = marked ? "Cut marked stretch" : "Cut section";
-            if (item is MenuItem { Tag: "copy" } copy) copy.Header = marked ? "Copy marked stretch" : "Copy section";
-            if (item is MenuItem { Tag: "repeat" } repeat) repeat.Header = marked ? "Repeat marked stretch" : "Repeat this section";
-            if (item is MenuItem { Tag: "delete" } delete) delete.Header = marked ? "Delete marked stretch" : "Delete section";
+            if (item is MenuItem { Tag: "cut" } cut) cut.Header = Named("Cut section", "Cut");
+            if (item is MenuItem { Tag: "copy" } copy) copy.Header = Named("Copy section", "Copy");
+            if (item is MenuItem { Tag: "repeat" } repeat) repeat.Header = Named("Repeat this section", "Repeat");
+            if (item is MenuItem { Tag: "delete" } delete) delete.Header = Named("Delete section", "Delete");
         }
     }
 

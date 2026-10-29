@@ -877,3 +877,22 @@ tracks"*. Picked on 2026-10-29 as the first round: *"Round 1: multi-select"*.
 | **Match key with several tracks selected: the track whose button is pressed stays as it is, and the other selected tracks are shifted to sit with its key**, one undo step; a track without a key is left alone and named. With one track selected it is as before: that track is shifted to sit with the topmost other track. | The button pressed is the natural way to say which key the others should follow, and it works for any number of tracks; the old rule — the topmost other track — is what he could not see working past two. |
 | **Nothing else acts on the selection yet.** Mute, solo, ✕, Reset, Move to tab and the knobs act on their own track. | One round, as he asked; the rest can follow once the selection has been used by hand. |
 | **The selection is not saved and is not an undo step**, as a section selection is not; an undo keeps it, as it keeps a section selection. | A selection is where you are looking, not what the project is. |
+
+## 2026-10-29 — copy, cut, paste and repeat several sections at once
+
+Daniel, 2026-10-27, verbatim: *"MUST be able to select multiple clips to
+copy/paste them"*. Picked on 2026-10-29 as the second round, the defaults left to me: *"Start Round
+2: copy and paste several selected sections at once. Use your defaults for pasting across tracks
+and for gaps."*
+
+| Decision | Why |
+| --- | --- |
+| **With two or more sections selected, Ctrl+C, Ctrl+X and Ctrl+D act on all of them**, and the lane menu says so (*Copy 3 sections*). With one selected, or none, they act on one section as before; while a stretch is marked, on the mark, as before. | His request; and Delete and a drag already act on the selection, so the keys now all agree. |
+| **A group is exactly those sections, not the stretch they span: a paste puts each one down where it falls and leaves what lies under the gaps between them alone.** A marked stretch still clears its whole span, gaps included. | That is what dropping the same group does, and what "copy these clips" means in every DAW; MARK MODE is there for "this whole span". |
+| **Each section keeps its place to the frame.** The group starts where its earliest section starts; that section's row measures from its exact frame, every other row from the same moment through its own map (`SectionGroup`, `SectionSelection.Copy`). | A loop built with Ctrl+D is a row of butt joins; copied as a group and summed in seconds, one could land a frame off and become a gap with two declicks. The same rule as every other placement here. |
+| **Across tracks the rows keep their order: the top row lands on the selected track, each further row on the track that many below. A row that would fall off the bottom gets an empty track added for it, in the same undo step**, and the status says so. | Pasting a group copied off three tracks onto the last track has to put the lower rows somewhere; adding empty tracks is what he would do next by hand, and one Ctrl+Z takes the lot back. Refusing was the alternative, and a dead end. |
+| **An empty track a row lands on takes the tempo and pitch of the track that row came off**, as it does for one section. | The sections then play as they did. |
+| **Ctrl+D with several selected repeats the group straight after itself, on the same tracks: the copies start on the very frame the group's last section ends** (in that row; the other rows at the same moment, never before their own last section), and the copies become the selection, so holding the keys walks the group along. | A group that is a loop goes on being one, with no gap at the repeat; the walk is what Ctrl+D does for one section. |
+| **Ctrl+X with several selected copies them as they lie and removes them, each gap left as it is.** | Cut never ripples, one section or ten. |
+| **What was pasted or repeated is selected afterwards, the first of it the one commands act on; in MARK MODE a group paste sets no mark.** | So a pasted group can be dragged as one at once. A mark is one track's span; a group may be several tracks'. |
+| **A track multi-selection (Round 1) and a section multi-selection are separate things**, and mute, solo and the knobs still act on one track. | One round at a time. |

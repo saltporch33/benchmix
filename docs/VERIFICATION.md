@@ -1228,6 +1228,40 @@ press does), and two checks cover both. Third run: all green.
 one-strip brush and has not been looked at; the average with three or more songs, and on ramped or
 warped tracks, rests on the unit test and the single-track Match BPM checks, not on an end-to-end run.
 
+## 2026-10-29 — copy, cut, paste and repeat several sections at once
+
+What was built (his words, 2026-10-27: *"MUST be able to select multiple clips to copy/paste
+them"*; picked 2026-10-29 as *"Round 2: multi-paste"*, the defaults left to me): with two or more
+sections selected, Ctrl+C holds them all as a `SectionGroup` — one row per track, each row's
+sections placed from the group's start in that track's frames (`SectionSelection.Copy`); Ctrl+V puts
+the top row on the selected track at the playhead and each further row on the track that many
+below, every section clearing only its own span (`SectionSelection.Paste`; `MainViewModel.PasteGroup`
+adds empty tracks for rows that would fall off the bottom, in the same undo step); Ctrl+D repeats
+the group on the very frame its last section ends (`SectionSelection.Repeat`); Ctrl+X copies and
+removes them; and the lane menu says *Copy 3 sections*.
+
+**Unit tests** (`SectionSelectionTests`, three new): a group of two sections pasted onto another
+track keeps their distance to the frame and leaves what lay under the gap between them — the two
+pieces of the covered sections meet the pasted ones on the exact frames; a group off two tracks
+keeps its rows, the lower one that many tracks below at the same offset, and refuses when its
+lower row has no track; a repeat of two seamed sections starts on the very frame the group ends,
+the copies still butt, and the song still goes on across them. `dotnet test`: 494 passed, 0 skipped.
+
+**`--gesturetest`** (**372 checks**, through the real commands on one song): Ctrl+C with two
+selected copies both; Ctrl+V onto a fresh empty track puts both down, the first at the playhead,
+the second the same number of frames away, both selected with the first the one commands act on;
+Ctrl+D repeats the pair on the very frame it ends and the copies become the selection; Ctrl+X cuts
+both, leaving the gaps; pasted into the middle of a long section, the piece of it between the two
+is still there; a group copied off two tracks says so, and pasted onto the last track adds an empty
+track for its lower row and lands the top row at the playhead; the lane menu says *Cut 2 sections*,
+*Copy 2 sections*, *Repeat 2 sections* and *Delete 2 sections* with two selected and *Cut section*
+with one; undoing the six steps puts the tracks and sections back.
+
+**Not verified:** nobody has used it by hand; a group off tracks at different tempos, or with
+ramps or warp markers, rests on the single-section rules and the unit tests' frame checks, not on
+an end-to-end run; the "what lies under the gaps stays" rule is proven on a flat track and not
+listened to.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

@@ -46,6 +46,8 @@ mistakes, not by describing the project.
   sections** (MARK MODE, 2026-10-12), and the lane menu's items say so. **A pasted stretch covers the
   whole of itself, gaps included**: a gap in it clears what was under it. Both on purpose
   (`docs/DECISIONS.md`). The mark is kept in the track's own frames and is not part of the project.
+  **A pasted group of selected sections does the opposite** (2026-10-29): each section clears only
+  its own span, and what lies under the gaps between them stays. Do not make the two agree.
 - **The mix runs at the rate of the output Benchmix started on, for the whole session.** Every
   position is counted in its frames. When Windows moves playback to an output at another rate,
   `DeviceRateConverter` converts on the way out, live only (2026-10-12) — a render is the mix as

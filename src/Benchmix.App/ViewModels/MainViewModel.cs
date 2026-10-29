@@ -1166,6 +1166,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private TrackModel? _clipboardFrom;
 
+    /// <summary>Several sections copied at once, as they lay (2026-10-29); null while the clipboard holds a piece.</summary>
+    private SectionGroup? _clipboardGroup;
+
     /// <summary>
     /// Windows' clipboard counter at the moment of the last copy. If it has moved on and Windows
     /// now holds audio files, those were copied more recently than our section, so Ctrl+V pastes
@@ -1180,7 +1183,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public static uint ClipboardSequence() => GetClipboardSequenceNumber();
 
     /// <summary>True when something has been copied and can be pasted.</summary>
-    public bool HasClipboard => _clipboard is not null;
+    public bool HasClipboard => _clipboard is not null || _clipboardGroup is not null;
 
     private void Remember(ClipViewModel clip) => Remember(Piece.Of(clip.Model, Session), clip.Track);
 
@@ -1188,8 +1191,97 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         _clipboard = piece;
         _clipboardFrom = from.Model.Clone();
+        _clipboardGroup = null;
         try { _clipboardSequenceAtCopy = GetClipboardSequenceNumber(); } catch { _clipboardSequenceAtCopy = 0; }
         OnPropertyChanged(nameof(HasClipboard));
+    }
+
+    /// <summary>Several sections: held with their tracks as they were, so an empty track can take a row's tempo and pitch later.</summary>
+    private void RememberGroup(SectionGroup group)
+    {
+        _clipboard = null;
+        _clipboardFrom = null;
+        _clipboardGroup = new SectionGroup(group.Rows.Select(r => r with { From = r.From.Clone() }).ToList());
+        try { _clipboardSequenceAtCopy = GetClipboardSequenceNumber(); } catch { _clipboardSequenceAtCopy = 0; }
+        OnPropertyChanged(nameof(HasClipboard));
+    }
+
+    // ---------------- several sections at once (Daniel, 2026-10-27: "MUST be able to select multiple clips to copy/paste them") ----------------
+
+    /// <summary>
+    /// The selected sections, as (track, section) pairs, when two or more are selected on the open
+    /// tab's tracks; otherwise null, and the one-section commands apply.
+    /// </summary>
+    private List<(TrackModel Track, ClipModel Clip)>? SelectedGroup()
+    {
+        var selected = SelectedClips.Where(c => Tracks.Contains(c.Track)).ToList();
+        return selected.Count >= 2 ? selected.Select(c => (c.Track.Model, c.Model)).ToList() : null;
+    }
+
+    /// <summary>The open tab's tracks in the order on screen, which is the project's order.</summary>
+    private IList<TrackModel> TrackModels => Tracks.Select(t => t.Model).ToList();
+
+    /// <summary>Ctrl+C with several sections selected: all of them, as they lie.</summary>
+    private void CopyGroup(List<(TrackModel Track, ClipModel Clip)> several)
+    {
+        var group = SectionSelection.Copy(TrackModels, several, Session);
+        if (group.Count == 0) { Status = "Nothing to copy: the selected sections' songs are missing."; return; }
+        RememberGroup(group);
+        int rows = group.Rows.Count;
+        Status = $"Copied {group.Count} sections on {rows} track{(rows == 1 ? "" : "s")}, {TimelineEditor.SecondsOf(group.LengthFrames, Session):0.0}s end to end. "
+               + $"Click a track, then Ctrl+V drops them there at the playhead{(rows > 1 ? ", the top row on that track and the rest on the tracks below" : "")}.";
+    }
+
+    /// <summary>
+    /// Ctrl+V with several sections on the clipboard: the top row onto the selected track at the
+    /// playhead, each further row on the track that many below. A row that would fall off the
+    /// bottom gets an empty track added for it, in the same undo step, so a group copied off three
+    /// tracks can be dropped onto the last one.
+    /// </summary>
+    private void PasteGroup(TrackViewModel track, SectionGroup group)
+    {
+        if (SectionSelection.PasteProblem(TrackModels, track.Model, group, Session) is { } why) { Status = why; return; }
+        int missing = SectionSelection.MissingRows(TrackModels, track.Model, group);
+        PushUndo($"paste {group.Count} sections");
+        var added = new List<string>();
+        for (int i = 0; i < missing; i++)
+        {
+            var model = Session.AddEmptyTrack();
+            var vm = NewTrackViewModel(model);
+            vm.NotifyAudioLoaded();
+            Tracks.Add(vm);
+            added.Add(model.Name);
+        }
+        var result = SectionSelection.Paste(TrackModels, track.Model, group, PositionSeconds, Session);
+        if (result.Changed && added.Count > 0)
+            result = result with { Message = result.Message + $" Added {string.Join(" and ", added)} to hold the lower row{(added.Count == 1 ? "" : "s")}." };
+        AfterGroupEdit(result);
+    }
+
+    /// <summary>Redraws every track a group edit put sections on, and selects what it put down — the first of them the one commands act on.</summary>
+    private void AfterGroupEdit(EditResult result)
+    {
+        if (!result.Changed) { Status = result.Message; return; }
+        var ids = result.Placed.Select(c => c.Id).ToHashSet();
+        foreach (var t in Tracks.Where(t => t.Model.Clips.Any(c => ids.Contains(c.Id))).ToList())
+        {
+            Session.Apply(t.Model);
+            t.RefreshFromModel();
+            t.RebuildClips();
+        }
+        ClipViewModel? first = null;
+        foreach (var t in Tracks)
+            foreach (var c in t.Clips)
+            {
+                c.IsSelected = ids.Contains(c.Id);
+                if (result.Placed.Count > 0 && c.Id == result.Placed[0].Id) first = c;
+            }
+        SelectedClip = first;
+        _rangeAnchorId = first?.Id;
+        foreach (var t in Tracks) t.NotifyClipsChanged();
+        RecomputeLength();
+        MarkDirty();
+        Status = result.Message;
     }
 
     /// <summary>Selects one section, clearing any other. Null clears the selection entirely.</summary>
@@ -1303,7 +1395,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             0 => "Nothing selected.",
             1 => "1 section selected. Ctrl+click adds another; Shift+click selects a range.",
-            _ => $"{selected.Count} sections selected on {tracks} track{(tracks == 1 ? "" : "s")}. Drag any one to move them all; Delete removes them; Ctrl+click adds or removes one.",
+            _ => $"{selected.Count} sections selected on {tracks} track{(tracks == 1 ? "" : "s")}. Drag any one to move them all; Ctrl+C, Ctrl+X and Ctrl+D act on them all; Delete removes them; Ctrl+click adds or removes one.",
         };
     }
 
@@ -1396,6 +1488,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void CopyClip()
     {
         if (MarkedTrack is { } marked) { CopyMark(marked, cut: false); return; }
+        if (SelectedGroup() is { } several) { CopyGroup(several); return; }
         if (TargetClip() is not { } clip) { Status = "Click a section to copy it."; return; }
         Remember(clip);
         Status = $"Copied {clip.LengthSeconds:0.0}s. Click a track, then Ctrl+V drops it there at the playhead.";
@@ -1406,6 +1499,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (HeldUnderTheMouse()) return;
         if (MarkedTrack is { } marked) { CopyMark(marked, cut: true); return; }
+        if (SelectedGroup() is { } several)
+        {
+            // Ctrl+X with several selected: copied as they lie, then every one removed, its gap left.
+            var group = SectionSelection.Copy(TrackModels, several, Session);
+            if (group.Count == 0) { Status = "Nothing to cut: the selected sections' songs are missing."; return; }
+            RememberGroup(group);
+            PushUndo($"cut {several.Count} sections");
+            var cut = SectionSelection.DeleteAll(several);
+            if (!cut.Changed) { Status = cut.Message; return; }
+            foreach (var t in Tracks.Where(t => several.Any(x => ReferenceEquals(x.Track, t.Model))).ToList())
+            {
+                Session.Apply(t.Model);
+                t.RefreshFromModel();
+                t.RebuildClips();
+            }
+            SelectedClip = null;
+            foreach (var t in Tracks) t.NotifyClipsChanged();
+            RecomputeLength();
+            MarkDirty();
+            Status = $"Cut {several.Count} sections, {TimelineEditor.SecondsOf(group.LengthFrames, Session):0.0}s end to end. The gaps are left as they are. Click a track, then Ctrl+V drops them there at the playhead.";
+            return;
+        }
         if (TargetClip() is not { } clip) { Status = "Click a section to cut it."; return; }
 
         Remember(clip);
@@ -1471,7 +1586,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         var files = NewerAudioFilesOnClipboard();
         var track = SelectedTrack;
-        if (track is null && Tracks.Count == 0 && (_clipboard is not null || files.Count > 0))
+        if (track is null && Tracks.Count == 0 && (HasClipboard || files.Count > 0))
         {
             AddEmptyTrack();
             track = SelectedTrack;
@@ -1480,6 +1595,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         if (files.Count > 0) { await PlaceFilesAsync(track, files, PositionSeconds); return; }
 
+        if (_clipboardGroup is { } group) { PasteGroup(track, group); return; }
         if (_clipboard is null) { Status = "Nothing has been copied yet."; return; }
 
         PushUndo($"{track.Name}: paste section");
@@ -1508,7 +1624,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            if (_clipboard is not null && GetClipboardSequenceNumber() == _clipboardSequenceAtCopy) return new();
+            if (HasClipboard && GetClipboardSequenceNumber() == _clipboardSequenceAtCopy) return new();
             if (!Clipboard.ContainsFileDropList()) return new();
             return Clipboard.GetFileDropList().Cast<string>().Where(IsAudioFile).Where(File.Exists).ToList();
         }
@@ -1606,6 +1722,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         if (_session is null || HeldUnderTheMouse()) return;
         if (MarkedTrack is { } marked) { RepeatMark(marked); return; }
+        if (SelectedGroup() is { } several)
+        {
+            // Ctrl+D with several selected: the group again, straight after itself. The copies become
+            // the selection, so holding the keys walks the group along, as it does one section.
+            PushUndo($"repeat {several.Count} sections");
+            AfterGroupEdit(SectionSelection.Repeat(TrackModels, several, Session));
+            return;
+        }
         if (TargetClip() is not { } clip) { Status = "Click a section to repeat it."; return; }
 
         var track = clip.Track;

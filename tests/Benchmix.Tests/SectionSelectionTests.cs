@@ -166,6 +166,100 @@ public class SectionSelectionTests : IDisposable
         Assert.False(result.Changed);
     }
 
+    // ---------------------------------------------------------------- several at once: copy, paste, repeat (2026-10-29)
+
+    [Fact]
+    public async Task PasteOfAGroupKeepsEachSectionsPlaceToTheFrame_AndLeavesWhatLiesUnderTheGapsAlone()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await FourSectionsAsync(s, _wav);          // [0,10) [10,20) [20,30) [30,60)
+        var b = await FourSectionsAsync(s, _wav);
+        var tracks = new List<TrackModel> { a, b };
+        var ca = InOrder(a);
+        long span = TimelineEditor.StartFrameOf(ca[2], s) - TimelineEditor.StartFrameOf(ca[0], s);
+
+        var group = SectionSelection.Copy(tracks, new[] { (a, ca[0]), (a, ca[2]) }, s);
+        Assert.Equal(2, group.Count);
+        Assert.Single(group.Rows);
+        var result = SectionSelection.Paste(tracks, b, group, 15.0, s);
+
+        Assert.True(result.Changed, result.Message);
+        Assert.Equal(2, result.Placed.Count);
+        long first = TimelineEditor.StartFrameOf(result.Placed[0], s);
+        Assert.Equal(TimelineEditor.TrackFrameAt(b, 15.0, s), first);
+        Assert.True(TimelineEditor.StartFrameOf(result.Placed[1], s) - first == span,
+            "the second pasted section did not keep its distance from the first to the frame — a loop copied as a group would come back with a gap and two declicks at the join");
+        Assert.Equal(ca[0].SourceStartSeconds, result.Placed[0].SourceStartSeconds);
+        Assert.Equal(ca[2].SourceStartSeconds, result.Placed[1].SourceStartSeconds);
+
+        // b's [20,30) lost 20..25 to the first paste and [30,60) lost 35..45 to the second; between
+        // the two pasted sections, 25..35, b is as it was: the gap in the group is not part of it.
+        var under = InOrder(b).Where(x => TimelineEditor.StartFrameOf(x, s) >= TimelineEditor.EndFrameOf(result.Placed[0], s)
+                                       && TimelineEditor.EndFrameOf(x, s) <= TimelineEditor.StartFrameOf(result.Placed[1], s)).ToList();
+        Assert.True(under.Count == 2
+                    && TimelineEditor.StartFrameOf(under[0], s) == TimelineEditor.EndFrameOf(result.Placed[0], s)
+                    && TimelineEditor.EndFrameOf(under[1], s) == TimelineEditor.StartFrameOf(result.Placed[1], s),
+            "pasting a group cleared what lay under the gap between its sections — a group is the sections, not the stretch they span; MARK MODE is for the stretch");
+        Assert.Equal(4, a.Clips.Count);                     // the track copied from is untouched
+    }
+
+    [Fact]
+    public async Task PasteAcrossTracksKeepsTheRows_AndRefusesWithoutRoomBelow()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await FourSectionsAsync(s, _wav);
+        var b = await FourSectionsAsync(s, _wav);
+        var c = await FourSectionsAsync(s, _wav);
+        var tracks = new List<TrackModel> { a, b, c };
+        var ca = InOrder(a);
+        var cb = InOrder(b);
+
+        // a's [10,20) and b's [20,30), given bottom first: two rows, a's on top, b's one below.
+        var group = SectionSelection.Copy(tracks, new[] { (b, cb[2]), (a, ca[1]) }, s);
+        Assert.Equal(2, group.Rows.Count);
+        Assert.Equal(0, group.Rows[0].Offset);
+        Assert.Equal(1, group.Rows[1].Offset);
+        Assert.Equal(2, group.RowSpan);
+
+        Assert.Equal(1, SectionSelection.MissingRows(tracks, c, group));
+        Assert.False(SectionSelection.Paste(tracks, c, group, 5.0, s).Changed,
+            "a paste whose lower row has no track to land on must refuse, not drop that row on the floor");
+
+        var result = SectionSelection.Paste(tracks, b, group, 5.0, s);
+        Assert.True(result.Changed, result.Message);
+        var onB = result.Placed.Single(p => b.Clips.Contains(p));
+        var onC = result.Placed.Single(p => c.Clips.Contains(p));
+        Assert.Equal(TimelineEditor.TrackFrameAt(b, 5.0, s), TimelineEditor.StartFrameOf(onB, s));
+        Assert.Equal(TimelineEditor.TrackFrameAt(c, 5.0, s) + (TimelineEditor.StartFrameOf(cb[2], s) - TimelineEditor.StartFrameOf(ca[1], s)),
+                     TimelineEditor.StartFrameOf(onC, s));
+        Assert.Equal(ca[1].SourceStartSeconds, onB.SourceStartSeconds);
+        Assert.Equal(cb[2].SourceStartSeconds, onC.SourceStartSeconds);
+        Assert.Equal(4, a.Clips.Count);
+    }
+
+    [Fact]
+    public async Task RepeatOfAGroupStartsOnTheVeryFrameItEnds_AndKeepsTheJoinInsideIt()
+    {
+        var s = ProjectSession.CreateOffline(Rate);
+        var a = await FourSectionsAsync(s, _wav);
+        var tracks = new List<TrackModel> { a };
+        var ca = InOrder(a);
+
+        // [10,20) and [20,30), a seam between them as split. Repeated as a group they land at 30 and 40.
+        var result = SectionSelection.Repeat(tracks, new[] { (a, ca[1]), (a, ca[2]) }, s);
+
+        Assert.True(result.Changed, result.Message);
+        Assert.Equal(2, result.Placed.Count);
+        Assert.True(TimelineEditor.StartFrameOf(result.Placed[0], s) == TimelineEditor.EndFrameOf(ca[2], s),
+            "the repeat did not start on the very frame the group ends: a group looped with Ctrl+D would have a gap, with a declick either side, at every repeat");
+        Assert.True(TimelineEditor.StartFrameOf(result.Placed[1], s) == TimelineEditor.EndFrameOf(result.Placed[0], s),
+            "the two copies no longer butt as the originals did");
+        Assert.Equal(ca[1].SourceStartSeconds, result.Placed[0].SourceStartSeconds);
+        Assert.Equal(result.Placed[0].SourceEndSeconds, result.Placed[1].SourceStartSeconds);   // still a seam: the song goes on
+        Assert.Equal(6, a.Clips.Count);                     // the tail [30,60) is now [50,60)
+        Assert.Equal(50.0, InOrder(a)[^1].TrackStartSeconds, 6);
+    }
+
     // ---------------------------------------------------------------- the selection box (2026-10-11)
 
     private static HashSet<Guid> Ids(IEnumerable<(TrackModel Track, ClipModel Clip)> r) => r.Select(x => x.Clip.Id).ToHashSet();

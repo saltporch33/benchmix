@@ -133,9 +133,12 @@ other, but only sections wholly inside that stretch of time. Or drag a box acros
 takes every section it **touches**, even partly, on every track it covers — but only what is on
 screen, as it does not scroll the view. <kbd>Delete</kbd> removes the whole
 selection in one undo step and leaves the gaps. Dragging any one of them moves them all; a click on
-one without dragging keeps just that one. Cut, copy and repeat act on one section: the one you
-clicked last. To cut or copy part of a track, or several sections and the gaps between them, mark
-it (below). Every button, knob and slider explains itself in a tooltip.
+one without dragging keeps just that one. <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Ctrl</kbd>+<kbd>X</kbd> and
+<kbd>Ctrl</kbd>+<kbd>D</kbd> act on all of them: a paste puts each section down where it fell, the same
+distance apart to the frame, leaving what lies under the gaps between them; rows are kept across
+tracks, with empty tracks added for any that would fall off the bottom; a repeat puts the group
+straight after itself. To copy or cut part of a track, or a whole stretch with its gaps, mark it
+(below). Every button, knob and slider explains itself in a tooltip.
 
 **Loop mode.** Click a section, press *LOOP MODE* (or <kbd>Ctrl</kbd>+<kbd>L</kbd>), then drag
 either of its ends: instead of trimming, the section repeats to fill the space, in whole repeats.
