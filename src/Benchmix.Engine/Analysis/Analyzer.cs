@@ -240,28 +240,35 @@ public static class OnsetEnvelope
     public const int FftSize = 2048;
     public const int Hop = 512;
 
-    public static (float[] Env, double Fps) Compute(float[] x, int rate)
-    {
-        int m = (int)Math.Log2(FftSize);
-        var window = new float[FftSize];
-        for (int i = 0; i < FftSize; i++) window[i] = (float)FastFourierTransform.HammingWindow(i, FftSize);
+    public static (float[] Env, double Fps) Compute(float[] x, int rate) => Compute(x, rate, FftSize, Hop);
 
-        int frames = Math.Max(0, (x.Length - FftSize) / Hop);
-        if (frames == 0) return (Array.Empty<float>(), rate / (double)Hop);
+    /// <summary>
+    /// The same envelope at another window and hop: <see cref="BeatPhase"/> reads it at a 512-sample
+    /// window and a 32-sample hop, to place a beat to the millisecond. The local mean is taken over
+    /// the same span of audio whatever the hop, so the default is bit-identical to what it was.
+    /// </summary>
+    public static (float[] Env, double Fps) Compute(float[] x, int rate, int fftSize, int hop)
+    {
+        int m = (int)Math.Log2(fftSize);
+        var window = new float[fftSize];
+        for (int i = 0; i < fftSize; i++) window[i] = (float)FastFourierTransform.HammingWindow(i, fftSize);
+
+        int frames = Math.Max(0, (x.Length - fftSize) / hop);
+        if (frames == 0) return (Array.Empty<float>(), rate / (double)hop);
 
         var raw = new float[frames];
-        var prev = new float[FftSize / 2];
-        var cur = new float[FftSize / 2];
-        var fft = new Complex[FftSize];
+        var prev = new float[fftSize / 2];
+        var cur = new float[fftSize / 2];
+        var fft = new Complex[fftSize];
 
         for (int f = 0; f < frames; f++)
         {
-            int off = f * Hop;
-            for (int i = 0; i < FftSize; i++) { fft[i].X = x[off + i] * window[i]; fft[i].Y = 0; }
+            int off = f * hop;
+            for (int i = 0; i < fftSize; i++) { fft[i].X = x[off + i] * window[i]; fft[i].Y = 0; }
             FastFourierTransform.FFT(true, m, fft);
 
             double flux = 0;
-            for (int k = 0; k < FftSize / 2; k++)
+            for (int k = 0; k < fftSize / 2; k++)
             {
                 double re = fft[k].X, im = fft[k].Y;
                 cur[k] = (float)Math.Log(1 + 1000 * Math.Sqrt(re * re + im * im));
@@ -272,7 +279,7 @@ public static class OnsetEnvelope
             (prev, cur) = (cur, prev);
         }
 
-        const int W = 16;
+        int W = Math.Max(1, 16 * Hop / hop);          // ±16 frames at the default hop: the same span of audio at any hop
         var env = new float[frames];
         for (int i = 0; i < frames; i++)
         {
@@ -282,7 +289,7 @@ public static class OnsetEnvelope
             mean /= (b - a + 1);
             env[i] = (float)Math.Max(0, raw[i] - mean);
         }
-        return (env, rate / (double)Hop);
+        return (env, rate / (double)hop);
     }
 }
 

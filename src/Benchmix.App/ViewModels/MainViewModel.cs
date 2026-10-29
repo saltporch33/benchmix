@@ -646,6 +646,55 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                + $"{string.Join(", ", parts)}. PROJECT BPM is now {target:F1}.{kept}";
     }
 
+    /// <summary>
+    /// Sync (Daniel, 2026-10-28: "after bpm matching, also an automated snap button that realigns
+    /// to match peaks like kicks and snares… typically called 'sync'"): slides a track along the
+    /// timeline so its beats land on another's, read near the playhead (<see cref="BeatSync"/>).
+    /// Which track moves, and to what, follows Match key: on its own, the pressed track moves to
+    /// the track at the top (for the top track, the one below it); with several tracks selected,
+    /// the pressed track stays and the other selected tracks move to it. One undo step, and none
+    /// when nothing moved.
+    /// </summary>
+    [RelayCommand]
+    private void SyncBeats(TrackViewModel? track)
+    {
+        track ??= SelectedTrack;
+        if (track is null || _session is null || HeldUnderTheMouse()) return;
+
+        var selected = SelectedTracks;
+        TrackViewModel reference;
+        List<TrackViewModel> movers;
+        if (selected.Count >= 2 && selected.Contains(track))
+        {
+            reference = track;
+            movers = selected.Where(t => !ReferenceEquals(t, track)).ToList();
+        }
+        else
+        {
+            if (Tracks.FirstOrDefault(t => t != track) is not { } other) { Status = "Add a second track to sync with."; return; }
+            reference = other;
+            movers = new List<TrackViewModel> { track };
+        }
+
+        var plans = movers.Select(m => (Track: m, Plan: BeatSync.Plan(m.Model, reference.Model, PositionSeconds, Session))).ToList();
+        var moving = plans.Where(p => p.Plan.Frames != 0).ToList();
+        if (moving.Count > 0)
+        {
+            AsOneUndoStep(moving.Count == 1 ? $"sync {moving[0].Track.Name} to {reference.Name}" : $"sync {moving.Count} tracks to {reference.Name}", () =>
+            {
+                foreach (var (t, plan) in moving)
+                {
+                    BeatSync.Slide(t.Model, plan.Frames, Session);
+                    t.RefreshFromModel();
+                    t.RebuildClips();
+                }
+            });
+            RecomputeLength();
+            MarkDirty();
+        }
+        Status = string.Join(" ", plans.Select(p => p.Plan.Message));
+    }
+
     /// <summary>Suggests and applies a pitch shift so a track sits with the project's key reference.</summary>
     [RelayCommand]
     private void MatchKey(TrackViewModel? track)

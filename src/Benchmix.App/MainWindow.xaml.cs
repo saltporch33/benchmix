@@ -4255,6 +4255,7 @@ public partial class MainWindow : Window
         }
 
         await CheckMatchAverageAsync(Check, Click, Buttons, Labels);
+        await CheckSyncAsync(Check, Click, Buttons);
         await CheckSplitThroughMenuAsync(Check, Labels);
         await CheckRenameThroughMenuAsync(Check, Labels);
         await CheckTempoRampButtonsAsync(Check, Click, Buttons, Labels);
@@ -4428,6 +4429,83 @@ public partial class MainWindow : Window
 
         _vm.SelectedTrack = Bed();
         check($"a plain selection lets the topper go ({_vm.SelectedTracks.Count})", _vm.SelectedTracks.Count == 1);
+    }
+
+    /// <summary>
+    /// Sync through the real button (Daniel, 2026-10-28: "an automated snap button that realigns to
+    /// match peaks like kicks and snares"). Before Match BPM it refuses; after, with both tracks
+    /// selected and the bed's button pressed, the topper slides by less than half a beat to whole
+    /// frames, a second press finds it in time, and Ctrl+Z puts its origin back. The beats are read
+    /// by the detector Sync itself uses, on his two songs, so this proves the button, the limits
+    /// and the bookkeeping — not that the beats sound together. The rows are looked up afresh after
+    /// each undo, which rebuilds them (the first run read stale rows and called the undo broken).
+    /// </summary>
+    private async Task CheckSyncAsync(Action<string, bool> check, Func<Button, Task> click, Func<string, List<Button>> buttons)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            UpdateLayout();
+        }
+        if (_vm.Tracks.Count != 2) { check("two tracks to sync", false); return; }
+        var bedId = _vm.Tracks[0].Id;
+        var topperId = _vm.Tracks[1].Id;
+        TrackViewModel Bed() => _vm.Tracks.First(t => t.Id == bedId);
+        TrackViewModel Topper() => _vm.Tracks.First(t => t.Id == topperId);
+        var sync = buttons("Sync");
+        if (sync.Count != 2) { check($"two Sync buttons ({sync.Count})", false); return; }
+        if (StripOf(Topper()) is { } strip)
+        {
+            double right = sync[1].TransformToAncestor(strip).Transform(new Point(sync[1].ActualWidth, 0)).X;
+            check($"the Sync button fits in the strip (right edge {right:F0} of {strip.ActualWidth:F0} px)", right <= strip.ActualWidth);
+        }
+        else check("the topper's strip is on screen", false);
+
+        double originBefore = Topper().Model.TimelineOffsetSeconds;
+        _vm.SelectedTrack = Topper();
+        await click(sync[1]);
+        await Settle();
+        check($"before Match BPM, Sync refuses and moves nothing (\"{_vm.Status}\")",
+              _vm.Status.Contains("Match BPM first") && Topper().Model.TimelineOffsetSeconds == originBefore);
+
+        var match = buttons("Match BPM");
+        if (match.Count != 2) { check("two Match BPM buttons", false); return; }
+        await click(match[1]);
+        await Settle();
+        check($"the topper plays at the bed's tempo ({Topper().PlayingBpm:F1})", Math.Abs(Topper().PlayingBpm - 93) < 0.05);
+
+        _vm.SeekTo(60);
+        _vm.SelectedTrack = Bed();
+        _vm.ToggleTrackSelection(Topper());
+        check($"both tracks selected ({_vm.SelectedTracks.Count})", _vm.SelectedTracks.Count == 2);
+        sync = buttons("Sync");
+        await click(sync[0]);
+        await Settle();
+        double slid = Topper().Model.TimelineOffsetSeconds - originBefore;
+        double halfBeat = 30.0 / 93;
+        check($"Sync on the bed slid the topper by less than half a beat ({slid * 1000:+0.0;-0.0} ms; \"{_vm.Status}\")",
+              _vm.Status.StartsWith("Slid " + Topper().Name) && Math.Abs(slid) <= halfBeat + 1e-9 && slid != 0);
+        double originFrames = Topper().Model.TimelineOffsetSeconds * _vm.Session.SampleRate;
+        check("its origin is a whole number of frames", Math.Abs(originFrames - Math.Round(originFrames)) < 1e-6);
+        check($"the bed did not move ({Bed().Model.TimelineOffsetSeconds})", Bed().Model.TimelineOffsetSeconds == 0);
+
+        sync = buttons("Sync");
+        await click(sync[0]);
+        await Settle();
+        double again = Topper().Model.TimelineOffsetSeconds - originBefore - slid;
+        check($"a second press finds it in time ({again * 1000:+0.0;-0.0} ms; \"{_vm.Status}\")",
+              Math.Abs(again) <= 0.002 + 1e-9 && _vm.Status.Contains("already in time"));
+
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        if (again != 0) { _vm.UndoCommand.Execute(null); await Settle(); }
+        check($"Ctrl+Z puts the topper's origin back ({Topper().Model.TimelineOffsetSeconds})", Topper().Model.TimelineOffsetSeconds == originBefore);
+        _vm.UndoCommand.Execute(null);
+        await Settle();
+        check($"and the next puts its tempo back ({Topper().PlayingBpm:F1})", Math.Abs(Topper().PlayingBpm - 102) < 0.05);
+        _vm.SelectedTrack = Bed();
+        _vm.SeekTo(0);
     }
 
     private async Task CheckSplitThroughMenuAsync(Action<string, bool> check, Func<string> labels)

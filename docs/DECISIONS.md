@@ -912,3 +912,21 @@ to answer; the defaults are mine.
 | **Mute section on the lane menu silences the selected sections where they are** — drawn faded with a dotted outline, a gap to the engine (`ProjectSession.BuildTimeline` leaves them out), declicked either side as any gap is — **until unmuted the same way**: the item reads *Unmute section* when every target is muted, *Mute 3 sections* with several selected. One undo step; the selection stays. | His words: *"retain looped sections on timeline but gray them out to temporarily deactivate them"*. Leaving the section out of the voice's timeline is exactly a gap, so nothing new is rendered and the join rules stay what they were. |
 | **Project files are version 7.** A file with a muted section opened by an older Benchmix would play it; the older one refuses the file instead, as for tabs (5) and crossfade lengths (6). | The rule since 2026-10-27: a file that would sound different in an older release is a new version. |
 | **No X at a join with a muted section, and no crossfade there.** | To the engine it is a gap. |
+
+## 2026-10-29 — Sync: a track's beats onto another's
+
+Daniel, 2026-10-28, on Match BPM: *"after bpm mmatching, also an automated
+snap button that realligns to match peaks like kicks and snares? Like how dj software does it.
+typically called "sync" i think. They not only match bpm's but they also move songs on the
+timeline to match them up."* Built in the longer round of 2026-10-29, under his 60% line.
+
+| Decision | Why |
+| --- | --- |
+| **A Sync button on the strip, next to Match key.** On its own, the pressed track slides to the top track (for the top track, the one below it); with several tracks selected, the pressed track stays and the other selected tracks slide to it — Match key's rule exactly. | One rule for the two "between tracks" buttons, learned once. |
+| **The beats are read near the playhead** — 12 s of each track's own audio around it, in the section under it or the nearest one — never over the whole song (`BeatSync.BeatNear`). | A song's tempo drifts; a grid fitted to three minutes lands a beat where the average says, not where the drums are at the moment he is listening. The playhead is where he is listening. |
+| **The move is the short way round, never more than half a beat**, and forward by a whole beat instead when the track has no room before 0:00. | The two grids repeat every beat; more than half a beat is the long way to the same place, and would pull the track out of the picture he lined up by ear. |
+| **A track moves by its origin, in whole frames** (`TimelineEditor.SlideTrack`): its sections and warp markers go with it, its tempo ramps are carried by the same amount, and nothing changes its place on the track. | Moving the sections instead would re-trim at any overlap and, past a warp marker, re-warp them. Whole frames, then seconds, as every position. |
+| **Refused: unmatched tempos, tempo ramps, nothing to read.** Tempos further apart than 0.5% get *Match BPM first*; a track with tempo ramps is refused (the slide would change what tempo its sections play at); a stretch the comb finds no beat in gets *move the playhead to where its drums play*. | Lining up two grids that drift apart again in ten seconds is worse than saying so. |
+| **Within 2 ms is in time**: nothing moves and nothing goes on the undo stack. | A frame or two is below anything a second press could improve on, and would make Ctrl+Z take back nothing. |
+| **The beat is found by a comb over the onset envelope at the track's own tempo** (`BeatPhase`: the tempo detector's spectral flux at a 512-sample window and a 32-sample hop, the peak refined between hops), with the flux's lag behind a hit added back as a constant measured on clicks (0.955 windows). | The tempo is known already — the tag or the detector — so only the phase is unknown, and a comb at a known period is the one-parameter version of the tempo detector that already works. The lag is the same for both tracks and cancels in the difference. |
+| **Beats, not downbeats.** Sync lands a beat on a beat; which beat is bar 1 is his to hear. | Downbeat detection is a different and less reliable problem; DJ software's sync does the same unless a beatgrid's downbeat was set by hand. |

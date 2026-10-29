@@ -1294,6 +1294,40 @@ show them); a muted section at the very end of a track still counts towards the 
 a render (the voice's timeline leaves it out, so the file ends at the last voiced section — read off
 the code, not measured).
 
+## 2026-10-29 — Sync: a track's beats onto another's
+
+What was built (his comment of 2026-10-28; built 2026-10-29): a Sync button on the
+strip next to Match key. `BeatPhase.Find` (Engine) reads the beat nearest a moment from the onset
+envelope at the track's known tempo; `BeatSync.Plan` (Core) reads both tracks near the playhead,
+folds the difference into half a beat of the reference's and turns it into whole frames;
+`BeatSync.Slide` moves the track by its origin (`TimelineEditor.SlideTrack`) and tells the engine.
+
+**Unit tests** (`BeatSyncTests`, six new): a click train at 128 BPM from 0.1234 s is read within
+3 ms of the click nearest 10 s (0.1234 + 21 × 0.46875, written out), confidence above 0.5; the same
+with weaker clicks on the offbeats still picks the beat; silence and too little audio have no beat
+(confidence 0). Through a session, two click tracks at 120 BPM — the reference from 0.25 s, the
+other from 0.41 s — the other slides 0.34 s later (16320 frames, within the detector's 3 ms)
+because it has no room before 0:00, its origin is then exactly whole frames, the reference stays
+at 0, and a second plan finds it already in time; started two beats in, it slides 0.16 s earlier
+instead; a 126 BPM track is refused with *Match BPM first*, a ramped one with *tempo ramps*, and a
+track whose clicks start at 20 s is refused at the playhead's 5 s with *Couldn't find … beat* and
+syncs at 25 s. The flux's lag behind a hit was measured on these clicks — 20.4 ms at a 512-sample
+window at 24 kHz, 0.955 windows — and is the constant the detector adds back. `dotnet test`:
+504 passed, 0 skipped.
+
+**`--buttontest`** (**103 checks**): the Sync button fits inside the strip; pressed on the topper
+before Match BPM it refuses with *Match BPM first* and moves nothing; after the topper's Match
+BPM, with both selected and the bed's button pressed, the topper slides by less than half a beat
+(30/93 s), its origin is whole frames and the bed stays; a second press reports it already in
+time; Ctrl+Z puts its origin back exactly and the next puts its tempo back. The beats on his two
+songs are read by Sync's own detector, 12 s around 60 s.
+
+**Not verified:** nobody has heard two tracks Sync lined up — on music the only reading is the
+detector's own; the confidence floor (0.1) is a guess; the flux lag on a dense mix is read off the
+window shape as up to about 4 ms shorter than on a bare click, so two tracks of different character
+may land that far apart; a warped track is synced through its map but no test warps one; the
+strip's button row has not been looked at on screen (the fit is measured, not seen).
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

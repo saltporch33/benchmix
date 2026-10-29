@@ -663,6 +663,25 @@ public static class TimelineEditor
         return frames;
     }
 
+    /// <summary>
+    /// Moves the whole track along the timeline by <paramref name="frames"/> — its origin, so every
+    /// section and warp marker (in the track's own seconds) goes with it, and its tempo ramps (on
+    /// the timeline) are carried by the same amount — never earlier than 0:00. Nothing changes its
+    /// place on the track. Sync's move (<see cref="BeatSync"/>). Whole frames, then seconds, like
+    /// every position.
+    /// </summary>
+    /// <returns>How many frames it moved: <paramref name="frames"/>, or fewer at 0:00.</returns>
+    public static long SlideTrack(TrackModel track, long frames, ProjectSession session)
+    {
+        long origin = session.SecondsToFrames(track.TimelineOffsetSeconds);
+        frames = Math.Max(frames, -origin);
+        if (frames == 0) return 0;
+        double by = SecondsOf(frames, session);
+        track.TimelineOffsetSeconds = SecondsOf(origin + frames, session);
+        track.Ramps = track.Ramps.Select(r => r with { StartSeconds = r.StartSeconds + by, EndSeconds = r.EndSeconds + by }).ToList();
+        return frames;
+    }
+
     /// <summary>How far, in the track's own frames, its origin can move back before reaching 0:00.</summary>
     public static long OriginRoomFrames(TrackModel track, ProjectSession session)
         => SecondsMapOf(track) is { } map

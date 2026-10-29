@@ -21,6 +21,8 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 - **Match BPM** stretches a track onto the project tempo in one click, folding half-time and
   double-time readings first. Its right-click matches the selected tracks to the average of
   their tempos instead, and makes that the project tempo.
+- **Sync** slides a track along the timeline so its beats land on another track's, read near
+  the playhead — press it after Match BPM. Never more than half a beat; Ctrl+Z puts it back.
 - **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
   110 to 115 BPM while it mixes into the next.
 - **Warp markers.** Pull a song that drifts back into time with another — pin a beat that is still
@@ -53,7 +55,9 @@ control on screen is one you asked for.
 1. **Add songs** — drag them onto the window, or use *+ Add tracks*. Drop position decides where
    on the timeline the clip lands.
 2. **Set the project tempo** — it seeds from the first track you add. Everything matches to this.
-3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did.
+3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did. Then,
+   with the playhead over a part where both songs have drums, *Sync*: the track slides so its
+   beats land on the top track's.
 4. **Line them up** — drag a section sideways, or up and down onto another track. It snaps to the
    edges of other sections, and to the playhead while you're stopped, when it gets close, and
    otherwise lands exactly where you let go; hold <kbd>Ctrl</kbd> to stop it snapping at all.

@@ -434,6 +434,10 @@
                                                         Command="{Binding DataContext.MatchKeyCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                         CommandParameter="{Binding}"
                                                         ToolTip="Shift this track's pitch to sit with the key of the track at the top (for the top track, the one below it). With several tracks selected, this track stays and the other selected ones are shifted to its key. Turns LINK off. Applies at once; Ctrl+Z undoes it."/>
+                                                <Button Content="Sync" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
+                                                        Command="{Binding DataContext.SyncBeatsCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Slide this track so its beats land on the top track's (for the top track, the one below it), read near the playhead. Match BPM first. With several tracks selected, this track stays and the other selected tracks slide to it. Never more than half a beat; Ctrl+Z puts it back."/>
                                                 <Button Content="Reset" Style="{StaticResource ToolButton}" FontSize="10.5" Padding="8,3"
                                                         ToolTip="Put tempo, pitch, EQ and volume back to normal, and remove tempo ramps and warp markers. Sections, fades, LINK, mute and solo stay as they are."
                                                         Command="{Binding DataContext.ResetTrackCommand, RelativeSource={RelativeSource AncestorType=Window}}"
