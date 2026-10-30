@@ -346,11 +346,12 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
   (*"opens the app but doesnt load the project"*). Do not write `HKCU\Software\Classes\…` from
   here again, and do not trust a read of it from here either: the view is merged with the private
   hive. Instead, at each release also copy the exe to `releases\Benchmix-latest.exe` (a fixed name,
-  overwritten each time); the association is his to set once, *Open with → Always* on that file
-  (asked 2026-10-29, not yet done). Until then, publish to the normal
-  `%LOCALAPPDATA%\Benchmix.build\publish\…` path, never only to the stage folder: seen from here that
-  path *is* the package-cache file his real association launches, so each release refreshes the
-  very exe a double-click runs (inferred from the paths, not watched). The same virtualisation
+  overwritten each time); the association was his to set once, *Open with → Always* on that file —
+  done, his words 2026-10-29: *"i already did the open with always thingy."* (his word for it: a read
+  of the association from here would see the private hive, so it is not checked from here). A
+  double-click now runs whatever `Benchmix-latest.exe` holds, which every release overwrites. Keep
+  publishing to the normal `%LOCALAPPDATA%\Benchmix.build\publish\…` path: `verify-exe.ps1` runs
+  that exe and the release copies are taken from it. The same virtualisation
   hides his runs: the `benchmix.log` seen
   from here holds only the scripted runs, and what his copy logs — the real
   `%LOCALAPPDATA%\Benchmix\benchmix.log` — cannot be read from here (an outside process is refused
