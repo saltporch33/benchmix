@@ -16,6 +16,7 @@ namespace Benchmix.App.ViewModels;
 public sealed partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly DispatcherTimer _tick;
+    private readonly DispatcherTimer _autosave;
     // One undo history per tab (2026-10-27): Ctrl+Z undoes the last thing done on the tab that is
     // open, never something on a tab that is not on screen. Keyed by the tab's id, so a tab taken
     // away and brought back keeps its history.
@@ -63,6 +64,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // 30 Hz is enough for a playhead to look smooth and costs nothing.
         _tick = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(33) };
         _tick.Tick += OnTick;
+        // Autosave (Daniel, 2026-10-29): two seconds after the last
+        // edit, a project that has a file is written to it, silently. Off in a scripted run, where
+        // the probes save when they mean to; --buttontest turns it on for its own check.
+        _autosave = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(2) };
+        _autosave.Tick += (_, _) => Autosave();
+        AutosaveEnabled = interactive;
     }
 
     public ObservableCollection<TrackViewModel> Tracks { get; }
@@ -900,6 +907,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         MasterGain = 1.0;
         ProjectBpm = 0;                 // before _dirty is cleared: setting it marks the project changed
         _projectPath = null;
+        _autosave.Stop();
         _histories.Clear();
         _tabPositions.Clear();
         RebuildTabs();
@@ -965,13 +973,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             _histories.Clear();
             _tabPositions.Clear();
             RebuildTabs();
-            _dirty = relinks.Count > 0;              // the found places are worth a save
+            if (relinks.Count > 0) MarkDirty(); else _dirty = false;      // the found places are worth a save; autosave makes it
             RecomputeLength();
             UpdateTitle();
             string found = relinks.Count == 0 ? ""
                 : $" Found {relinks.Count} song{(relinks.Count == 1 ? "" : "s")} that had moved — "
                   + string.Join(", ", relinks.GroupBy(r => r.How).Select(g => $"{g.Count()} {g.Key}"))
-                  + $". Save keeps the new place{(relinks.Count == 1 ? "" : "s")}.";
+                  + $". {(AutosaveEnabled ? "Autosave keeps" : "Save keeps")} the new place{(relinks.Count == 1 ? "" : "s")}.";
             Status = (missing > 0
                 ? $"Opened {Path.GetFileName(path)}, but {missing} track{(missing == 1 ? "'s audio is" : "s' audio is")} missing — those lanes are empty and will render as silence. Right-click the track's controls → Find missing file…"
                 : result.UsedFallback ? result.Note! : $"Opened {Path.GetFileName(path)}.") + found;
@@ -1010,14 +1018,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         try
         {
-            Session.Project.Name = Path.GetFileNameWithoutExtension(path);
-            Session.Project.ProjectBpm = ProjectBpm;
-            Session.Project.MasterGain = MasterGain;
-            Session.Project.LoopStartSeconds = LoopStart;
-            Session.Project.LoopEndSeconds = LoopEnd;
-            SourceRelinker.RememberAll(Session.Project);     // every song's fingerprint, so a rename is recognised (2026-10-28)
-
-            ProjectStore.Save(Session.Project, path, DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+            _autosave.Stop();
+            WriteProject(path, keepVersion: true);
             _projectPath = path;
             _dirty = false;
             UpdateTitle();
@@ -1027,6 +1029,88 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             Status = $"Could not save: {ex.Message}";
         }
+    }
+
+    /// <summary>The project as it stands into <paramref name="path"/>, and a dated version beside it when asked.</summary>
+    private void WriteProject(string path, bool keepVersion)
+    {
+        Session.Project.Name = Path.GetFileNameWithoutExtension(path);
+        Session.Project.ProjectBpm = ProjectBpm;
+        Session.Project.MasterGain = MasterGain;
+        Session.Project.LoopStartSeconds = LoopStart;
+        Session.Project.LoopEndSeconds = LoopEnd;
+        SourceRelinker.RememberAll(Session.Project);     // every song's fingerprint, so a rename is recognised (2026-10-28)
+        ProjectStore.Save(Session.Project, path, keepVersion ? ProjectStore.Stamp(DateTime.Now) : null);
+    }
+
+    /// <summary>
+    /// Autosave (Daniel, 2026-10-29): on in the real app, off in a
+    /// scripted run. Two seconds after the last edit, a project that has a file is written to it,
+    /// silently — the status bar keeps the edit's message and the title's star goes — and a dated
+    /// version is kept beside it every <see cref="ProjectStore.VersionEvery"/>. A project never saved
+    /// is not autosaved, there being nowhere to put it, until Save as gives it a file.
+    /// </summary>
+    public bool AutosaveEnabled { get; set; }
+
+    internal bool IsDirty => _dirty;
+    internal string? ProjectPath => _projectPath;
+
+    /// <summary>Writes the project to its file now, if it has one and has changed. True when it wrote.</summary>
+    internal bool Autosave()
+    {
+        _autosave.Stop();
+        if (_session is null || _projectPath is null || !_dirty) return false;
+        try
+        {
+            WriteProject(_projectPath, keepVersion: ProjectStore.VersionDue(_projectPath, DateTime.Now));
+            _dirty = false;
+            UpdateTitle();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Status = $"Autosave failed: {ex.Message}";
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The versions kept beside the project, to go back to (Daniel, row 46: "version history"). The
+    /// list is a window, so a scripted run refuses; the probe restores through <see cref="RestoreVersionAsync"/>.
+    /// </summary>
+    [RelayCommand]
+    private async Task VersionsAsync()
+    {
+        if (_session is null) return;
+        if (_projectPath is null) { Status = "Save the project first: its versions are kept beside its file."; return; }
+        if (!_interactive) { Status = "A scripted run shows no dialogs."; return; }
+        Autosave();                                             // so the list holds what is on screen
+        var versions = ProjectStore.Versions(_projectPath);
+        if (versions.Count == 0) { Status = "No versions yet: one is kept at every Save, and every ten minutes while you work."; return; }
+        var picked = VersionsWindow.Pick(Path.GetFileNameWithoutExtension(_projectPath), versions);
+        if (picked is not null) await RestoreVersionAsync(picked.Path);
+    }
+
+    /// <summary>
+    /// Puts the project back as the version at <paramref name="versionPath"/> had it. What is on
+    /// screen is kept first as a version of its own, and one Ctrl+Z also brings it back. True when it did.
+    /// </summary>
+    public async Task<bool> RestoreVersionAsync(string versionPath)
+    {
+        if (_session is null || _projectPath is null) return false;
+        if (!ProjectStore.TryRead(versionPath, out var version) || version is null)
+        {
+            Status = $"Could not read the version {Path.GetFileName(versionPath)}.";
+            return false;
+        }
+        string when = ProjectStore.StampOf(versionPath) is { } t ? VersionsWindow.LabelFor(t) : Path.GetFileName(versionPath);
+        try { WriteProject(_projectPath, keepVersion: true); }           // what he had, kept
+        catch (Exception ex) { Status = $"Could not keep the current version first: {ex.Message}"; return false; }
+        SourceRelinker.Resolve(version, _projectPath);                  // its songs may have moved since
+        var touched = Session.Project.Tabs.Select(x => x.Id).Concat(version.Tabs.Select(x => x.Id)).Distinct().ToList();
+        _undo.Push(Session.Project, $"restore the version from {when}", touched, order: true);
+        await ReloadFromProjectAsync(version, $"Restored the version from {when}. What you had is kept as a version too, and Ctrl+Z puts it back.");
+        return true;
     }
 
     [RelayCommand]
@@ -3333,6 +3417,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _dirty = true;
         UpdateTitle();
         RecomputeLength();
+        if (AutosaveEnabled && _projectPath is not null) { _autosave.Stop(); _autosave.Start(); }   // two seconds after the last edit
     }
 
     private void UpdateTitle()
@@ -3346,6 +3431,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private bool ConfirmDiscard()
     {
         if (!_dirty || !_interactive) return true;
+        if (AutosaveEnabled && _projectPath is not null && Autosave()) return true;   // nothing to discard: the file has it
         var r = MessageBox.Show("This project has unsaved changes. Discard them?", "Benchmix",
                                 MessageBoxButton.OKCancel, MessageBoxImage.Warning);
         return r == MessageBoxResult.OK;
@@ -3356,6 +3442,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public void Dispose()
     {
         _tick.Stop();
+        _autosave.Stop();
         _session?.Dispose();
     }
 }

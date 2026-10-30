@@ -41,6 +41,10 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
 - **Render** to 32-bit float WAV (the default), 24/16-bit WAV, or a 320 kbps MP3, with a safety limiter. The file is what you hear:
   muted tracks are left out, a solo leaves out every other track, and it ends where the last track
   you can hear ends.
+- **Autosave, and versions to go back to.** Once a project has a file, every edit is saved two
+  seconds later on its own. A dated version is kept beside it at every Save and every ten minutes
+  while you work (the newest forty), and *Versions…* in the toolbar restores one — what you had is
+  kept too, and Ctrl+Z puts it back.
 
 ## What it deliberately does not do
 
@@ -77,7 +81,7 @@ control on screen is one you asked for.
 | double-click the scroll wheel | stop, and go back to where you started playing — press <kbd>Space</kbd> to hear the same bit again |
 | turn the scroll wheel anywhere over the tracks | scroll the tracks up and down when they don't all fit; over a knob it turns that knob instead |
 | <kbd>Alt</kbd>+scroll, over the ruler or a waveform | move the playhead back and forth — up is later, down is earlier; the view follows it. While playing, it plays on from the new spot |
-| <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save / save as |
+| <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | save now, keeping a version / save as (edits are autosaved anyway once the project has a file) |
 | <kbd>Ctrl</kbd>+<kbd>E</kbd> | render |
 | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd> | undo / redo |
 | <kbd>Ctrl</kbd>+<kbd>+</kbd> / <kbd>−</kbd> / <kbd>0</kbd> — top row or number pad | zoom in / out / fit |

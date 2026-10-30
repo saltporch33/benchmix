@@ -1358,6 +1358,33 @@ whether a player takes the codec's delay out is the player's business and untest
 itself — picking MP3 and the extension following — has not been clicked (the filter and the
 mapping are checked; the dialog is Windows').
 
+## 2026-10-29 — autosave, and versions to go back to
+
+What was built (his request): two seconds after the last edit a project that
+has a file is written to it (`MainViewModel.Autosave`, a `DispatcherTimer` restarted by
+`MarkDirty`); a dated version is kept beside it at every Save and every ten minutes of edits
+(`ProjectStore.VersionDue`), forty kept; *Versions…* in the toolbar lists them (`VersionsWindow`)
+and `RestoreVersionAsync` puts one back after keeping the present as a version, as one undo step.
+
+**Unit tests** (`VersionsTests`, four new): three saves with stamps come back newest first with the
+time read from their names, a file beside them without a stamp is not listed, and each loads to the
+project it was; a version is due with none yet, not five minutes after one, and again ten minutes
+after; forty-five saves leave the newest forty; a version loads back as the project was when it
+was kept while the file itself holds the newest state. `dotnet test`: 511 passed, 0 skipped.
+
+**`--buttontest`** (**119 checks**, 11 new, through the view-model): the Versions… button is in the
+toolbar; with no file it asks for a Save first; a Save keeps one version; in a scripted run the
+button refuses; with autosave turned on and PROJECT BPM changed, the title shows `*` and the project
+is unsaved, then the file on disk has the new tempo on its own, the star is gone and the status bar
+still shows the edit (the check records how long it took); that autosave kept no new version;
+restoring the Save's version puts the tempo back, says so, and the present is kept as a second
+version; one Ctrl+Z puts the tempo back to the edited value.
+
+**Not verified:** nobody has used autosave or the Versions… window by hand; the window has never been
+opened (a scripted run refuses it), so its look is unseen; closing the app with a pending autosave
+rests on a reading of `ConfirmDiscard`, not a probe; a failed autosave (a read-only folder) ends in
+a status message no test provokes.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

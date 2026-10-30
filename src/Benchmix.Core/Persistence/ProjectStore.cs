@@ -18,8 +18,64 @@ public static class ProjectStore
     public const string Extension = ".benchmix";
     public const string FileFilter = "Benchmix project (*.benchmix)|*.benchmix|All files (*.*)|*.*";
 
-    /// <summary>How many dated copies to keep beside a project.</summary>
-    public const int BackupsToKeep = 20;
+    /// <summary>
+    /// How many dated versions to keep beside a project: one is written at every Save and, since
+    /// autosave (2026-10-29), every <see cref="VersionEvery"/> while edits go on — forty is about a
+    /// working day of them.
+    /// </summary>
+    public const int BackupsToKeep = 40;
+
+    /// <summary>How a version is stamped in its name: <c>Name-20261029-175821.benchmix</c>, local time.</summary>
+    public const string VersionStampFormat = "yyyyMMdd-HHmmss";
+
+    /// <summary>How often autosave keeps a dated version while edits go on.</summary>
+    public static readonly TimeSpan VersionEvery = TimeSpan.FromMinutes(10);
+
+    public static string Stamp(DateTime now) => now.ToString(VersionStampFormat);
+
+    /// <summary>A dated version beside a project, and when it was written, read from its name.</summary>
+    public sealed record ProjectVersion(string Path, DateTime Written);
+
+    /// <summary>The time in a version's name, or null when the name carries none.</summary>
+    public static DateTime? StampOf(string versionPath)
+    {
+        string name = Path.GetFileNameWithoutExtension(versionPath);
+        int dash = name.Length - VersionStampFormat.Length - 1;          // "Name-" then a stamp as long as its format
+        if (dash < 1 || name[dash] != '-') return null;
+        return DateTime.TryParseExact(name[(dash + 1)..], VersionStampFormat, System.Globalization.CultureInfo.InvariantCulture,
+                                      System.Globalization.DateTimeStyles.None, out var when) ? when : null;
+    }
+
+    /// <summary>
+    /// The dated versions beside <paramref name="projectPath"/>, newest first. A file beside them
+    /// whose name is not this project's name and a stamp is not one of its versions.
+    /// </summary>
+    public static IReadOnlyList<ProjectVersion> Versions(string projectPath)
+    {
+        var list = new List<ProjectVersion>();
+        try
+        {
+            var full = Path.GetFullPath(projectPath);
+            var dir = BackupDirectory(full);
+            if (!Directory.Exists(dir)) return list;
+            string projectName = Path.GetFileNameWithoutExtension(full);
+            foreach (var f in new DirectoryInfo(dir).GetFiles($"{projectName}-*{Extension}"))
+            {
+                string name = Path.GetFileNameWithoutExtension(f.Name);
+                if (name.Length != projectName.Length + 1 + VersionStampFormat.Length) continue;
+                if (StampOf(f.FullName) is { } when) list.Add(new ProjectVersion(f.FullName, when));
+            }
+        }
+        catch { /* no versions is the honest answer when the folder cannot be read */ }
+        return list.OrderByDescending(v => v.Written).ToList();
+    }
+
+    /// <summary>Whether an autosave should keep a dated version now: none yet, or the newest is <see cref="VersionEvery"/> or more old.</summary>
+    public static bool VersionDue(string projectPath, DateTime now)
+    {
+        var newest = Versions(projectPath).FirstOrDefault();
+        return newest is null || now - newest.Written >= VersionEvery;
+    }
 
     private static readonly JsonSerializerOptions Options = new()
     {

@@ -4263,6 +4263,7 @@ public partial class MainWindow : Window
         await CheckSoloButtonsAsync(Check);
         await CheckRenderHeardAsync(Check);
         await CheckDuplicateThroughMenuAsync(Check);
+        await CheckAutosaveAndVersionsAsync(Check, Buttons);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
         await CheckRelinkAsync(Check, bedFile, topperFile);
 
@@ -4913,6 +4914,83 @@ public partial class MainWindow : Window
     /// below the topper with the same sections at the same places, the same knobs, its own name,
     /// selected and in the mix; one Ctrl+Z takes it away.
     /// </summary>
+    /// <summary>
+    /// Autosave and versions (Daniel: "auto-save + version history";
+    /// 2026-10-29), through the view-model: the project is given a file in a temp folder and autosave
+    /// is turned on as it is in the real app. An edit reaches the file on its own two seconds later,
+    /// the title's star goes and the status bar stays on the edit; the versions list holds the Save's
+    /// version and not one per autosave; a restore puts the earlier state back, keeps the current one
+    /// as a version, and one Ctrl+Z puts it back; the Versions… button is in the toolbar, asks for a
+    /// Save first on a project with no file, and refuses in a scripted run (its list is a window).
+    /// </summary>
+    private async Task CheckAutosaveAndVersionsAsync(Action<string, bool> check, Func<string, List<Button>> buttons)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        }
+        await Settle();
+        if (_vm.Tracks.Count < 2) { check("two tracks to autosave", false); return; }
+        string dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "autosave-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "autosave.benchmix");
+        double bpmBefore = _vm.ProjectBpm;
+        try
+        {
+            check("the Versions… button is in the toolbar", buttons("Versions…").Count == 1);
+            _vm.VersionsCommand.Execute(null);
+            await Settle();
+            check($"with no file yet, Versions… asks for a Save first (\"{_vm.Status}\")", _vm.Status.StartsWith("Save the project first"));
+
+            _vm.SaveTo(path);
+            await Settle();
+            var versions = Benchmix.Core.Persistence.ProjectStore.Versions(path);
+            check($"Save keeps a dated version beside the project ({versions.Count})", versions.Count == 1 && File.Exists(versions[0].Path));
+
+            _vm.VersionsCommand.Execute(null);
+            await Settle();
+            check($"Versions… refuses in a scripted run, as every box does (\"{_vm.Status}\")", _vm.Status == "A scripted run shows no dialogs.");
+
+            // An edit, autosaved on its own.
+            _vm.AutosaveEnabled = true;
+            _vm.ProjectBpm = bpmBefore + 1;
+            await Settle();
+            string editStatus = _vm.Status;
+            check($"right after the edit the project is unsaved and the title says so (\"{_vm.WindowTitle}\")", _vm.IsDirty && _vm.WindowTitle.EndsWith("*"));
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (_vm.IsDirty && waited.Elapsed < TimeSpan.FromSeconds(6))
+            {
+                await Task.Delay(50);
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+            }
+            double onDisk = Benchmix.Core.Persistence.ProjectStore.Load(path).Project.ProjectBpm;
+            check($"two seconds later the edit is in the file on its own ({waited.Elapsed.TotalSeconds:0.0} s; on disk {onDisk}, want {bpmBefore + 1}; title \"{_vm.WindowTitle}\")",
+                  !_vm.IsDirty && !_vm.WindowTitle.EndsWith("*") && onDisk == bpmBefore + 1);
+            check($"the status bar still shows the edit, not a save (\"{_vm.Status}\")", _vm.Status == editStatus);
+            check($"an autosave within ten minutes of the last version keeps no new one ({Benchmix.Core.Persistence.ProjectStore.Versions(path).Count})",
+                  Benchmix.Core.Persistence.ProjectStore.Versions(path).Count == 1);
+
+            // Back to the Save's version through the view-model (the list itself is a window).
+            bool restored = await _vm.RestoreVersionAsync(versions[0].Path);
+            await Settle();
+            check($"restoring the Save's version puts PROJECT BPM back ({_vm.ProjectBpm}, was {bpmBefore}; \"{_vm.Status}\")",
+                  restored && _vm.ProjectBpm == bpmBefore && _vm.Status.StartsWith("Restored the version from"));
+            check($"what was on screen is kept as a version first ({Benchmix.Core.Persistence.ProjectStore.Versions(path).Count} versions)",
+                  Benchmix.Core.Persistence.ProjectStore.Versions(path).Count == 2);
+            _vm.UndoCommand.Execute(null);
+            await Settle();
+            check($"one Ctrl+Z puts back what was there before the restore ({_vm.ProjectBpm})", _vm.ProjectBpm == bpmBefore + 1);
+        }
+        finally
+        {
+            _vm.AutosaveEnabled = false;
+            _vm.Autosave();
+            _vm.ProjectBpm = bpmBefore;
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     /// <summary>
     /// A project that moved (Daniel, 2026-10-28): written to a temp folder with its songs beside it —
     /// one under its own name, one renamed — and paths that point nowhere, then opened the way a

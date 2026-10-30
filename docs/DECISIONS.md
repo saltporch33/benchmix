@@ -946,3 +946,19 @@ version."* Built in the second part of the longer round of 2026-10-29, under his
 | **The file is written as `<name>.tmp.mp3` and moved into place when whole.** | As the WAV's `.tmp`, but the MP3 writer picks its container from the extension. |
 | **No tags.** The MP3 carries no title, tempo or key. | The WAV carries none either; writing tags is its own request (row 52), with its own questions. |
 | **The MP3 decodes about 33 ms late against the WAV, and about 50 ms longer. Not corrected.** | The codec's own delay — encoder and decoder together — and padding to whole 1152-sample frames, in every MP3 that carries no gapless information; Windows' encoder writes none. Trimming the mix to pre-empt it would move the start of every render by a number that belongs to the player, which may or may not take it out itself. Measured, see VERIFICATION. |
+
+## 2026-10-29 — autosave, and versions to go back to
+
+Daniel, on autosave: *"given that a user can simply swipe to close an
+app, i think autosave on mobile might be necessary, no? If feasible and not costly, I'd also like
+an auto-save + version history functionality on the desktop app."* Built in the second part of the
+longer round of 2026-10-29.
+
+| Decision | Why |
+| --- | --- |
+| **Autosave writes the project file itself, two seconds after the last edit**, silently: the status bar keeps the edit's message, the title's `*` goes. | What "autosave" means to anyone who has used a phone or a web app: the file is always current, and closing the lid loses nothing. The other school — a side file and a recovery question at the next open — adds a dialog and a decision at the worst moment. Two seconds coalesces a drag's worth of edits into one write. |
+| **Only a project that has a file.** An untitled project is not autosaved until Save as gives it a name, and still asks *Discard them?* at close. | There is nowhere to put it that he would find again; inventing a place (a recovery folder) is the other school again. |
+| **A dated version is kept at every Save and every ten minutes while edits go on**, forty kept (was twenty); the autosaves between keep none. | A version per autosave would make the list a minute of work; a version per Save alone would let autosave erase the history Save used to leave. Ten minutes is about a working day in forty. |
+| **Versions… is a plain list, newest first, in a small window. Restore keeps the present as a version first and is one Ctrl+Z step** across every tab. | Going back must never lose the state you went back from. The list is the one new window in the app; a scripted run refuses it, and the probe restores through the view-model. |
+| **Closing, New and Open flush the autosave instead of asking.** | With the file always current there is nothing to discard. The question stays for an untitled project, and when the write failed. |
+| **Off in a scripted run** (`AutosaveEnabled` follows the interactive flag). | The probes open and save projects in temp folders on their own schedule; a timer writing underneath them would make every count a race. `--buttontest` turns it on for its own check, so the timer is proved in the exe all the same. |

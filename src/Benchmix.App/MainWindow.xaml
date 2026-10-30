@@ -70,9 +70,11 @@
                 <Button Content="Open" Style="{StaticResource ToolButton}" Command="{Binding OpenCommand}"
                         ToolTip="Open a saved .benchmix project (Ctrl+O)."/>
                 <Button Content="Save" Style="{StaticResource ToolButton}" Command="{Binding SaveCommand}"
-                        ToolTip="Save the project: your work in progress, not the audio (Ctrl+S; Ctrl+Shift+S saves a copy)."/>
+                        ToolTip="Save the project now and keep a dated version of it (Ctrl+S). Once it has a file, every edit is autosaved two seconds later anyway."/>
                 <Button Content="Save as…" Style="{StaticResource ToolButton}" Command="{Binding SaveAsCommand}"
                         ToolTip="Save a copy of the project under a new name; Save then goes to the new file (Ctrl+Shift+S)."/>
+                <Button Content="Versions…" Style="{StaticResource ToolButton}" Command="{Binding VersionsCommand}"
+                        ToolTip="Go back to an earlier version of this project. One is kept at every Save and every ten minutes while you work; what you have now is kept too, and Ctrl+Z puts it back."/>
                 <Separator Width="10" Background="Transparent"/>
                 <Button Content="+ Add tracks" Style="{StaticResource PrimaryButton}" Command="{Binding AddTracksCommand}"
                         ToolTip="Add songs, one track each, starting at 0:00. Dropping files onto the window adds them where you drop them."/>
