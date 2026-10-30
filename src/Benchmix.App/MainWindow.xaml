@@ -79,7 +79,7 @@
                 <Button Content="+ Empty track" Style="{StaticResource ToolButton}" Command="{Binding AddEmptyTrackCommand}"
                         ToolTip="Add a track with nothing on it, to paste or drag sections onto (Ctrl+T)."/>
                 <Button Content="Render to file" Style="{StaticResource ToolButton}" Command="{Binding RenderCommand}"
-                        ToolTip="Write the whole mix, start to end, to a WAV file (Ctrl+E)."/>
+                        ToolTip="Write the mix you can hear - muted tracks left out, a solo leaving out the rest - to a WAV or a 320 kbps MP3 (Ctrl+E)."/>
                 <ToggleButton Content="LOOP MODE" Style="{StaticResource PillToggle}" Margin="10,0,0,0" Padding="0"
                               VerticalAlignment="Center"
                               IsChecked="{Binding LoopMode, Mode=TwoWay}"

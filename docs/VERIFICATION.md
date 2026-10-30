@@ -1328,6 +1328,36 @@ window shape as up to about 4 ms shorter than on a bare click, so two tracks of 
 may land that far apart; a warped track is synced through its map but no test warps one; the
 strip's button row has not been looked at on screen (the fit is measured, not seen).
 
+## 2026-10-29 — MP3 render
+
+What was built (his words: *"please also add mp3 mixdown option to desktop
+version"*): a fourth type in the Render box, MP3 at 320 kbps, through Windows' own encoder
+(`Renderer.RenderMp3`): the same blocks the WAV loop pulls, dithered to 16 bits by the WAV path's
+own function, and through the live output's rate converter when the mix runs at a rate MP3 cannot
+hold.
+
+**Unit tests** (`Mp3RenderTests`, three new): a 431 Hz tone from 0.5 s to 3.5 s rendered to a 16-bit
+WAV and to an MP3 from the same session; the MP3, decoded by the reader every song comes in
+through, is at the mix's rate, the renderer reports the same frame count for both, and against the
+WAV it decodes **1564 frames (32.6 ms) late and 2352 frames (49 ms) longer** — the codec's own delay
+and its padding to whole frames — with a residual of **−49.2 dB** over the steady tone once lined
+up (cross-correlation over the second holding the onset; the search allows 50 ms), and **325 kbps
+by its size** (the headers on 320). Two renders of the same session are byte-identical. A 96 kHz
+session's MP3 comes out at 48 kHz, 4.549 s for a 4.5 s mix, the result's note saying so, and lined
+up against the 96 kHz WAV read every other frame its residual is −48.2 dB (1898 frames late: the
+codec's delay plus the converter's). `dotnet test`: 507 passed, 0 skipped.
+
+**`--buttontest`** (**108 checks**): with his two songs, a 16-bit WAV and an MP3 of the same mix
+through the view-model's render (the box itself cannot open in a scripted run): the MP3 is written
+and the status names it, it is at the mix's rate, it decodes to the WAV's length within 0.1 s, it is
+320 kbps by its size, and the Render box's filter offers MP3 as its fourth type with 32-bit float
+still first.
+
+**Not verified:** nobody has played a rendered MP3; the comparison is on a tone, not on music;
+whether a player takes the codec's delay out is the player's business and untested; the Render box
+itself — picking MP3 and the extension following — has not been clicked (the filter and the
+mapping are checked; the dialog is Windows').
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

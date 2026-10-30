@@ -930,3 +930,19 @@ timeline to match them up."* Built in the longer round of 2026-10-29, under his 
 | **Within 2 ms is in time**: nothing moves and nothing goes on the undo stack. | A frame or two is below anything a second press could improve on, and would make Ctrl+Z take back nothing. |
 | **The beat is found by a comb over the onset envelope at the track's own tempo** (`BeatPhase`: the tempo detector's spectral flux at a 512-sample window and a 32-sample hop, the peak refined between hops), with the flux's lag behind a hit added back as a constant measured on clicks (0.955 windows). | The tempo is known already — the tag or the detector — so only the phase is unknown, and a comb at a known period is the one-parameter version of the tempo detector that already works. The lag is the same for both tracks and cancels in the difference. |
 | **Beats, not downbeats.** Sync lands a beat on a beat; which beat is bar 1 is his to hear. | Downbeat detection is a different and less reliable problem; DJ software's sync does the same unless a beatgrid's downbeat was set by hand. |
+
+## 2026-10-29 — MP3 render
+
+Daniel, on *Render to WAV*: *"I want the ability to mixdown and save as
+a wav (can we offer mp3 as well?) … In fact, please also add mp3 mixdown option to desktop
+version."* Built in the second part of the longer round of 2026-10-29, under his new 75% line.
+
+| Decision | Why |
+| --- | --- |
+| **The Render box's fourth type is MP3 at 320 kbps**, after the three WAVs; 32-bit float stays first. | His default of 2026-10-27 stands. 320 kbps is the most an MP3 holds and what a DJ library is made of; a choice of bitrates is a question nobody asked. |
+| **Windows' own encoder, through Media Foundation** (`MediaFoundationEncoder`, in the NAudio package the engine already uses) — no LAME, no new native library. | Media Foundation is the decoder every song comes in through, so the single-file exe loads nothing new (a native DLL from a deep path is the MAX_PATH failure); its MP3 encoder has been in every Windows since 8, Home included. The earlier answer on the row — "needs a free encoder library bundled in" — was wrong. |
+| **The encoder is fed the very blocks the WAV loop pulls** (`Renderer.GraphSource`), as 16-bit PCM with the WAV's own dither (`Dither16`, one function for both). | One signal path, still: the MP3 adds the encoder and nothing else. 16-bit is the input every MP3 encoder takes, and its quantisation noise sits 40 dB under the encoder's own. |
+| **A mix at a rate MP3 cannot hold — anything but 32, 44.1 or 48 kHz — is converted on the way in**, by the `DeviceRateConverter` the live output uses: to 44.1 kHz for a multiple of it, 48 kHz otherwise (`Renderer.Mp3RateFor`). The status says so. | The mix runs at the output's rate for the whole session, and a 96 kHz output is real. Refusing would leave the type dead on such a machine; the converter is already proven on the live path. |
+| **The file is written as `<name>.tmp.mp3` and moved into place when whole.** | As the WAV's `.tmp`, but the MP3 writer picks its container from the extension. |
+| **No tags.** The MP3 carries no title, tempo or key. | The WAV carries none either; writing tags is its own request (row 52), with its own questions. |
+| **The MP3 decodes about 33 ms late against the WAV, and about 50 ms longer. Not corrected.** | The codec's own delay — encoder and decoder together — and padding to whole 1152-sample frames, in every MP3 that carries no gapless information; Windows' encoder writes none. Trimming the mix to pre-empt it would move the start of every render by a number that belongs to the player, which may or may not take it out itself. Measured, see VERIFICATION. |

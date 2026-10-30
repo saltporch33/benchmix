@@ -1047,21 +1047,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var dlg = new SaveFileDialog
         {
             Title = "Render mashup",
-            // 32-bit float first, so it is what the box offers (Daniel, 2026-10-27: "keep all
-            // options but make 32 default").
-            Filter = "WAV, 32-bit float (*.wav)|*.wav|WAV, 24-bit (*.wav)|*.wav|WAV, 16-bit (*.wav)|*.wav",
+            Filter = RenderFilter,
             FileName = (Session.Project.Name is { Length: > 0 } n ? n : "Mashup") + ".wav",
         };
         if (dlg.ShowDialog() != true) return;
 
-        var format = dlg.FilterIndex switch
-        {
-            2 => RenderFormat.Pcm24,
-            3 => RenderFormat.Pcm16,
-            _ => RenderFormat.Float32,
-        };
-        await RenderToAsync(dlg.FileName, format);
+        var format = RenderFormatFor(dlg.FilterIndex);
+        // Windows' box changes the extension with the type; should a name come back without the
+        // type's, it gets it, so an MP3 is never written under .wav.
+        string path = dlg.FileName;
+        string extension = format == RenderFormat.Mp3 ? ".mp3" : ".wav";
+        if (!string.Equals(Path.GetExtension(path), extension, StringComparison.OrdinalIgnoreCase)) path += extension;
+        await RenderToAsync(path, format);
     }
+
+    /// <summary>
+    /// The Render box's types: 32-bit float first, so it is what the box offers (Daniel, 2026-10-27:
+    /// "keep all options but make 32 default"), the other WAVs, then MP3 at 320 kbps (his Features
+    /// List note: "please also add mp3 mixdown option to desktop version"; 2026-10-29).
+    /// </summary>
+    public const string RenderFilter =
+        "WAV, 32-bit float (*.wav)|*.wav|WAV, 24-bit (*.wav)|*.wav|WAV, 16-bit (*.wav)|*.wav|MP3, 320 kbps (*.mp3)|*.mp3";
+
+    /// <summary>The format behind the box's one-based type index.</summary>
+    public static RenderFormat RenderFormatFor(int filterIndex) => filterIndex switch
+    {
+        2 => RenderFormat.Pcm24,
+        3 => RenderFormat.Pcm16,
+        4 => RenderFormat.Mp3,
+        _ => RenderFormat.Float32,
+    };
 
     /// <summary>
     /// The Render button's work once its dialog has a file name: renders what can be heard —
@@ -1101,6 +1116,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                    + (result.Clipped
                         ? " — the limiter pulled that down. Lower the master if you would rather it did not."
                         : ".")
+                   + (result.Note is null ? "" : $" {result.Note}.")
                    + without;
         }
         catch (Exception ex)

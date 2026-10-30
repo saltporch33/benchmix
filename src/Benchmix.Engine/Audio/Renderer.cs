@@ -1,3 +1,4 @@
+using NAudio.MediaFoundation;
 using NAudio.Wave;
 
 namespace Benchmix.Engine.Audio;
@@ -13,6 +14,13 @@ public enum RenderFormat
     /// Render box offers first (Daniel, 2026-10-27: "keep all options but make 32 default").
     /// </summary>
     Float32,
+    /// <summary>
+    /// MP3 at 320 kbps through Windows' own encoder (Daniel: "please also add
+    /// mp3 mixdown option to desktop version"; built 2026-10-29). The encoder is fed the very blocks
+    /// the WAV loop pulls, as 16-bit PCM with the WAV's own dither. A mix at a rate MP3 cannot hold
+    /// is converted on the way in (<see cref="Renderer.Mp3RateFor"/>).
+    /// </summary>
+    Mp3,
 }
 
 public sealed record RenderOptions
@@ -27,7 +35,12 @@ public sealed record RenderOptions
 
 /// <param name="PeakBefore">Highest level reached before the limiter, so an overdriven mix is visible.</param>
 /// <param name="Clipped">True when the limiter had to pull peaks down, or the output hit full scale.</param>
-public sealed record RenderResult(string Path, long Frames, double Seconds, float PeakBefore, bool Clipped, double ElapsedSeconds);
+/// <param name="Note">
+/// What the render had to do that the listener should be told — an MP3's rate conversion, or a
+/// bitrate the encoder did not offer — as a sentence without its full stop. Null when nothing.
+/// </param>
+public sealed record RenderResult(string Path, long Frames, double Seconds, float PeakBefore, bool Clipped, double ElapsedSeconds,
+                                  string? Note = null);
 
 /// <summary>
 /// Bounces the mix to a file by pulling blocks from the very same <see cref="MixGraph"/> that
@@ -40,10 +53,28 @@ public sealed record RenderResult(string Path, long Frames, double Seconds, floa
 /// longest track does (Daniel, 2026-10-27). Before then a muted track longer than the rest left
 /// its whole length as silence on the end of every render.
 /// </para>
+/// <para>
+/// An MP3 (2026-10-29) is the same blocks through Windows' MP3 encoder — Media Foundation, the
+/// decoder every song comes in through, so nothing new is loaded — as 16-bit PCM with the WAV's
+/// dither (<see cref="Dither16"/>, one function for both), at 320 kbps.
+/// </para>
 /// </summary>
 public static class Renderer
 {
     public const int BlockFrames = 4096;
+
+    /// <summary>What an MP3 is written at: the most the format holds, and what a DJ library is made of.</summary>
+    public const int Mp3BitRate = 320_000;
+
+    /// <summary>The rates an MP3 can hold (MPEG-1 layer III).</summary>
+    public static readonly int[] Mp3Rates = { 32000, 44100, 48000 };
+
+    /// <summary>
+    /// The rate an MP3 of a mix at <paramref name="mixRate"/> is written at: the mix's own when MP3
+    /// holds it; else 44.1 kHz for a multiple of it (88.2, 176.4) and 48 kHz for anything else.
+    /// </summary>
+    public static int Mp3RateFor(int mixRate)
+        => Array.IndexOf(Mp3Rates, mixRate) >= 0 ? mixRate : mixRate % 44100 == 0 ? 44100 : 48000;
 
     public static RenderResult Render(MixGraph graph, string path, RenderOptions? options = null,
                                       IProgress<double>? progress = null, CancellationToken cancel = default)
@@ -61,51 +92,23 @@ public static class Renderer
         graph.LimiterEnabled = options.ApplyLimiter;
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        string tmp = path + ".tmp";
+        bool mp3 = options.Format == RenderFormat.Mp3;
+        // The MP3 writer picks its container from the extension, so the temporary name keeps it.
+        string tmp = mp3 ? Path.ChangeExtension(path, ".tmp.mp3") : path + ".tmp";
 
         graph.Meters.MasterClipped = false;
         graph.Meters.MasterPrePeak = 0;
         long written = 0;
+        string? note = null;
 
         try
         {
-            var format = options.Format == RenderFormat.Float32
-                ? WaveFormat.CreateIeeeFloatWaveFormat(graph.SampleRate, graph.Channels)
-                : new WaveFormat(graph.SampleRate, options.Format == RenderFormat.Pcm16 ? 16 : 24, graph.Channels);
+            graph.Seek(start);
+            graph.SnapParameters();
 
-            using (var writer = new WaveFileWriter(tmp, format))
-            {
-                graph.Seek(start);
-                graph.SnapParameters();
-
-                var buf = new float[BlockFrames * graph.Channels];
-                var rnd = new Random(0x5EED);   // deterministic dither: the same project renders identically
-                double dLast = 0;
-
-                while (written < total)
-                {
-                    cancel.ThrowIfCancellationRequested();
-                    int frames = (int)Math.Min(BlockFrames, total - written);
-                    var span = buf.AsSpan(0, frames * graph.Channels);
-                    graph.Render(span, frames);
-
-                    switch (options.Format)
-                    {
-                        case RenderFormat.Float32:
-                            writer.WriteSamples(buf, 0, frames * graph.Channels);
-                            break;
-                        case RenderFormat.Pcm24:
-                            WritePcm24(writer, span);
-                            break;
-                        default:
-                            WritePcm16Dithered(writer, span, rnd, ref dLast);
-                            break;
-                    }
-
-                    written += frames;
-                    progress?.Report(written / (double)total);
-                }
-            }
+            written = mp3
+                ? RenderMp3(graph, tmp, total, progress, cancel, out note)
+                : RenderWav(graph, tmp, total, options.Format, progress, cancel);
 
             if (File.Exists(path)) File.Replace(tmp, path, null);
             else File.Move(tmp, path);
@@ -128,7 +131,79 @@ public static class Renderer
         bool limited = options.ApplyLimiter && prePeak > graph.CeilingLinear;
 
         return new RenderResult(path, written, written / (double)graph.SampleRate,
-                                prePeak, limited || graph.Meters.MasterClipped, started.Elapsed.TotalSeconds);
+                                prePeak, limited || graph.Meters.MasterClipped, started.Elapsed.TotalSeconds, note);
+    }
+
+    private static long RenderWav(MixGraph graph, string tmp, long total, RenderFormat format,
+                                  IProgress<double>? progress, CancellationToken cancel)
+    {
+        var waveFormat = format == RenderFormat.Float32
+            ? WaveFormat.CreateIeeeFloatWaveFormat(graph.SampleRate, graph.Channels)
+            : new WaveFormat(graph.SampleRate, format == RenderFormat.Pcm16 ? 16 : 24, graph.Channels);
+
+        using var writer = new WaveFileWriter(tmp, waveFormat);
+        var buf = new float[BlockFrames * graph.Channels];
+        var pcm = new byte[buf.Length * 2];
+        var rnd = new Random(0x5EED);   // deterministic dither: the same project renders identically
+        double dLast = 0;
+        long written = 0;
+
+        while (written < total)
+        {
+            cancel.ThrowIfCancellationRequested();
+            int frames = (int)Math.Min(BlockFrames, total - written);
+            var span = buf.AsSpan(0, frames * graph.Channels);
+            graph.Render(span, frames);
+
+            switch (format)
+            {
+                case RenderFormat.Float32:
+                    writer.WriteSamples(buf, 0, frames * graph.Channels);
+                    break;
+                case RenderFormat.Pcm24:
+                    WritePcm24(writer, span);
+                    break;
+                default:
+                    writer.Write(pcm, 0, Dither16(span, pcm, rnd, ref dLast));
+                    break;
+            }
+
+            written += frames;
+            progress?.Report(written / (double)total);
+        }
+        return written;
+    }
+
+    /// <summary>
+    /// Windows' MP3 encoder, fed the mix as the WAV loop pulls it: block by block through
+    /// <see cref="GraphSource"/>, dithered to 16 bits by the WAV path's own <see cref="Dither16"/>,
+    /// and — at a rate MP3 cannot hold — through the live output's <see cref="DeviceRateConverter"/>
+    /// first. Returns the mix frames pulled; what was done on the way is in <paramref name="note"/>.
+    /// </summary>
+    private static long RenderMp3(MixGraph graph, string tmp, long total, IProgress<double>? progress,
+                                  CancellationToken cancel, out string? note)
+    {
+        MediaFoundationApi.Startup();          // once per process; a session that opened a song has done it already
+        var source = new GraphSource(graph, total, progress, cancel);
+        ISampleProvider feed = source;
+        int rate = Mp3RateFor(graph.SampleRate);
+        note = null;
+        if (rate != graph.SampleRate)
+        {
+            long frames = (long)Math.Ceiling(total * (double)rate / graph.SampleRate);
+            feed = new FramesOf(new DeviceRateConverter(source, rate), frames);
+            note = $"The MP3 was converted from {graph.SampleRate / 1000.0:0.#} kHz to {rate / 1000.0:0.#} kHz, which MP3 can hold";
+        }
+
+        var pcm = new Pcm16Of(feed);
+        var type = MediaFoundationEncoder.SelectMediaType(AudioSubtypes.MFAudioFormat_MP3, pcm.WaveFormat, Mp3BitRate)
+                   ?? throw new InvalidOperationException($"Windows offers no MP3 encoder for {pcm.WaveFormat.Channels} channels at {rate} Hz.");
+        int kbps = type.AverageBytesPerSecond * 8 / 1000;      // read first: the encoder releases the type with itself
+        using (var encoder = new MediaFoundationEncoder(type)) encoder.Encode(tmp, pcm);
+
+        if (kbps != Mp3BitRate / 1000)
+            note = (note is null ? "" : note + ". ") + $"The encoder offered {kbps} kbps, not {Mp3BitRate / 1000}";
+        return source.Done;
     }
 
     private static void WritePcm24(WaveFileWriter writer, ReadOnlySpan<float> samples)
@@ -145,14 +220,16 @@ public static class Renderer
     }
 
     /// <summary>
-    /// 16-bit with TPDF dither and first-order noise shaping. Truncating to 16 bits without dither
-    /// puts correlated quantisation distortion on quiet fade-outs; a two-LSB triangular dither
-    /// turns that into a steady, far less audible hiss.
+    /// 16-bit with TPDF dither and first-order noise shaping, two bytes a sample into
+    /// <paramref name="bytes"/>; returns how many bytes. Truncating to 16 bits without dither puts
+    /// correlated quantisation distortion on quiet fade-outs; a two-LSB triangular dither turns
+    /// that into a steady, far less audible hiss. The WAV's 16-bit path and the MP3's input share
+    /// it, so the two quantise alike.
     /// </summary>
-    private static void WritePcm16Dithered(WaveFileWriter writer, ReadOnlySpan<float> samples, Random rnd, ref double last)
+    internal static int Dither16(ReadOnlySpan<float> samples, Span<byte> bytes, Random rnd, ref double last)
     {
         const double Scale = 32767.0;
-        Span<byte> bytes = stackalloc byte[2];
+        int n = 0;
         foreach (var f in samples)
         {
             double d = (rnd.NextDouble() - rnd.NextDouble());        // TPDF, +/-1 LSB
@@ -160,14 +237,83 @@ public static class Renderer
             double rounded = Math.Round(shaped);
             last = rounded - shaped;
             int v = (int)Math.Clamp(rounded, short.MinValue, short.MaxValue);
-            bytes[0] = (byte)(v & 0xFF);
-            bytes[1] = (byte)((v >> 8) & 0xFF);
-            writer.Write(bytes);
+            bytes[n++] = (byte)(v & 0xFF);
+            bytes[n++] = (byte)((v >> 8) & 0xFF);
         }
+        return n;
     }
 
     private static void TryDelete(string p)
     {
         try { if (File.Exists(p)) File.Delete(p); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// The mix pulled block by block, exactly as the WAV loop pulls it, as a sample provider that
+    /// ends after <paramref name="total"/> frames.
+    /// </summary>
+    private sealed class GraphSource(MixGraph graph, long total, IProgress<double>? progress, CancellationToken cancel) : ISampleProvider
+    {
+        public WaveFormat WaveFormat { get; } = WaveFormat.CreateIeeeFloatWaveFormat(graph.SampleRate, graph.Channels);
+
+        /// <summary>Mix frames pulled so far.</summary>
+        public long Done { get; private set; }
+
+        public int Read(Span<float> buffer)
+        {
+            int ch = graph.Channels;
+            int frames = (int)Math.Min(buffer.Length / ch, total - Done);
+            int got = 0;
+            while (got < frames)
+            {
+                cancel.ThrowIfCancellationRequested();
+                int n = Math.Min(BlockFrames, frames - got);
+                graph.Render(buffer.Slice(got * ch, n * ch), n);
+                got += n;
+                Done += n;
+                progress?.Report(Done / (double)total);
+            }
+            return got * ch;
+        }
+    }
+
+    /// <summary>
+    /// The first so many frames of a provider that never ends on its own — the rate converter
+    /// fills silence past its source — so the encoder knows where the file ends.
+    /// </summary>
+    private sealed class FramesOf(ISampleProvider inner, long frames) : ISampleProvider
+    {
+        private long _left = frames;
+
+        public WaveFormat WaveFormat => inner.WaveFormat;
+
+        public int Read(Span<float> buffer)
+        {
+            int ch = inner.WaveFormat.Channels;
+            int want = (int)Math.Min(buffer.Length / ch, _left);
+            if (want == 0) return 0;
+            int got = inner.Read(buffer.Slice(0, want * ch)) / ch;
+            _left -= got;
+            return got * ch;
+        }
+    }
+
+    /// <summary>Float samples as 16-bit PCM bytes with the WAV path's dither: what the encoder pulls from.</summary>
+    private sealed class Pcm16Of(ISampleProvider source) : IWaveProvider
+    {
+        private readonly Random _rnd = new(0x5EED);        // the WAV's seed: the same project renders identically
+        private double _last;
+        private float[] _floats = new float[BlockFrames * source.WaveFormat.Channels];
+
+        public WaveFormat WaveFormat { get; } = new WaveFormat(source.WaveFormat.SampleRate, 16, source.WaveFormat.Channels);
+
+        public int Read(Span<byte> buffer)
+        {
+            int ch = WaveFormat.Channels;
+            int samples = buffer.Length / 2 / ch * ch;
+            if (_floats.Length < samples) _floats = new float[samples];
+            int got = source.Read(_floats.AsSpan(0, samples));
+            return Dither16(_floats.AsSpan(0, got), buffer, _rnd, ref _last);
+        }
     }
 }

@@ -4848,6 +4848,7 @@ public partial class MainWindow : Window
         var dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "render-check");
         Directory.CreateDirectory(dir);
         string wav = Path.Combine(dir, "render-check.wav");
+        string mp3 = Path.Combine(dir, "render-check.mp3");
         try
         {
             longer.Muted = true;                                    // what the M button's binding does
@@ -4867,6 +4868,29 @@ public partial class MainWindow : Window
             check($"the status names the other song as left out, not soloed (\"{_vm.Status}\")", _vm.Status.Contains($"{longer.Name} (not soloed)"));
             _vm.Solo(shorter, alongside: false);                    // and off again
 
+            // MP3 (his words: "please also add mp3 mixdown option to desktop version"):
+            // the same mix through Windows' encoder, read back through the decoder every song comes
+            // in by, against the 16-bit WAV of the same render.
+            await _vm.RenderToAsync(wav, Benchmix.Engine.Audio.RenderFormat.Pcm16);
+            await Settle();
+            long wavFrames = FramesIn(wav);
+            await _vm.RenderToAsync(mp3, Benchmix.Engine.Audio.RenderFormat.Mp3);
+            await Settle();
+            check($"an MP3 render is written and the status names it (\"{_vm.Status}\")",
+                  File.Exists(mp3) && _vm.Status.StartsWith("Rendered") && _vm.Status.Contains("render-check.mp3"));
+            int mp3Rate;
+            using (var reader = new NAudio.Wave.MediaFoundationReader(mp3)) mp3Rate = reader.WaveFormat.SampleRate;
+            check($"the MP3 is at the mix's rate ({mp3Rate} Hz, the mix {rate})", mp3Rate == rate);
+            long mp3Frames = Benchmix.Engine.Audio.AudioClip.Load(mp3, (int)rate).FrameCount;
+            check($"the MP3 decodes to the WAV's length within 0.1 s ({mp3Frames} frames, the WAV {wavFrames}) — "
+                + "otherwise the mixdown is cut short or runs long", Math.Abs(mp3Frames - wavFrames) <= rate / 10);
+            double kbps = new FileInfo(mp3).Length * 8.0 / (wavFrames / (double)rate) / 1000;
+            check($"the MP3 is 320 kbps ({kbps:0} kbps by its size)", Math.Abs(kbps - 320) <= 10);
+            check("the Render box offers MP3 as its fourth type, after the three WAVs, 32-bit float still first",
+                  MainViewModel.RenderFilter.Split('|').Length == 8 && MainViewModel.RenderFilter.EndsWith("*.mp3")
+                  && MainViewModel.RenderFormatFor(4) == Benchmix.Engine.Audio.RenderFormat.Mp3
+                  && MainViewModel.RenderFormatFor(1) == Benchmix.Engine.Audio.RenderFormat.Float32);
+
             longer.Muted = true;
             shorter.Muted = true;
             _vm.RenderCommand.Execute(null);
@@ -4880,6 +4904,7 @@ public partial class MainWindow : Window
         finally
         {
             try { if (File.Exists(wav)) File.Delete(wav); } catch { }
+            try { if (File.Exists(mp3)) File.Delete(mp3); } catch { }
         }
     }
 

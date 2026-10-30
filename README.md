@@ -38,7 +38,7 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   opens; a renamed song is recognised by its fingerprint; for anything else, *Find missing file…* on
   the track's menu points at it and every section cut from that song follows.
 - **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
-- **Render** to 32-bit float WAV (the default), or 24/16-bit, with a safety limiter. The file is what you hear:
+- **Render** to 32-bit float WAV (the default), 24/16-bit WAV, or a 320 kbps MP3, with a safety limiter. The file is what you hear:
   muted tracks are left out, a solo leaves out every other track, and it ends where the last track
   you can hear ends.
 
