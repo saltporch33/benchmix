@@ -1113,6 +1113,70 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Whether the strip menu offers writing tempo and key into this track's song (Daniel, Features
+    /// List row 52; 2026-10-29): an MP3 that is there and lacks a tempo or a key Benchmix has.
+    /// </summary>
+    public bool CanWriteTagsFor(TrackViewModel track)
+    {
+        var m = track.Model;
+        if (string.IsNullOrEmpty(m.SourcePath) || !File.Exists(m.SourcePath) || !Benchmix.Engine.Analysis.TagWriter.CanWrite(m.SourcePath)) return false;
+        var (bpm, key) = Benchmix.Engine.Analysis.TagWriter.Blanks(m.SourcePath, m.Bpm > 0 ? m.Bpm : null, m.Key);
+        return bpm is not null || key is not null;
+    }
+
+    /// <summary>
+    /// Write tempo and key into the song file (Daniel, row 52: "Only with your yes, per file"): the
+    /// strip menu's item, for a track whose tempo or key Benchmix worked out itself. Fills only what
+    /// the file lacks, never overwriting. The box is the yes — nothing touches his music files without
+    /// one — so a scripted run refuses; the probe gives its yes through <paramref name="confirmed"/>.
+    /// Not an undo step: the file itself changed, and Ctrl+Z cannot change it back.
+    /// </summary>
+    public async Task<bool> WriteTagsIntoSongAsync(TrackViewModel track, bool confirmed = false)
+    {
+        if (_session is null) return false;
+        var m = track.Model;
+        string? path = m.SourcePath;
+        string name = Path.GetFileName(path ?? "");
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) { Status = $"{track.Name} has no song file to write into."; return false; }
+        if (!Benchmix.Engine.Analysis.TagWriter.CanWrite(path)) { Status = $"{name} is not an MP3; Benchmix writes tags into MP3 files only, for now."; return false; }
+        var (bpm, key) = Benchmix.Engine.Analysis.TagWriter.Blanks(path, m.Bpm > 0 ? m.Bpm : null, m.Key);
+        if (bpm is null && key is null) { Status = $"{name} already has its tempo and key in its tags; nothing to write."; return false; }
+        string what = bpm is { } b && key is { } k ? $"{Benchmix.Engine.Analysis.TagWriter.BpmText(b)} BPM and the key {k}"
+                    : bpm is { } b2 ? $"{Benchmix.Engine.Analysis.TagWriter.BpmText(b2)} BPM"
+                    : $"the key {key}";
+        if (!confirmed)
+        {
+            if (!_interactive) { Status = "A scripted run shows no dialogs."; return false; }
+            var r = MessageBox.Show(
+                $"Write {what} into {name}?\n\nOnly tags the file lacks are filled in; the music and every other tag stay exactly as they are. Ctrl+Z cannot take this back.",
+                "Benchmix", MessageBoxButton.OKCancel, MessageBoxImage.Question);
+            if (r != MessageBoxResult.OK) { Status = $"Nothing written into {name}."; return false; }
+        }
+
+        IsBusy = true;
+        try
+        {
+            var result = await Task.Run(() => Benchmix.Engine.Analysis.TagWriter.Write(path, bpm, key));
+            // The values are the file's own now, on this track and on every other track reading the same song.
+            foreach (var t in Tracks.Where(t => string.Equals(t.Model.SourcePath, path, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (result.WroteBpm) t.Model.BpmSource = nameof(Benchmix.Engine.Analysis.ValueSource.Tag);
+                if (result.WroteKey) t.Model.KeySource = nameof(Benchmix.Engine.Analysis.ValueSource.Tag);
+                t.RefreshFromModel();
+            }
+            MarkDirty();
+            Status = $"Wrote {what} into {name}'s tags. The music and its other tags are as they were; Ctrl+Z cannot take this back.";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Status = $"Could not write into {name}: {ex.Message} The file is as it was.";
+            return false;
+        }
+        finally { IsBusy = false; }
+    }
+
     [RelayCommand]
     private async Task RenderAsync()
     {

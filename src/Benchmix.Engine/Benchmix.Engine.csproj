@@ -14,6 +14,7 @@
     <PackageReference Include="NAudio.Wasapi" Version="3.1.0" />
     <PackageReference Include="SignalsmithStretch-CS" Version="1.1.2" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.4" />
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Benchmix.Tests" />

@@ -1385,6 +1385,37 @@ opened (a scripted run refuses it), so its look is unseen; closing the app with 
 rests on a reading of `ConfirmDiscard`, not a probe; a failed autosave (a read-only folder) ends in
 a status message no test provokes.
 
+## 2026-10-29 — writing tempo and key into a song's own tags
+
+What was built (his request): `TagWriter` (Engine) fills TBPM and TKEY where an MP3
+lacks them, through TagLib# on a copy beside the file that is checked — the values read back by
+`Id3.Read`, every tag the file had unchanged, the music (`TagWriter.Music`: after the ID3v2 tag,
+before an ID3v1) byte for byte the same — before `File.Replace` puts it in place.
+`MainViewModel.WriteTagsIntoSongAsync` is the strip menu's *Write tempo and key into the song
+file…*, offered (`CanWriteTagsFor`) only for an MP3 that is there and lacks a value Benchmix has,
+with a box as the yes.
+
+**Unit tests** (`TagWritingTests`, four new, every file rendered by the test itself): an untagged
+MP3 (Windows' encoder leaves one frame of its own, TFLT = MPG/3) gets `93` and `Em`, the music is
+the same bytes, no working copy is left, and `Analyzer.Analyze` now reports both as the file's own
+(`ValueSource.Tag`); a tempo already there is never overwritten while a missing key is filled, and
+with both there nothing is written; `127.5` is written as it is and read back as 127.5, `93.004` as
+`93`; a WAV is refused with a message naming MP3, and a read-only MP3 is left byte for byte as it
+was with no copy beside it. `dotnet test`: 515 passed, 0 skipped.
+
+**`--buttontest`** (**127 checks**, 8 new): twenty seconds of his two songs rendered to an MP3 in a
+temp folder and added as a track — its tempo Benchmix's own guess, with the `?`; the strip menu
+offers the item for it and not for the bed, whose tags came from its file; the real item's path
+without a yes writes nothing and says a scripted run shows no dialogs; with the yes given by the
+probe the tempo (and the key, where one was found) are in the file and read back by the app's own
+reader, the music is the same bytes, the `?` is gone, and the file added again comes in with its
+tempo from its tags. Never one of his files.
+
+**Not verified:** no tag has been written into one of his files, and the box has never been clicked
+by hand; whether Serato, djay or Explorer read a TBPM or TKEY Benchmix wrote is untested (the ID3
+spec is followed, that is all); the app's reader takes ID3v2.4 frame sizes as 2.3's, so in a 2.4
+file with a large frame before TBPM a value might be missed — an older limitation, not changed here.
+
 ## The stretch engine
 
 [Spike 01](SPIKE-01-stretch.md), on this CPU:

@@ -4264,6 +4264,7 @@ public partial class MainWindow : Window
         await CheckRenderHeardAsync(Check);
         await CheckDuplicateThroughMenuAsync(Check);
         await CheckAutosaveAndVersionsAsync(Check, Buttons);
+        await CheckWriteTagsAsync(Check);
         await CheckUndoResetAndNewAsync(Check, Click, Buttons);
         await CheckRelinkAsync(Check, bedFile, topperFile);
 
@@ -4914,6 +4915,90 @@ public partial class MainWindow : Window
     /// below the topper with the same sections at the same places, the same knobs, its own name,
     /// selected and in the mix; one Ctrl+Z takes it away.
     /// </summary>
+    /// <summary>
+    /// Writing tempo and key into a song file (Daniel, 2026-10-29), on a file of
+    /// our own and never one of his: twenty seconds of the mix rendered to an MP3 in a temp folder (no
+    /// tags at all) and added as a track, so its tempo is Benchmix's own guess with the ?. The strip
+    /// menu offers the item for it and not for the bed, whose tags came from its file; without a yes
+    /// nothing is written (the box is the yes, and a scripted run shows none); with the yes given here
+    /// the values go into the file: the app's own reader reads them back, the music is the same bytes,
+    /// the ? goes, and the file added again comes in with its tempo from its tags.
+    /// </summary>
+    private async Task CheckWriteTagsAsync(Action<string, bool> check)
+    {
+        async Task Settle()
+        {
+            while (_vm.IsBusy) await Task.Delay(20);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+        }
+        await Settle();
+        if (_vm.Tracks.Count < 2) { check("two tracks to render an excerpt from", false); return; }
+        string dir = Path.Combine(Path.GetTempPath(), "benchmix-verify", "tags-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string mp3 = Path.Combine(dir, "excerpt.mp3");
+        int before = _vm.Tracks.Count;
+        try
+        {
+            long rate = _vm.Session.SampleRate;
+            _vm.Session.Engine.Pause();
+            _vm.Session.Engine.WaitForIdle();
+            await _vm.Session.RenderAsync(mp3, new Benchmix.Engine.Audio.RenderOptions
+            {
+                Format = Benchmix.Engine.Audio.RenderFormat.Mp3, Region = (30 * rate, 50 * rate), ApplyLimiter = false,
+            });
+            check($"an MP3 with no tempo or key tag to write into ({new FileInfo(mp3).Length / 1024} KB)",
+                  File.Exists(mp3) && !Benchmix.Engine.Analysis.Id3.Read(mp3).ContainsKey("TBPM") && !Benchmix.Engine.Analysis.Id3.Read(mp3).ContainsKey("TKEY"));
+
+            await _vm.AddFilesAsync(new[] { mp3 });
+            await Settle();
+            var track = _vm.Tracks.LastOrDefault(t => string.Equals(t.Model.SourcePath, mp3, StringComparison.OrdinalIgnoreCase));
+            if (track is null) { check("the excerpt added as a track", false); return; }
+            check($"its tempo is Benchmix's own guess ({track.BpmText}, {track.BpmSourceText})", track.BpmIsEstimate && track.Model.Bpm > 0);
+
+            MenuItem? Write(ContextMenu? m) => m?.Items.OfType<MenuItem>().FirstOrDefault(i => i.Tag as string == "writetags");
+            if (StripOf(track) is { ContextMenu: { } menu } strip && StripOf(_vm.Tracks[0]) is { ContextMenu: { } bedMenu } bedStrip)
+            {
+                menu.PlacementTarget = strip;
+                OnStripMenuOpened(menu, new RoutedEventArgs());
+                bedMenu.PlacementTarget = bedStrip;
+                OnStripMenuOpened(bedMenu, new RoutedEventArgs());
+                check("the strip menu offers writing tags for the excerpt, and not for the bed, whose tags came from its file",
+                      Write(menu) is { Visibility: Visibility.Visible } && Write(bedMenu) is { Visibility: Visibility.Collapsed });
+            }
+            else check("the two strips' menus to look at", false);
+
+            await _vm.WriteTagsIntoSongAsync(track);                     // the real item's path: no box in a scripted run, so no yes
+            await Settle();
+            check($"without a yes nothing is written, and the run says why (\"{_vm.Status}\")",
+                  _vm.Status == "A scripted run shows no dialogs." && !Benchmix.Engine.Analysis.Id3.Read(mp3).ContainsKey("TBPM"));
+
+            byte[] fileBefore = File.ReadAllBytes(mp3);
+            bool wrote = await _vm.WriteTagsIntoSongAsync(track, confirmed: true);
+            await Settle();
+            var tags = Benchmix.Engine.Analysis.Id3.Read(mp3);
+            string wantBpm = Benchmix.Engine.Analysis.TagWriter.BpmText(track.Model.Bpm);
+            check($"with the yes, the tempo{(track.Model.Key is null ? "" : " and key")} are in the file's tags (TBPM={tags.GetValueOrDefault("TBPM")}, TKEY={tags.GetValueOrDefault("TKEY")}; \"{_vm.Status}\")",
+                  wrote && tags.GetValueOrDefault("TBPM") == wantBpm
+                        && (track.Model.Key is null || tags.GetValueOrDefault("TKEY") == track.Model.Key) && _vm.Status.StartsWith("Wrote"));
+            byte[] fileAfter = File.ReadAllBytes(mp3);
+            check($"the music itself is the same bytes after the tag ({fileBefore.Length} -> {fileAfter.Length} bytes)",
+                  Benchmix.Engine.Analysis.TagWriter.Music(fileAfter).SequenceEqual(Benchmix.Engine.Analysis.TagWriter.Music(fileBefore)));
+            check($"the ? is gone: the tempo now counts as the file's own ({track.BpmSourceText})", !track.BpmIsEstimate);
+
+            await _vm.AddFilesAsync(new[] { mp3 });
+            await Settle();
+            var again = _vm.Tracks[^1];
+            check($"added again, the file comes in with its tempo from its tags ({again.BpmText}, {again.BpmSourceText})",
+                  again != track && !again.BpmIsEstimate && Math.Abs(again.Model.Bpm - track.Model.Bpm) < 0.01);
+        }
+        finally
+        {
+            while (_vm.Tracks.Count > before) _vm.RemoveTrackCommand.Execute(_vm.Tracks[^1]);
+            await Settle();
+            try { Directory.Delete(dir, true); } catch { }
+        }
+    }
+
     /// <summary>
     /// Autosave and versions (Daniel: "auto-save + version history";
     /// 2026-10-29), through the view-model: the project is given a file in a temp folder and autosave
@@ -5917,6 +6002,9 @@ public partial class MainWindow : Window
         var track = (menu.PlacementTarget as FrameworkElement)?.DataContext as TrackViewModel ?? _vm.SelectedTrack;
         if (menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "findfile") is { } find)
             find.Visibility = track is not null && !_vm.Session.HasAllAudio(track.Model) ? Visibility.Visible : Visibility.Collapsed;
+        // Write tempo and key into the song file only for an MP3 that lacks a value Benchmix has (2026-10-29).
+        if (menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Tag as string == "writetags") is { } write)
+            write.Visibility = track is not null && _vm.CanWriteTagsFor(track) ? Visibility.Visible : Visibility.Collapsed;
         var move = menu.Items.OfType<MenuItem>().FirstOrDefault(m => m.Header as string == "Move to tab");
         if (move is null) return;
         FillMoveToTab(move);
@@ -5948,6 +6036,12 @@ public partial class MainWindow : Window
     private void OnFindMissingFileMenu(object sender, RoutedEventArgs e)
     {
         if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _ = _vm.FindMissingFileAsync(t);
+    }
+
+    /// <summary>The strip menu's Write tempo and key into the song file (Daniel, row 52; 2026-10-29): its box is the yes.</summary>
+    private void OnWriteTagsMenu(object sender, RoutedEventArgs e)
+    {
+        if ((TrackOf(sender) ?? _vm.SelectedTrack) is { } t) _ = _vm.WriteTagsIntoSongAsync(t);
     }
 
     private void FillMoveToTab(MenuItem move)

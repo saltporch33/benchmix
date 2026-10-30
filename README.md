@@ -45,6 +45,10 @@ sounding mangled, carve space for each with a three-band EQ, and render the resu
   seconds later on its own. A dated version is kept beside it at every Save and every ten minutes
   while you work (the newest forty), and *Versions…* in the toolbar restores one — what you had is
   kept too, and Ctrl+Z puts it back.
+- **Write tempo and key into a song file.** For an MP3 whose tempo or key Benchmix worked out itself
+  (the `?`), the track's menu offers to put them into the file's own tags, so Explorer, Serato and
+  djay show them. It asks first, fills only what the file lacks, and leaves the music byte for byte
+  as it was.
 
 ## What it deliberately does not do
 

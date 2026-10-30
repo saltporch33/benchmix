@@ -297,6 +297,9 @@
                                                 <!-- Only while a song this track reads from is not where the project says (OnStripMenuOpened, 2026-10-28). -->
                                                 <MenuItem Header="Find missing file…" Click="OnFindMissingFileMenu" Tag="findfile"
                                                           ToolTip="Point Benchmix at a song that has moved or been renamed. Every section cut from it follows, on every tab."/>
+                                                <!-- Only for an MP3 that lacks a tempo or key Benchmix has worked out (OnStripMenuOpened, 2026-10-29). -->
+                                                <MenuItem Header="Write tempo and key into the song file…" Click="OnWriteTagsMenu" Tag="writetags"
+                                                          ToolTip="Fill the song file's own tags with the tempo and key Benchmix found, so Explorer, Serato and djay show them. Asks first; fills only what the file lacks; the music is untouched."/>
                                                 <!-- Its items, one per other tab, are built as the menu opens (OnStripMenuOpened). -->
                                                 <MenuItem Header="Move to tab"
                                                           ToolTip="Sends this track to another tab, where it plays instead of here. Ctrl+Z here brings it back."/>

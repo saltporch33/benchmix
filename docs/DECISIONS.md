@@ -962,3 +962,22 @@ longer round of 2026-10-29.
 | **Versions… is a plain list, newest first, in a small window. Restore keeps the present as a version first and is one Ctrl+Z step** across every tab. | Going back must never lose the state you went back from. The list is the one new window in the app; a scripted run refuses it, and the probe restores through the view-model. |
 | **Closing, New and Open flush the autosave instead of asking.** | With the file always current there is nothing to discard. The question stays for an untitled project, and when the write failed. |
 | **Off in a scripted run** (`AutosaveEnabled` follows the interactive flag). | The probes open and save projects in temp folders on their own schedule; a timer writing underneath them would make every count a race. `--buttontest` turns it on for its own check, so the timer is proved in the exe all the same. |
+
+## 2026-10-29 — writing tempo and key into a song's own tags
+
+Daniel, 2026-10-29: *"Write Benchmix's detected tempo and key into a song's
+own tags, so Windows Explorer (Beats-per-minute and Initial key columns), Serato and djay show them.
+Only with your yes, per file. … To decide: whether to overwrite tags already there, and key style
+("Em" or "1A")."* Built in the second part of the longer round of 2026-10-29, the two open questions
+answered by defaults he can overturn.
+
+| Decision | Why |
+| --- | --- |
+| **Never overwrite.** Only a tempo or key the file lacks is written; a value already there stays, whoever wrote it. | The app already trusts a tag over its own guess (SPIKE-03: the tags were right on 97% of tempos; the key detector scores 47%). Writing over Serato's word with Benchmix's would make the file worse and the app inconsistent with itself. |
+| **The key as the ID3 standard has it** — `Em`, `F#m`, `Bb` in TKEY — not Camelot (`1A`). | TKEY is defined as the note name with `m` for minor; Explorer's *Initial key* column, Rekordbox and djay read it so, and Camelot is derivable from it (the readout shows both). Serato keeps its own key elsewhere and is not disturbed. |
+| **The tempo as it is**: `93`, or `127.5` when it is not whole (TBPM). | A rounded tempo would be wrong by up to half a beat a minute; a tempo a hair off whole (`93.004`) is written whole. Explorer's column reads whole numbers; the rare half-BPM song shows blank there and right everywhere else. |
+| **Per file, and the box is the yes.** *Write tempo and key into the song file…* on the track's strip menu, only for an MP3 that is there and lacks a value Benchmix has; its box says what will be written and that Ctrl+Z cannot take it back; a scripted run cannot give the yes. | "Nothing touches his own music files without an explicit yes" (this file, from the start). The item appearing only where there is something to write keeps it from reading as a nag on his Serato-tagged library. |
+| **MP3 only, for now.** | His library is MP3, the app's own tag reader reads ID3 only, and a value written into an M4A would not come back into Benchmix. |
+| **TagLib# does the writing, on a copy, checked before it takes the file's place**: the values read back by the app's own reader, every tag the file had still there, the music byte for byte the same (`TagWriter.Music`); `File.Replace` in one step; anything wrong and the file is as it was. | ID3v2 by hand means rewriting the tag block around Serato's GEOB frames in two versions of the format; one wrong size and his library is damaged. TagLib# is the standard library for exactly this, and the checks mean even its mistake could not reach the file. |
+| **Not an undo step**, and the status says so. | The file itself changed; an undo that cannot change it back would lie. |
+| **Latin-1, forced.** | Digits, letters, `#` and `b` fit; every reader takes it, and a 2.3 tag never gets UTF-16 for them. |
