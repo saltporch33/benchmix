@@ -9,4 +9,12 @@
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
   </PropertyGroup>
+  <!-- A release exe goes public: map this machine's folders out of what the compiler writes into
+       it (each assembly's PDB path, any source path). Every exe up to v2026.10.29.7 carried the
+       user folder in its PDB paths (2026-11-02). Release only, so a Debug build still points the
+       debugger at the real files; never the tests, whose MenuWiringTests finds the app's folder
+       through [CallerFilePath]. scripts/verify-exe.ps1 fails an exe that still has it. -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Release' and '$(MSBuildProjectName)' != 'Benchmix.Tests'">
+    <PathMap>$([MSBuild]::EnsureTrailingSlash('$(ArtifactsPath)'))=/_build/,$(MSBuildThisFileDirectory)=/_/</PathMap>
+  </PropertyGroup>
 </Project>

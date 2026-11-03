@@ -175,6 +175,12 @@ mistakes, not by describing the project.
 - **Build output goes to `%LOCALAPPDATA%\Benchmix.build\`** on purpose, to keep bin/obj out of
   OneDrive *and* because the native `SignalsmithStretch.dll` fails to load from a deep path
   (MAX_PATH). Do not "fix" it.
+- **A Release build has no real folder paths in it** (`PathMap` in `Directory.Build.props`,
+  2026-11-02): in what the compiler writes into the assemblies, the build folder reads `/_build/`
+  and the source folder `/_/`. Every release exe up to v2026.10.29.7 carried this machine's user
+  folder in its PDB paths, and release exes go public. Debug builds keep the real paths, so the
+  debugger still finds the source, and the tests are left out: `MenuWiringTests` finds the app's
+  folder through `[CallerFilePath]`. Do not drop the mapping.
 - **`--playtest` runs at master zero** and `--uiprobe` uses `RenderTargetBitmap` rather than a
   screen grab. Daniel uses this machine while work happens here. Nothing may steal focus, make
   noise, or photograph his desktop.
@@ -236,6 +242,9 @@ They run against `%LOCALAPPDATA%\Benchmix.build\publish\Benchmix.App\release_win
 | `--loadcheck <songs>` | tracks are actually ready to split into stems; given a `.benchmix` instead, that it opens from the command line (what a double-click in Explorer does) — `verify-exe.ps1` writes one |
 | `--stemtest <song>` | ONNX/DirectML works in the packaged exe |
 | `--playtest 6 <songs>` | WASAPI is pulling in realtime (silent), a scroll-wheel click pauses where the playhead is, and a double-click lands back on the frame play started from |
+
+Before any switch runs, `verify-exe.ps1` unpacks the exe (`scripts/BundleScan.cs`) and fails it if
+this machine's user folder is anywhere inside: the `user-folder` line.
 
 These **exit 1 on failure** and also log a `verdict=` line to
 `%LOCALAPPDATA%\Benchmix\benchmix.log`. Close any running Benchmix first — it locks the exe. (That
@@ -367,4 +376,4 @@ Nothing is attributed to Daniel unless quoted verbatim with a date. Keep that ru
 - Prefer deciding on a stated default over stopping to ask.
 - A status question wants a status answer, not an audit.
 
-*Revised 2026-10-29.*
+*Revised 2026-11-02.*

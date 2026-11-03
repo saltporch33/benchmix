@@ -15,11 +15,15 @@
     It refuses to launch an exe older than the source: a build from before scripted runs were
     invisible would open on screen and take focus.
 
+    It also unpacks the exe (BundleScan.cs) and fails it if this machine's user folder is anywhere
+    inside: release exes go public, and up to v2026.10.29.7 each one carried it in its PDB paths.
+    Directory.Build.props maps it out of Release builds.
+
     Usage:  powershell -ExecutionPolicy Bypass -File scripts\verify-exe.ps1 [-Exe <path>] [-ShotDir <dir>] [-Only <name>]
             -Only runs just the named runs (e.g. -Only buttontest), still watched from outside. That
             proves one switch, not the exe: the full set is still the bar.
     Exit:  0 = every run passed and stayed out of the way
-            1 = a run failed, or got in the way, or the exe is out of date
+            1 = a run failed, or got in the way, or the exe is out of date or holds the user folder
             2 = incomplete: the sample songs are missing, so only --latencycheck ran
 #>
 param(
@@ -40,6 +44,7 @@ if ($newest.LastWriteTime -gt (Get-Item $Exe).LastWriteTime) {
 }
 
 Add-Type -Path (Join-Path $PSScriptRoot 'Intrusion.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'BundleScan.cs')
 
 $audio = "$env:USERPROFILE\Music\Sports DJ\audio"
 $bed = Join-Path $audio "CFBCA39E-E325-485F-839D-CF95466767AA.mp3"   # Still D.R.E.  93 BPM
@@ -83,6 +88,11 @@ if ($Only.Count -gt 0) {
 }
 
 $failed = 0
+$carriers = @([BundleScan]::FilesHolding($Exe, $env:USERPROFILE))
+if ($carriers.Count -gt 0) { $failed++ }
+Write-Host ("{0,-17} {1}  {2}" -f 'user-folder', $(if ($carriers.Count -eq 0) { 'PASS' } else { 'FAIL' }),
+    $(if ($carriers.Count -eq 0) { "nothing inside the exe holds $env:USERPROFILE" } else { "$env:USERPROFILE is inside $($carriers -join ', ')" }))
+
 foreach ($r in $runs) {
     $before = if (Test-Path $log) { (Get-Content $log).Count } else { 0 }
     $p = New-Object QuietProcess $Exe, $r.Args
@@ -104,7 +114,7 @@ foreach ($r in $runs) {
 }
 
 Write-Host ""
-if ($failed -gt 0) { Write-Host "VERIFY: $failed run(s) failed or got in the way"; exit 1 }
+if ($failed -gt 0) { Write-Host "VERIFY: $failed check(s) failed or got in the way"; exit 1 }
 if (-not $haveSongs) { Write-Host "VERIFY: incomplete - only --latencycheck ran"; exit 2 }
 if ($Only.Count -gt 0) { Write-Host "VERIFY: the selected run(s) passed - $($runs.Count) of the full set, so this is not the whole bar"; exit 0 }
 Write-Host "VERIFY: every run passed and stayed out of the way"; exit 0
