@@ -497,3 +497,28 @@ models/
 
 # Release exes, one per version; the Desktop shortcut points at the newest (2026-10-27)
 releases/
+
+# Kept out before going public (2026-11-02): audio and video of any kind, Benchmix
+# projects (they hold the paths to the songs), binaries, local settings and keys
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.aif
+*.aiff
+*.wma
+*.mp4
+*.mov
+*.mkv
+*.webm
+*.onnx
+*.exe
+*.dll
+*.benchmix
+!tests/Benchmix.Tests/fixtures/*.benchmix
+.env.*
+*.pem
+*.key
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
