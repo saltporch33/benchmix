@@ -9,69 +9,27 @@ A purpose-built DAW for creating simple music mixes and mashups and mixing down 
 ## Features and Functions
 
 - **Speed without pitch.** Stretch a track's tempo while maintaining key.
-- **Pitch without speed.** Shift a track in semitones and its length stays put.
-- **Or both linked**, which is pure resampling — like slowing a record down. Nothing is invented,
-  so nothing can smear. Often the better choice under a few percent.
-- **Three-band EQ per track**, isolator style: a knob at the bottom is a true kill, not a −23 dB
-  approximation. Kill the bass on one track so the other's low end carries.
-- **Tempo and key detection** that reads the file's own tags first and only analyses when it has
-  to, so a tagged library loads instantly.
-- **Match BPM** stretches a track onto the project tempo in one click, folding half-time and
-  double-time readings first. Its right-click matches the selected tracks to the average of
-  their tempos instead, and makes that the project tempo.
-- **Sync** slides a track along the timeline so its beats land on another track's, read near
-  the playhead — press it after Match BPM. Never more than half a beat; Ctrl+Z puts it back.
-- **Tempo ramps.** Change a track's tempo gradually over a stretch of time — speed one song from
-  110 to 115 BPM while it mixes into the next.
-- **Warp markers.** Pull a song that drifts back into time with another — pin a beat that is still
-  in time, drag a beat that has drifted onto the other song's beat, and the audio between them
-  evens out to fit.
-- **Mark a stretch, then copy, cut, delete or repeat it.** Drag across a track in MARK MODE and
-  the keys you already use act on exactly that part, wherever its ends fall.
-- **Tabs.** Several arrangements in one file, like sheets in a workbook: each tab has its own
-  tracks, tempo and listening loop, only the open one plays and renders, and Ctrl+Z works per tab.
-- **Mute a section in place.** Right-click it, *Mute section*: it stays where it is, faded and
-  silent, until you unmute it. The status bar's right-hand end always says what Ctrl+Z would take back.
-- **A project follows its songs.** Move a project and its songs to another folder together and it
-  opens; a renamed song is recognised by its fingerprint; for anything else, *Find missing file…* on
-  the track's menu points at it and every section cut from that song follows.
-- **Live preview at full quality.** What you hear while turning a knob is what lands in the file.
-- **Render** to 32-bit float WAV (the default), 24/16-bit WAV, or a 320 kbps MP3, with a safety limiter. The file is what you hear:
-  muted tracks are left out, a solo leaves out every other track, and it ends where the last track
-  you can hear ends.
-- **Autosave, and versions to go back to.** Once a project has a file, every edit is saved two
-  seconds later on its own. A dated version is kept beside it at every Save and every ten minutes
-  while you work (the newest forty), and *Versions…* in the toolbar restores one — what you had is
-  kept too, and Ctrl+Z puts it back.
-- **Write tempo and key into a song file.** For an MP3 whose tempo or key Benchmix worked out itself
-  (the `?`), the track's menu offers to put them into the file's own tags, so Explorer, Serato and
-  djay show them. It asks first, fills only what the file lacks, and leaves the music byte for byte
-  as it was.
+- **Pitch without speed.** Stretch a track's pitch while maintaining bpm.
+- **Or pure sampling** (think: slowing a record down)
+- **Three-band EQ per track**, isolator style. Kill the bass on one track so the other's low end carries.
+- **Tempo and key detection** that reads a loaded file's tags first and detects tempo/key in their absence.
+- **Sync** similar to a sync button on dj software
+- **Tempo ramps.** Change a track's tempo gradually over a stretch of time
+- **Warp markers.** allows you to fine tune songs with slight tempo drift (think: music performed by human beings vs digitally produced music). 
+- **Tabs.** Several arrangements in one file, like sheets in an excel workbook. handy for quick decluttering.
+- **Render** to 32-bit float WAV (the default), 24/16-bit WAV, or a 320 kbps MP3, with a safety limiter.
+  Muted tracks are left out, a solo leaves out every other track, and it ends where the last track
+  audible (i.e. not muted) ends.
+- **Autosave, and versions history.** Revert back to a previous, timestamped state. Also a message bar in bottom left of app's window which indicates what significant action was last taken (super handy to know what you'll be undoing if you hit ctrl z).
 
-## What it deliberately does not do
+## Out of scope
 
-No effects rack, no automation curves (the two exceptions: tempo ramps and warp markers), no MIDI,
-no recording, no plugins. It is not a DAW. Every
-control on screen is one you asked for.
+I don't need an effects rack, no complex automation curves. All i need is tempo ramps and warp markers), no MIDI,
+no audio recording, no plugins. Nothin' nerdy. Purists need not apply. 
 
+## Ok, the rest of the readme is unedited AI-generated, so I apologize for the sloppy register. But it should contain sufficient instructions for using the app. 
 ---
 
-## Getting started
-
-1. **Add songs** — drag them onto the window, or use *+ Add tracks*. Drop position decides where
-   on the timeline the clip lands.
-2. **Set the project tempo** — it seeds from the first track you add. Everything matches to this.
-3. **Hit *Match BPM*** on the other tracks. The status bar tells you exactly what it did. Then,
-   with the playhead over a part where both songs have drums, *Sync*: the track slides so its
-   beats land on the top track's.
-4. **Line them up** — drag a section sideways, or up and down onto another track. It snaps to the
-   edges of other sections, and to the playhead while you're stopped, when it gets close, and
-   otherwise lands exactly where you let go; hold <kbd>Ctrl</kbd> to stop it snapping at all.
-5. **Carve out space** — pull the topper's LOW knob to nothing so the bed keeps the bass.
-6. **Listen** — <kbd>Space</kbd>. Shift-drag on the ruler to loop a section while you tweak, or
-   Shift+click where the loop should start and again where it should end.
-7. **Render to file.** The file holds what you can hear: mute a track, or solo the ones you want,
-   and the rest is left out. The status bar names anything it left out.
 
 ### Controls
 
