@@ -624,7 +624,7 @@ option's words, not his).
 ## 2026-10-12 — from the review of MARK MODE and the four fixes
 
 He said, verbatim, *"Please review, yes."* Three reviewers and three skeptics went over
-`6f2ca04..669aa4f..6bbcf5c`. Decisions taken in fixing what held up:
+`7b8bedf..b636c21..96ff5c0`. Decisions taken in fixing what held up:
 
 | Decision | Why |
 | --- | --- |

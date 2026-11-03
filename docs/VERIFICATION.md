@@ -150,7 +150,7 @@ driven with a real `KeyEventArgs` and a stand-in focused element.
 ## 2026-10-03 — "Split into vocals + instrumental" did nothing
 
 Daniel, 2026-10-03, verbatim: *"the split vocals instrumental feature does nothing."* He was right,
-and it had done nothing since the day it shipped (87f3676). The right-click menu item's command was
+and it had done nothing since the day it shipped (fe4aa5a). The right-click menu item's command was
 bound by looking up the window (`RelativeSource AncestorType=Window`). A right-click menu opens in a
 popup of its own, outside the window, so the lookup found nothing, the command was empty, and WPF
 draws an item with no command as enabled. A click went nowhere and nothing said so. Every other
@@ -745,7 +745,7 @@ shows the box open over a TEMPO number; looked at, it sits over the number. **31
 
 ## 2026-10-12 — the review of everything after tempo ramps part 1
 
-Two readers over `552a2f8..b73d9fc` (tempo ramps part 2, the wheel, joining, typing knob values),
+Two readers over `4e3c862..ced18e8` (tempo ramps part 2, the wheel, joining, typing knob values),
 about 536,000 tokens between them. They found **13 things, all real, all fixed**:
 - a knob's box opened only to read it wrote the value back rounded to what it showed (after Match
   BPM, −8.8235% became −8.82%); the same for a ramp's tempo box, and a new ramp left as filled in
@@ -1043,7 +1043,7 @@ shots, but nobody has looked at them, and nobody has used the pan or the wheel b
 A first cut made a knob take the wheel only once clicked. It passed the same checks (295, at 16:00)
 and was taken out within the hour on his instruction.
 
-**32-bit float first in the Render box** (71943fd, the same evening): one line in the dialog, no
+**32-bit float first in the Render box** (348b314, the same evening): one line in the dialog, no
 test reaches it; `scripts/verify-exe.ps1` on the build from that commit, all nine runs passed
 (297, 61) and stayed out of the way.
 
