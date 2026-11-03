@@ -1,16 +1,14 @@
 # Benchmix
 
-An offline mashup editor. A DJ mixer's controls, but you work at your own pace and save a file at
-the end instead of performing it live.
+A purpose-built DAW for creating simple music mixes and mashups and mixing down to mp3 or wav. Standard functions like BPM and Key stretching (including bpm warping). Standard three-band EQ. Ramp mode for programmed temp changes. And here's where one would normally say "...and so much more!" However, that would defeat the point of this app. I vibe coded this to use in lieu of Ableton or Audacity, because I only need a handful of tools for my purposes and don't need the clutter and bloat. There certainly _are_ more features and functions, but it's a curated set! __
 
-Built for one job: take two or more songs, get them to the same tempo and key without either one
-sounding mangled, carve space for each with a three-band EQ, and render the result.
+
 
 ---
 
-## What it does
+## Features and Functions
 
-- **Speed without pitch.** Stretch a track's tempo and its pitch stays put.
+- **Speed without pitch.** Stretch a track's tempo while maintaining key.
 - **Pitch without speed.** Shift a track in semitones and its length stays put.
 - **Or both linked**, which is pure resampling — like slowing a record down. Nothing is invented,
   so nothing can smear. Often the better choice under a few percent.
